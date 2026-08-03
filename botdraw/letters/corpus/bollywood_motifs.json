@@ -1,0 +1,52 @@
+[
+  {
+    "id": "monsoon-glimpse",
+    "title": "Aaj Phir",
+    "era": "90s",
+    "language": "hi",
+    "moods": ["romantic", "nostalgic"],
+    "motif": "first glimpse in monsoon rain",
+    "allusion": "in the spirit of classic 90s monsoon romance",
+    "safe_quote": null
+  },
+  {
+    "id": "golden-ghazal",
+    "title": "Golden Era Ghazal",
+    "era": "golden",
+    "language": "ur",
+    "moods": ["poetic", "devotional-love"],
+    "motif": "moonlit courtyard promise",
+    "allusion": "in the spirit of golden-era ghazal tenderness",
+    "safe_quote": null
+  },
+  {
+    "id": "punjabi-dhol",
+    "title": "Bhangra Heart",
+    "era": "2000s",
+    "language": "pa",
+    "moods": ["joyful", "celebratory"],
+    "motif": "dhol heartbeat at the baraat",
+    "allusion": "in the spirit of celebratory Punjabi wedding songs",
+    "safe_quote": null
+  },
+  {
+    "id": "contemporary-soft",
+    "title": "Soft Contemporary",
+    "era": "contemporary",
+    "language": "en",
+    "moods": ["tender", "modern"],
+    "motif": "quiet coffee-shop forever",
+    "allusion": "in the spirit of modern indie romance ballads",
+    "safe_quote": null
+  },
+  {
+    "id": "70s-rewind",
+    "title": "Reel Romance",
+    "era": "70s",
+    "language": "hi",
+    "moods": ["dramatic", "romantic"],
+    "motif": "train-platform almost-goodbye",
+    "allusion": "in the spirit of 70s reel romance",
+    "safe_quote": null
+  }
+]

@@ -1,0 +1,25 @@
+{
+  "id": "blueprint-3",
+  "name": "Blueprint Trio",
+  "paper_notes": "Technical / cyanotype feel",
+  "pens": [
+    {
+      "id": "cyan",
+      "name": "Blueprint Cyan",
+      "color_hex": "#3aa7c9",
+      "profile": { "width_mm": 0.35, "nib_type": "fineliner", "opacity": 1.0 }
+    },
+    {
+      "id": "ink",
+      "name": "Deep Indigo",
+      "color_hex": "#0b1f3a",
+      "profile": { "width_mm": 0.5, "nib_type": "fineliner", "opacity": 1.0 }
+    },
+    {
+      "id": "accent",
+      "name": "White-ish Light",
+      "color_hex": "#8ecae6",
+      "profile": { "width_mm": 0.3, "nib_type": "fineliner", "opacity": 1.0 }
+    }
+  ]
+}

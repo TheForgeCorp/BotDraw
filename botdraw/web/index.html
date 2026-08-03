@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>BotDraw Dev Lab</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,600&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <div class="bg"></div>
+  <header class="top">
+    <div class="brand">
+      <span class="mark">BotDraw</span>
+      <span class="tag">dev lab · vectorization / color layers / JSON export</span>
+    </div>
+    <nav class="tabs" id="tabs">
+      <button data-app="genartbot" class="active">GenArt</button>
+      <button data-app="portraitbot">Portrait</button>
+      <button data-app="lettersbot">Letters</button>
+      <button data-app="rdlab">R&amp;D</button>
+      <button data-app="palettes">Palettes</button>
+      <button data-app="tools">Tools</button>
+    </nav>
+  </header>
+
+  <main class="layout lab">
+    <section class="panel controls" id="controls"></section>
+
+    <section class="panel stage">
+      <div class="stage-head">
+        <h2 id="stage-title">Emulator</h2>
+        <div class="stats" id="stats">Ready</div>
+      </div>
+      <canvas id="emu" width="900" height="1200"></canvas>
+      <div class="transport">
+        <button id="play">Play</button>
+        <button id="pause">Pause</button>
+        <button id="skip">Skip end</button>
+        <label>Speed <input id="speed" type="range" min="1" max="60" value="16" /></label>
+        <label class="chk"><input id="ghost" type="checkbox" checked /> pen-up ghost</label>
+        <a id="download-svg" class="link" href="#" hidden>SVG</a>
+      </div>
+      <div class="export-bar">
+        <button id="export-pack" disabled>Export pack JSON</button>
+        <button id="export-settings" disabled>Settings JSON</button>
+        <button id="export-layers" disabled>Layers JSON</button>
+        <button id="export-motion" disabled>Motion JSON</button>
+        <button id="export-palette" disabled>Palette JSON</button>
+        <button id="copy-json" disabled>Copy inspector JSON</button>
+      </div>
+    </section>
+
+    <section class="panel inspector">
+      <div class="insp-tabs">
+        <button data-insp="layers" class="active">Layers</button>
+        <button data-insp="json">JSON</button>
+        <button data-insp="job">Job</button>
+      </div>
+      <div id="inspector-body" class="inspector-body">
+        <p class="muted">Render a job to inspect color layers, pens, and vectorization stats.</p>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/emulator.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
