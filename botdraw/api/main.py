@@ -48,6 +48,16 @@ class RenderRequest(BaseModel):
     quality: QualityPreset = QualityPreset.BOOTH_BALANCED
     seed: int = 42
     density: float = 1.0
+    pen_up_speed_mm_s: float = 100.0
+    pen_down_speed_mm_s: float = 25.0
+    params_extra: dict[str, Any] = {}
+
+
+class PaletteSaveRequest(BaseModel):
+    id: str
+    name: str
+    paper_notes: str = ""
+    pens: list[dict[str, Any]]
 
 
 class LetterRequest(BaseModel):
@@ -115,9 +125,20 @@ def api_calibrate(body: CalibrateRequest):
     )
 
 
+@app.post("/api/palettes/save")
+def api_palette_save(body: PaletteSaveRequest):
+    palette = create_palette(
+        body.id,
+        body.name,
+        body.pens,
+        paper_notes=body.paper_notes,
+    )
+    return palette.model_dump()
+
+
 @app.post("/api/render")
 def api_render(body: RenderRequest):
-    job, payload = render_job(
+    job, payload, layers = render_job(
         app=body.app,
         style_id=body.style_id,
         palette_id=body.palette_id,
@@ -125,8 +146,11 @@ def api_render(body: RenderRequest):
         quality=body.quality,
         seed=body.seed,
         density=body.density,
+        params_extra=body.params_extra,
+        pen_up_speed_mm_s=body.pen_up_speed_mm_s,
+        pen_down_speed_mm_s=body.pen_down_speed_mm_s,
     )
-    return {"job": job.model_dump(), "emulator": payload}
+    return {"job": job.model_dump(), "emulator": payload, "layers": layers}
 
 
 @app.post("/api/render/upload")
@@ -135,25 +159,31 @@ async def api_render_upload(
     app_name: str = Form("portraitbot"),
     palette_id: str = Form("default-6"),
     quality: str = Form("booth-balanced"),
+    paper: str = Form("A4"),
     seed: int = Form(42),
     density: float = Form(1.0),
+    pen_up_speed_mm_s: float = Form(100.0),
+    pen_down_speed_mm_s: float = Form(25.0),
     file: UploadFile = File(...),
 ):
     from botdraw.core.jobs import artifact_dir
     from uuid import uuid4
 
-    tmp = artifact_dir(uuid4().hex[:8]) / file.filename
+    tmp = artifact_dir(uuid4().hex[:8]) / (file.filename or "upload.png")
     tmp.write_bytes(await file.read())
-    job, payload = render_job(
+    job, payload, layers = render_job(
         app=app_name,
         style_id=style_id,
         palette_id=palette_id,
+        paper=PaperSize(paper),
         quality=QualityPreset(quality),
         seed=seed,
         density=density,
         image_path=str(tmp),
+        pen_up_speed_mm_s=pen_up_speed_mm_s,
+        pen_down_speed_mm_s=pen_down_speed_mm_s,
     )
-    return {"job": job.model_dump(), "emulator": payload}
+    return {"job": job.model_dump(), "emulator": payload, "layers": layers}
 
 
 @app.post("/api/letters/draft")
@@ -181,20 +211,53 @@ def api_letter_draft(body: LetterRequest):
     from botdraw.core.jobs import artifact_dir, save_job
     from botdraw.core.models import JobRecord, JobStatus
     from botdraw.core.svg import save_svg
+    from botdraw.core.pipeline import layers_summary
 
     palette = load_palette(body.palette_id)
     layered = optimize_layered(layered)
     plan = compile_motion_plan(layered, palette)
+    layers = layers_summary(layered, palette)
+    settings = {
+        "app": "lettersbot",
+        "style_id": "letter",
+        "palette_id": body.palette_id,
+        "seed": body.seed,
+        "language": body.language,
+        "era": body.era,
+        "mood": body.mood,
+        "names": body.names,
+        "guest_quote": body.guest_quote,
+        "highlight": body.highlight,
+    }
     job = JobRecord(app="lettersbot", style_id="letter", status=JobStatus.READY, seed=body.seed, palette_id=body.palette_id)
     out = artifact_dir(job.id)
     job.svg_path = str(save_svg(layered, palette, out / "art.svg"))
     plan.save(out / "motion_plan.json")
     payload = plan_to_emulator_payload(plan)
+    payload["layers"] = layers
+    payload["settings"] = settings
+    (out / "layers.json").write_text(json.dumps(layers, indent=2), encoding="utf-8")
+    (out / "settings.json").write_text(json.dumps(settings, indent=2), encoding="utf-8")
     (out / "emulator.json").write_text(json.dumps(payload), encoding="utf-8")
+    (out / "export_pack.json").write_text(
+        json.dumps(
+            {
+                "settings": settings,
+                "draft": draft,
+                "job": job.model_dump(),
+                "layers": layers,
+                "palette": json.loads(palette.model_dump_json()),
+                "motion_plan": plan.to_dict(),
+                "stats": plan.stats.model_dump(),
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
     job.motion_path = str(out / "motion_plan.json")
     job.preview_path = str(out / "emulator.json")
     save_job(job)
-    return {"draft": draft, "job": job.model_dump(), "emulator": payload}
+    return {"draft": draft, "job": job.model_dump(), "emulator": payload, "layers": layers, "settings": settings}
 
 
 @app.post("/api/handwriting/samples")
@@ -214,47 +277,91 @@ def api_hw_render(user_id: str = "demo", text: str = "Hello"):
     from botdraw.core.motion_plan import compile_motion_plan
     from botdraw.core.jobs import artifact_dir, save_job
     from botdraw.core.models import JobRecord, JobStatus
+    from botdraw.core.pipeline import layers_summary
     from botdraw.core.svg import save_svg
 
     layered = render_with_clone(text, user_id)
     palette = load_palette("wedding-highlight")
     layered = optimize_layered(layered)
     plan = compile_motion_plan(layered, palette)
-    job = JobRecord(app="handwriting", style_id="clone", status=JobStatus.READY)
+    layers = layers_summary(layered, palette)
+    settings = {"app": "handwriting", "style_id": "clone", "user_id": user_id, "text": text, "palette_id": "wedding-highlight"}
+    job = JobRecord(app="handwriting", style_id="clone", status=JobStatus.READY, palette_id="wedding-highlight")
     out = artifact_dir(job.id)
     job.svg_path = str(save_svg(layered, palette, out / "art.svg"))
     plan.save(out / "motion_plan.json")
     payload = plan_to_emulator_payload(plan)
+    payload["layers"] = layers
+    payload["settings"] = settings
+    (out / "layers.json").write_text(json.dumps(layers, indent=2), encoding="utf-8")
+    (out / "settings.json").write_text(json.dumps(settings, indent=2), encoding="utf-8")
     (out / "emulator.json").write_text(json.dumps(payload), encoding="utf-8")
+    (out / "export_pack.json").write_text(
+        json.dumps(
+            {
+                "settings": settings,
+                "job": job.model_dump(),
+                "layers": layers,
+                "palette": json.loads(palette.model_dump_json()),
+                "motion_plan": plan.to_dict(),
+                "stats": plan.stats.model_dump(),
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
     job.preview_path = str(out / "emulator.json")
+    job.motion_path = str(out / "motion_plan.json")
     save_job(job)
-    return {"job": job.model_dump(), "emulator": payload}
+    return {"job": job.model_dump(), "emulator": payload, "layers": layers, "settings": settings}
 
 
-def _audio_job(layered):
+def _audio_job(layered, *, source: str = "demo"):
     from botdraw.core.optimize import optimize_layered
     from botdraw.core.motion_plan import compile_motion_plan
     from botdraw.core.jobs import artifact_dir, save_job
     from botdraw.core.models import JobRecord, JobStatus
+    from botdraw.core.pipeline import layers_summary
     from botdraw.core.svg import save_svg
 
     palette = load_palette("default-6")
     layered = optimize_layered(layered)
     plan = compile_motion_plan(layered, palette)
-    job = JobRecord(app="audio", style_id="audio", status=JobStatus.READY)
+    layers = layers_summary(layered, palette)
+    settings = {"app": "audio", "style_id": "audio", "palette_id": "default-6", "source": source}
+    job = JobRecord(app="audio", style_id="audio", status=JobStatus.READY, palette_id="default-6")
     out = artifact_dir(job.id)
     job.svg_path = str(save_svg(layered, palette, out / "art.svg"))
     plan.save(out / "motion_plan.json")
     payload = plan_to_emulator_payload(plan)
+    payload["layers"] = layers
+    payload["settings"] = settings
+    (out / "layers.json").write_text(json.dumps(layers, indent=2), encoding="utf-8")
+    (out / "settings.json").write_text(json.dumps(settings, indent=2), encoding="utf-8")
     (out / "emulator.json").write_text(json.dumps(payload), encoding="utf-8")
+    (out / "export_pack.json").write_text(
+        json.dumps(
+            {
+                "settings": settings,
+                "job": job.model_dump(),
+                "layers": layers,
+                "palette": json.loads(palette.model_dump_json()),
+                "motion_plan": plan.to_dict(),
+                "stats": plan.stats.model_dump(),
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
     job.preview_path = str(out / "emulator.json")
+    job.motion_path = str(out / "motion_plan.json")
     save_job(job)
-    return {"job": job.model_dump(), "emulator": payload}
+    return {"job": job.model_dump(), "emulator": payload, "layers": layers, "settings": settings}
 
 
 @app.post("/api/audio/demo")
 def api_audio_demo():
-    return _audio_job(render_demo_tone())
+    return _audio_job(render_demo_tone(), source="demo-tone")
 
 
 @app.post("/api/audio/upload")
@@ -264,7 +371,7 @@ async def api_audio_upload(file: UploadFile = File(...)):
 
     tmp = artifact_dir(uuid4().hex[:8]) / (file.filename or "audio.wav")
     tmp.write_bytes(await file.read())
-    return _audio_job(render_audio_file(tmp))
+    return _audio_job(render_audio_file(tmp), source=file.filename or "upload.wav")
 
 
 @app.post("/api/rdlab/render")
@@ -298,16 +405,47 @@ async def api_rdlab(
         density=density,
     )
     palette = load_palette(palette_id)
+    from botdraw.core.pipeline import layers_summary
+
+    layers = layers_summary(layered, palette)
     job = JobRecord(app="rdlab", style_id=style_id, status=JobStatus.READY, seed=seed, palette_id=palette_id)
     out = artifact_dir(job.id)
     job.svg_path = str(save_svg(layered, palette, out / "art.svg"))
     plan.save(out / "motion_plan.json")
+    settings = {
+        "app": "rdlab",
+        "style_id": style_id,
+        "rpm": rpm,
+        "seed": seed,
+        "palette_id": palette_id,
+        "quality": quality,
+        "density": density,
+        "image_path": image_path,
+    }
     payload = plan_to_emulator_payload(plan)
+    payload["layers"] = layers
+    payload["settings"] = settings
+    (out / "layers.json").write_text(json.dumps(layers, indent=2), encoding="utf-8")
+    (out / "settings.json").write_text(json.dumps(settings, indent=2), encoding="utf-8")
     (out / "emulator.json").write_text(json.dumps(payload), encoding="utf-8")
+    (out / "export_pack.json").write_text(
+        json.dumps(
+            {
+                "settings": settings,
+                "job": job.model_dump(),
+                "layers": layers,
+                "palette": json.loads(palette.model_dump_json()),
+                "motion_plan": plan.to_dict(),
+                "stats": plan.stats.model_dump(),
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
     job.preview_path = str(out / "emulator.json")
     job.motion_path = str(out / "motion_plan.json")
     save_job(job)
-    return {"job": job.model_dump(), "emulator": payload}
+    return {"job": job.model_dump(), "emulator": payload, "layers": layers, "settings": settings}
 
 
 @app.post("/api/plot/stub")
@@ -334,9 +472,16 @@ def api_jobs():
 def api_job(job_id: str):
     job = load_job(job_id)
     payload = None
+    layers = None
+    settings = None
+    out = Path(job.preview_path).parent if job.preview_path else None
     if job.preview_path and Path(job.preview_path).exists():
         payload = json.loads(Path(job.preview_path).read_text(encoding="utf-8"))
-    return {"job": job.model_dump(), "emulator": payload}
+    if out and (out / "layers.json").exists():
+        layers = json.loads((out / "layers.json").read_text(encoding="utf-8"))
+    if out and (out / "settings.json").exists():
+        settings = json.loads((out / "settings.json").read_text(encoding="utf-8"))
+    return {"job": job.model_dump(), "emulator": payload, "layers": layers, "settings": settings}
 
 
 @app.get("/api/jobs/{job_id}/svg")
@@ -345,3 +490,29 @@ def api_job_svg(job_id: str):
     if not job.svg_path or not Path(job.svg_path).exists():
         raise HTTPException(404, "SVG missing")
     return FileResponse(job.svg_path, media_type="image/svg+xml", filename=f"{job_id}.svg")
+
+
+@app.get("/api/jobs/{job_id}/export")
+def api_job_export(job_id: str):
+    job = load_job(job_id)
+    out = Path(job.preview_path).parent if job.preview_path else None
+    if not out or not (out / "export_pack.json").exists():
+        raise HTTPException(404, "Export pack missing — re-render the job")
+    return JSONResponse(json.loads((out / "export_pack.json").read_text(encoding="utf-8")))
+
+
+@app.get("/api/jobs/{job_id}/layers")
+def api_job_layers(job_id: str):
+    job = load_job(job_id)
+    out = Path(job.preview_path).parent if job.preview_path else None
+    if not out or not (out / "layers.json").exists():
+        raise HTTPException(404, "Layers missing")
+    return json.loads((out / "layers.json").read_text(encoding="utf-8"))
+
+
+@app.get("/api/jobs/{job_id}/motion")
+def api_job_motion(job_id: str):
+    job = load_job(job_id)
+    if not job.motion_path or not Path(job.motion_path).exists():
+        raise HTTPException(404, "Motion plan missing")
+    return json.loads(Path(job.motion_path).read_text(encoding="utf-8"))

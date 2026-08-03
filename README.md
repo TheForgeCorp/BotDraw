@@ -16,7 +16,14 @@ botdraw render --style stipple --seed 42
 botdraw serve --port 8080
 ```
 
-Open `http://127.0.0.1:8080`.
+Open `http://127.0.0.1:8080` — **Dev Lab** UI for vectorization, palette layers, and JSON export.
+
+### Dev Lab
+- Left: style + render settings (paper, quality, seed, density, pen speeds) + established palettes
+- Center: emulator with play/pause and pen-up ghost
+- Right: **Layers** (solo/hide passes), **JSON** inspector, **Job** dump
+- Export bar: pack / settings / layers / motion / palette JSON; import settings JSON before render
+- **Palettes** tab: edit pens (color, width, opacity, nib) and save as a new preset
 
 ### Upload an image
 - **GenArtBot / PortraitBot / R&D Lab:** use **Upload image** in the left panel, pick a style, then render.

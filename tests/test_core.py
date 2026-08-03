@@ -40,10 +40,32 @@ def test_overlay_highlight():
 
 
 def test_render_job_reproducible(tmp_path):
-    a, pa = render_job(app="test", style_id="blueprint", seed=99, quality=QualityPreset.BOOTH_FAST)
-    b, pb = render_job(app="test", style_id="blueprint", seed=99, quality=QualityPreset.BOOTH_FAST)
+    a, pa, la = render_job(app="test", style_id="blueprint", seed=99, quality=QualityPreset.BOOTH_FAST)
+    b, pb, lb = render_job(app="test", style_id="blueprint", seed=99, quality=QualityPreset.BOOTH_FAST)
     assert Path(a.svg_path).read_text() == Path(b.svg_path).read_text()
     assert pa["stats"]["stroke_count"] == pb["stats"]["stroke_count"]
+    assert la["pass_count"] == lb["pass_count"] >= 1
+
+
+def test_export_pack_and_layers_summary():
+    job, payload, layers = render_job(
+        app="test",
+        style_id="hatch",
+        palette_id="default-6",
+        seed=7,
+        quality=QualityPreset.BOOTH_FAST,
+        density=0.7,
+    )
+    out = Path(job.preview_path).parent
+    assert (out / "export_pack.json").exists()
+    assert (out / "layers.json").exists()
+    assert (out / "settings.json").exists()
+    pack = json.loads((out / "export_pack.json").read_text())
+    assert set(pack) >= {"settings", "job", "layers", "palette", "motion_plan", "stats"}
+    assert layers["pass_count"] >= 2
+    assert all("color_hex" in p and "pen_id" in p for p in layers["passes"])
+    assert payload["layers"]["pass_count"] == layers["pass_count"]
+    assert any(seg.get("pass_id") for seg in payload["segments"])
 
 
 def test_motion_schema_file_exists():

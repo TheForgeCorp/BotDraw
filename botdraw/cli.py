@@ -39,7 +39,7 @@ def render_cmd(
     image: Optional[Path] = None,
     app_name: str = "cli",
 ):
-    job, payload = render_job(
+    job, payload, _layers = render_job(
         app=app_name,
         style_id=style,
         palette_id=palette,
@@ -66,7 +66,7 @@ def bench_cmd(
     peak = 0
     for i in range(rounds):
         t0 = time.time()
-        job, payload = render_job(
+        job, payload, _layers = render_job(
             app="bench",
             style_id=style,
             quality=profile,
