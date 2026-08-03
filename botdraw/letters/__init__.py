@@ -158,8 +158,8 @@ def render_letter(
         chosen = spans[: min(len(spans), max(1, len(highlight_words)))]
         composer = OverlayPassComposer()
         layered = composer.highlight_spans(layered, chosen, pen_id=high.id)
-    elif high and spans:
-        # Highlight middle span as emphasis default
+    elif high and highlight_words is None and spans:
+        # Legacy default: emphasize middle span when caller omits highlight_words
         mid = spans[len(spans) // 2 : len(spans) // 2 + 1]
         composer = OverlayPassComposer()
         layered = composer.highlight_spans(layered, mid, pen_id=high.id)
