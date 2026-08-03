@@ -2,14 +2,25 @@
 
 Single source of truth for standing up a **24/7 BotDraw + local AI + Hermes** node.
 
+## Say “go”
+
+From Claude Code (or a human) on the mini-PC after clone:
+
+```bash
+cd /opt/botdraw
+sudo ./scripts/go.sh
+```
+
+Full agent checklist (auth, skills, Ink boot, verify): **[../../GO.md](../../GO.md)**
+
 ## Goal
 
-On a fresh Ubuntu mini-PC (or a second node later), from any machine:
+On a fresh Ubuntu mini-PC (or a second node later):
 
 ```bash
 ssh ubuntu@botdraw-host
 git clone <this-repo> /opt/botdraw && cd /opt/botdraw
-sudo ./scripts/bootstrap_minipc.sh
+sudo ./scripts/go.sh
 ```
 
 Then finish Hermes Claude Max auth once interactively (`hermes model`).
@@ -18,6 +29,7 @@ Then finish Hermes Claude Max auth once interactively (`hermes model`).
 
 | Doc | Purpose |
 |---|---|
+| [../../GO.md](../../GO.md) | **Primary** — “go” checklist for Claude SSH sessions |
 | [UBUNTU_MINIPC.md](./UBUNTU_MINIPC.md) | Full install / SSH runbook (home brain) |
 | [PLOTTER_NODE.md](./PLOTTER_NODE.md) | Venue / remote plotter node — E2E test with stub, no hardware |
 | [../ops/HARDWARE.md](../ops/HARDWARE.md) | Specs (with local AI up front) |
@@ -32,4 +44,4 @@ Then finish Hermes Claude Max auth once interactively (`hermes model`).
 5. Ops docs path wired for the agent (`docs/ops/`)  
 6. Optional Tailscale note for remote SSH  
 
-Replication = clone repo + re-run bootstrap on the next machine.
+Replication = clone repo + re-run `go.sh` / bootstrap on the next machine.

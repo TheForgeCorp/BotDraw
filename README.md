@@ -4,7 +4,16 @@ Software-first multi-bot pen plotter platform with a high-fidelity **emulator**.
 
 Internal product names: **BotDraw** core, **GenArtBot**, **PortraitBot**, **LettersBot**, **R&D Lab**.
 
-## Quick start
+## Mini-PC launch (“go”)
+
+SSH to the Ubuntu box with Claude (or yourself), clone this repo, say **go**:
+
+→ **[GO.md](./GO.md)** — full agent checklist  
+→ `sudo ./scripts/go.sh` — one-shot install + health + Ink boot prompt
+
+Detail: [docs/host/](./docs/host/) · Ops: [docs/ops/](./docs/ops/) · Hermes: [docs/ops/hermes/](./docs/ops/hermes/)
+
+## Quick start (dev laptop)
 
 ```bash
 cd /path/to/repo
