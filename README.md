@@ -6,10 +6,10 @@ Internal product names: **BotDraw** core, **GenArtBot**, **PortraitBot**, **Lett
 
 ## Mini-PC launch (“go”)
 
-SSH to the Ubuntu box with Claude (or yourself), clone this repo, say **go**:
+Say **go** to Claude Code. The agent must **ask you first** (IP/hostname, SSH user, auth, sudo, branch, etc.), then SSH to the mini-PC and install.
 
-→ **[GO.md](./GO.md)** — full agent checklist  
-→ `sudo ./scripts/go.sh` — one-shot install + health + Ink boot prompt
+→ **[GO.md](./GO.md)** — Phase 0 questions + connect/install checklist  
+→ On the box after SSH: `sudo ./scripts/go.sh`
 
 Detail: [docs/host/](./docs/host/) · Ops: [docs/ops/](./docs/ops/) · Hermes: [docs/ops/hermes/](./docs/ops/hermes/)
 

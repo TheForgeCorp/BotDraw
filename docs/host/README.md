@@ -4,21 +4,24 @@ Single source of truth for standing up a **24/7 BotDraw + local AI + Hermes** no
 
 ## Say “go”
 
-From Claude Code (or a human) on the mini-PC after clone:
+Claude Code will usually be on **your** machine, connecting to the mini-PC over SSH — not already logged in.
+
+1. Read **[../../GO.md](../../GO.md)** Phase 0 — **ask Nav** for host IP/hostname, SSH user, credentials/key, sudo, branch, etc.  
+2. Recap the plan; wait for confirm.  
+3. SSH in → clone if needed → `sudo ./scripts/go.sh` → verify → `hermes model` when Nav is free.
 
 ```bash
+# Only after Phase 0 answers, on the mini-PC:
 cd /opt/botdraw
 sudo ./scripts/go.sh
 ```
 
-Full agent checklist (auth, skills, Ink boot, verify): **[../../GO.md](../../GO.md)**
-
 ## Goal
 
-On a fresh Ubuntu mini-PC (or a second node later):
+On a fresh Ubuntu mini-PC (or a second node later), after Nav gives reachability + login:
 
 ```bash
-ssh ubuntu@botdraw-host
+ssh ubuntu@<ip-or-tailscale-name>
 git clone <this-repo> /opt/botdraw && cd /opt/botdraw
 sudo ./scripts/go.sh
 ```

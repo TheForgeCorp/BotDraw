@@ -26,6 +26,9 @@ echo " BotDraw GO — host bring-up"
 echo " repo: ${REPO_DIR}"
 echo " user: ${BOTDRAW_USER}"
 echo "=============================================="
+echo " Reminder: Claude Code should have completed"
+echo " GO.md Phase 0 (ask Nav for IP/SSH/sudo) before SSH."
+echo "=============================================="
 
 # Ensure executable bits
 chmod +x "${REPO_DIR}/scripts/bootstrap_minipc.sh" "${REPO_DIR}/scripts/go.sh"

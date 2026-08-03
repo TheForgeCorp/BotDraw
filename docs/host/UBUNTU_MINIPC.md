@@ -11,7 +11,9 @@ For a **new** BotDraw host. All steps are captured here and in [`scripts/bootstr
 
 ## 1. First SSH
 
-From your laptop:
+If Claude Code (or a human) is connecting remotely, collect Phase 0 answers from **[GO.md](../../GO.md)** first (host IP/Tailscale name, SSH user, key or password, sudo). Do not invent credentials.
+
+From your laptop / Claude Code host:
 
 ```bash
 ssh ubuntu@<mini-pc-ip-or-hostname>
