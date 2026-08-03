@@ -68,14 +68,21 @@ class LetterRequest(BaseModel):
     facts: str = ""
     guest_quote: Optional[str] = None
     highlight: bool = True
+    highlight_words: Optional[list[str]] = None
     palette_id: str = "wedding-highlight"
     seed: int = 7
+    paper: str = "A5"
     # Dev Lab default: skip Ollama. Booth / AI draft sets use_llm=true.
     use_llm: bool = False
     # If set, skip drafting and vectorize this body only (fast path).
     body: Optional[str] = None
     # Letters are already reading-order; greedy linesort is optional.
     optimize: bool = False
+    size_mm: float = 4.5
+    line_height: Optional[float] = None
+    tracking: float = 0.15
+    humanize: float = 0.08
+    orientation: str = "portrait"
 
 
 class HandwritingSample(BaseModel):
@@ -229,13 +236,23 @@ def api_letter_draft(body: LetterRequest):
     t1 = time.perf_counter()
     # Only append guest_quote in layout if not already embedded in a provided body.
     quote_for_layout = None if (body.body and body.body.strip()) else body.guest_quote
+    if body.highlight:
+        hl_words = body.highlight_words if body.highlight_words is not None else ["forever", "heart", "love"]
+    else:
+        hl_words = []
     layered = render_letter(
         draft["body"],
         palette_id=body.palette_id,
+        paper=PaperSize(body.paper),
         language=body.language,
         guest_quote=quote_for_layout,
-        highlight_words=["forever", "heart", "love"] if body.highlight else [],
+        highlight_words=hl_words,
         seed=body.seed,
+        size_mm=body.size_mm,
+        line_height=body.line_height,
+        tracking=body.tracking,
+        humanize=body.humanize,
+        orientation=body.orientation,
     )
     from botdraw.core.optimize import optimize_layered
     from botdraw.core.motion_plan import compile_motion_plan
@@ -257,15 +274,21 @@ def api_letter_draft(body: LetterRequest):
         "style_id": "letter",
         "palette_id": body.palette_id,
         "seed": body.seed,
+        "paper": body.paper,
+        "orientation": body.orientation,
         "language": body.language,
         "era": body.era,
         "mood": body.mood,
         "names": body.names,
         "guest_quote": body.guest_quote,
         "highlight": body.highlight,
+        "size_mm": body.size_mm,
+        "tracking": body.tracking,
+        "humanize": body.humanize,
         "use_llm": body.use_llm,
         "optimize": body.optimize,
         "draft_source": draft.get("source"),
+        "missing_scripts": layered.meta.get("missing_scripts", []),
         "timing_s": {"draft": round(t_draft, 3), "vectorize": round(t_vector, 3)},
     }
     job = JobRecord(app="lettersbot", style_id="letter", status=JobStatus.READY, seed=body.seed, palette_id=body.palette_id)

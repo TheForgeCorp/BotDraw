@@ -26,7 +26,7 @@
     </nav>
   </header>
 
-  <main class="layout lab">
+  <main class="layout lab" id="lab-shell">
     <section class="panel controls" id="controls"></section>
 
     <section class="panel stage">
@@ -63,6 +63,83 @@
         <p class="muted">Render a job to inspect color layers, pens, and vectorization stats.</p>
       </div>
     </section>
+  </main>
+
+  <main class="letters-lab" id="letters-shell" hidden>
+    <header class="letters-top">
+      <div class="letters-identity">
+        <span class="letters-mark">LETTERS</span>
+        <span class="letters-sub">Dev Panel</span>
+      </div>
+      <div class="letters-stats" id="letters-stats">Ready</div>
+    </header>
+
+    <div class="letters-grid">
+      <aside class="letters-left panel">
+        <nav class="type-rail" id="letter-types" aria-label="Letter types">
+          <button type="button" data-type="professional">Professional</button>
+          <button type="button" data-type="marketing">Marketing</button>
+          <button type="button" data-type="envelopes">Envelopes</button>
+          <button type="button" data-type="personal" class="active">Personal</button>
+          <button type="button" data-type="invitations">Invitations</button>
+          <button type="button" data-type="postcards">Postcards</button>
+        </nav>
+        <div class="letter-content" id="letter-content"></div>
+      </aside>
+
+      <section class="letters-center panel">
+        <div class="center-head">
+          <h2>Layers</h2>
+          <p class="muted">Pen selection by layer</p>
+        </div>
+        <div class="layer-tabs" id="letter-layer-tabs"></div>
+        <div class="layer-specs" id="letter-layer-specs">
+          <p class="muted">Vectorize a letter to inspect layer pens.</p>
+        </div>
+      </section>
+
+      <section class="letters-right panel">
+        <div class="paper-controls">
+          <label>Size
+            <select id="letters-paper">
+              <option value="A5" selected>A5</option>
+              <option value="A4">A4</option>
+              <option value="Letter">Letter</option>
+              <option value="A3">A3</option>
+              <option value="Card">Card</option>
+            </select>
+          </label>
+          <label>Orientation
+            <select id="letters-orientation">
+              <option value="portrait" selected>Portrait</option>
+              <option value="landscape">Landscape</option>
+            </select>
+          </label>
+          <label>Print margin
+            <select id="letters-margin">
+              <option value="12">12 mm</option>
+              <option value="18" selected>18 mm</option>
+              <option value="24">24 mm</option>
+            </select>
+          </label>
+        </div>
+        <div class="paper-frame" id="paper-frame">
+          <canvas id="letters-emu" width="740" height="1050"></canvas>
+          <div class="print-limit" id="print-limit" aria-hidden="true"></div>
+        </div>
+        <div class="letters-transport">
+          <button type="button" id="letters-play">Play</button>
+          <button type="button" id="letters-pause">Pause</button>
+          <button type="button" id="letters-skip">Skip end</button>
+          <label>Speed <input id="letters-speed" type="range" min="1" max="60" value="16" /></label>
+        </div>
+        <div class="letters-download">
+          <button type="button" id="letters-dl-svg" disabled>Download SVG</button>
+          <button type="button" id="letters-dl-motion" disabled>Download motion</button>
+          <button type="button" id="letters-dl-pack" disabled>Download pack</button>
+        </div>
+      </section>
+    </div>
   </main>
 
   <script src="/static/emulator.js"></script>

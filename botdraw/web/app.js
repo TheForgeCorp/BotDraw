@@ -1,9 +1,14 @@
 const player = new EmulatorPlayer(document.getElementById("emu"));
+const lettersPlayer = new EmulatorPlayer(document.getElementById("letters-emu"));
 const statsEl = document.getElementById("stats");
+const lettersStatsEl = document.getElementById("letters-stats");
 const controls = document.getElementById("controls");
 const inspectorBody = document.getElementById("inspector-body");
 const downloadSvg = document.getElementById("download-svg");
+const labShell = document.getElementById("lab-shell");
+const lettersShell = document.getElementById("letters-shell");
 player.onStats = (m) => { statsEl.textContent = m; };
+lettersPlayer.onStats = (m) => { if (lettersStatsEl) lettersStatsEl.textContent = m; };
 
 let currentApp = "genartbot";
 let inspTab = "layers";
@@ -16,6 +21,8 @@ let lastPayload = null;
 let lastLayers = null;
 let lastSettings = null;
 let inspectorJson = null;
+let letterType = "personal";
+let letterLayerTab = "ink";
 
 const state = {
   paper: "A4",
@@ -33,11 +40,24 @@ document.getElementById("skip").onclick = () => player.skipEnd();
 document.getElementById("speed").oninput = (e) => player.setSpeed(e.target.value);
 document.getElementById("ghost").onchange = (e) => player.setGhost(e.target.checked);
 
+document.getElementById("letters-play").onclick = () => lettersPlayer.play();
+document.getElementById("letters-pause").onclick = () => lettersPlayer.pause();
+document.getElementById("letters-skip").onclick = () => lettersPlayer.skipEnd();
+document.getElementById("letters-speed").oninput = (e) => lettersPlayer.setSpeed(e.target.value);
+
+function setShellForApp(app) {
+  document.body.dataset.app = app;
+  const letters = app === "lettersbot";
+  labShell.hidden = letters;
+  lettersShell.hidden = !letters;
+}
+
 document.querySelectorAll("#tabs button").forEach((btn) => {
   btn.onclick = () => {
     document.querySelectorAll("#tabs button").forEach((b) => b.classList.remove("active"));
     btn.classList.add("active");
     currentApp = btn.dataset.app;
+    setShellForApp(currentApp);
     renderControls();
   };
 });
@@ -295,66 +315,250 @@ function renderPortrait() {
     renderWithSettings({ appName: "portraitbot", busyText: "Rendering portrait…" });
 }
 
-function renderLetters() {
-  controls.innerHTML = `
-    <h3>LettersBot · Dev</h3>
-    <p class="muted">Stroke-font layout is fast. Slowdowns are usually local AI draft or emulator playback.</p>
+function letterContentRoot() {
+  return document.getElementById("letter-content");
+}
+
+function lval(id, fallback = "") {
+  const el = letterContentRoot()?.querySelector(`#${id}`);
+  return el ? el.value : fallback;
+}
+
+function lnum(id, fallback = 0) {
+  return Number(lval(id, fallback));
+}
+
+function setLettersDownloads(enabled, jobId) {
+  const svgBtn = document.getElementById("letters-dl-svg");
+  const motionBtn = document.getElementById("letters-dl-motion");
+  const packBtn = document.getElementById("letters-dl-pack");
+  [svgBtn, motionBtn, packBtn].forEach((b) => { b.disabled = !enabled; });
+  svgBtn.onclick = () => {
+    if (!jobId) return;
+    const a = document.createElement("a");
+    a.href = `/api/jobs/${jobId}/svg`;
+    a.download = `botdraw-${jobId}-letter.svg`;
+    a.click();
+  };
+  motionBtn.onclick = async () => {
+    if (!jobId) return;
+    downloadJson(`botdraw-${jobId}-motion.json`, await api(`/api/jobs/${jobId}/motion`));
+  };
+  packBtn.onclick = async () => {
+    if (!jobId) return;
+    downloadJson(`botdraw-${jobId}-pack.json`, await api(`/api/jobs/${jobId}/export`));
+  };
+}
+
+function updatePaperFrame() {
+  const paper = document.getElementById("letters-paper")?.value || "A5";
+  const orientation = document.getElementById("letters-orientation")?.value || "portrait";
+  const margin = document.getElementById("letters-margin")?.value || "18";
+  const frame = document.getElementById("paper-frame");
+  frame.dataset.orientation = orientation;
+  frame.dataset.paper = paper;
+  frame.style.setProperty("--print-margin", margin);
+  const limit = document.getElementById("print-limit");
+  // Visual inset scaled for on-screen preview (not 1:1 mm).
+  const inset = 12 + Number(margin) * 0.55;
+  limit.style.inset = `${inset}px`;
+}
+
+function renderLetterLayerPanel(layers) {
+  const tabs = document.getElementById("letter-layer-tabs");
+  const specs = document.getElementById("letter-layer-specs");
+  const list = Array.isArray(layers) ? layers : (layers?.passes || []);
+  if (!list.length) {
+    const pal = currentPalette() || { pens: [] };
+    const ink = pal.pens?.find((p) => p.profile?.nib_type !== "highlighter") || pal.pens?.[0];
+    const high = pal.pens?.find((p) => p.profile?.nib_type === "highlighter");
+    tabs.innerHTML = `
+      <button type="button" data-layer="ink" class="${letterLayerTab === "ink" ? "active" : ""}">Ink</button>
+      <button type="button" data-layer="highlight" class="${letterLayerTab === "highlight" ? "active" : ""}">Highlight</button>
+    `;
+    const pen = letterLayerTab === "highlight" ? high : ink;
+    specs.innerHTML = pen ? `
+      <div class="spec-block">
+        <div class="spec-row">
+          <span class="swatch" style="background:${pen.color_hex}"></span>
+          <span>${pen.id} · ${pen.name || pen.profile?.nib_type || "pen"}</span>
+          <span class="meta">${pen.profile?.width_mm ?? "?"}mm</span>
+        </div>
+        <p class="muted" style="margin:0.55rem 0 0">Opacity ${pen.profile?.opacity ?? 1} · ${pen.profile?.nib_type || ""}</p>
+      </div>` : `<p class="muted">No pen in palette.</p>`;
+  } else {
+    tabs.innerHTML = list.map((layer, idx) => {
+      const id = layer.id || layer.pass_id || `layer-${idx}`;
+      const label = layer.name || layer.kind || id;
+      const active = letterLayerTab === id || (!list.find((l) => (l.id || l.pass_id) === letterLayerTab) && idx === 0);
+      if (active) letterLayerTab = id;
+      return `<button type="button" data-layer="${id}" class="${active ? "active" : ""}">${label}</button>`;
+    }).join("");
+    const layer = list.find((l) => (l.id || l.pass_id) === letterLayerTab) || list[0];
+    specs.innerHTML = `
+      <div class="spec-block">
+        <div class="spec-row">
+          <span class="swatch" style="background:${layer.color_hex || layer.color || "#333"}"></span>
+          <span>${layer.pen_id || layer.pen || "pen"} · ${layer.name || layer.kind || "layer"}</span>
+          <span class="meta">${layer.width_mm ?? layer.stroke_mm ?? "?"}mm · ${layer.polyline_count ?? layer.count ?? "?"} strokes</span>
+        </div>
+        <div class="row" style="margin-top:0.65rem">
+          <button type="button" id="letter-solo">Solo layer</button>
+          <button type="button" id="letter-hide">Hide layer</button>
+        </div>
+      </div>`;
+    specs.querySelector("#letter-solo")?.addEventListener("click", () => {
+      lettersPlayer.soloPass(layer.id || layer.pass_id);
+      renderLetterLayerPanel(layers);
+    });
+    specs.querySelector("#letter-hide")?.addEventListener("click", () => {
+      const id = layer.id || layer.pass_id;
+      lettersPlayer.setPassVisible(id, false);
+    });
+  }
+  tabs.querySelectorAll("button").forEach((btn) => {
+    btn.onclick = () => {
+      letterLayerTab = btn.dataset.layer;
+      renderLetterLayerPanel(list);
+    };
+  });
+}
+
+function personalLetterFormHtml() {
+  if (!selectedPaletteId || selectedPaletteId === "default-6") {
+    selectedPaletteId = "wedding-highlight";
+  }
+  return `
+    <h3>Personal letter</h3>
+    <p class="muted">Paste a body to vectorize immediately, or draft from details.</p>
+    ${field("Letter body", `<textarea id="body" placeholder="HELLO\n\nOr paste a short wedding letter…">HELLO</textarea>`)}
     ${field("Names", `<input id="names" value="Aanya & Kabir" />`)}
     <div class="grid-2">
       ${field("Language", `<select id="lang"><option value="en">en</option><option value="hi">hi</option><option value="pa">pa</option><option value="ur">ur</option></select>`)}
-      ${field("Era", `<select id="era"><option>golden</option><option>70s</option><option selected>90s</option><option>2000s</option><option>contemporary</option></select>`)}
+      ${field("Mood", `<input id="mood" value="romantic" />`)}
     </div>
-    ${field("Mood", `<input id="mood" value="romantic" />`)}
-    ${field("Facts", `<textarea id="facts">Met at a cousin's wedding.</textarea>`)}
-    ${field("Guest quote", `<textarea id="quote" placeholder="Paste lyric/line"></textarea>`)}
-    ${field("Or paste letter body (skips draft)", `<textarea id="body" placeholder="Leave empty to auto-draft"></textarea>`)}
-    <div class="row" style="gap:1rem;flex-wrap:wrap;margin:0.5rem 0">
-      <label><input id="use_llm" type="checkbox" /> Use local AI draft (slow if Ollama cold)</label>
+    <div class="grid-2">
+      ${field("Era", `<select id="era"><option>golden</option><option>70s</option><option selected>90s</option><option>2000s</option><option>contemporary</option></select>`)}
+      ${field("Seed", `<input id="seed" type="number" value="7" />`)}
+    </div>
+    ${field("Facts", `<textarea id="facts" style="min-height:56px">Met at a cousin's wedding.</textarea>`)}
+    ${field("Guest quote", `<textarea id="quote" style="min-height:56px" placeholder="Optional lyric / line"></textarea>`)}
+    <h4>Craft</h4>
+    <div class="grid-2">
+      ${field("Size mm", `<input id="size_mm" type="number" step="0.1" value="4.5" />`)}
+      ${field("Tracking", `<input id="tracking" type="number" step="0.05" value="0.15" />`)}
+    </div>
+    ${field("Humanize", `<input id="humanize" type="range" min="0" max="1" step="0.01" value="0.08" />`)}
+    <div class="chk-row">
       <label><input id="highlight" type="checkbox" checked /> Highlighter pass</label>
+      <label><input id="use_llm" type="checkbox" /> Local AI draft</label>
     </div>
     <h4>Palette</h4>
     ${field("Palette", paletteSelectHtml())}
-    ${penChipsHtml(currentPalette())}
-    ${field("Seed", `<input id="seed" type="number" value="${state.seed}" />`)}
-    <div class="row"><button class="primary" id="go">Draft &amp; Inspect</button></div>
+    <div class="row"><button class="primary" id="go">Vectorize</button></div>
   `;
-  applyCommonDefaults();
-  controls.querySelector("#go").onclick = async () => {
-    selectedPaletteId = val("palette", selectedPaletteId);
-    const useLlm = !!controls.querySelector("#use_llm")?.checked;
-    const bodyText = val("body").trim();
-    statsEl.textContent = bodyText
-      ? "Vectorizing pasted text…"
-      : useLlm
-        ? "Drafting with Ollama (can take a while)…"
-        : "Template draft + vectorize…";
-    const t0 = performance.now();
-    const data = await api("/api/letters/draft", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        names: val("names"),
-        language: val("lang"),
-        era: val("era"),
-        mood: val("mood"),
-        facts: val("facts"),
-        guest_quote: val("quote") || null,
-        body: bodyText || null,
-        use_llm: useLlm,
-        highlight: !!controls.querySelector("#highlight")?.checked,
-        optimize: false,
-        palette_id: selectedPaletteId,
-        seed: num("seed", 7),
-      }),
-    });
-    loadResult(data, { autoplay: false });
-    player.skipEnd();
-    const timing = data.settings?.timing_s || {};
-    const src = data.draft?.source || data.settings?.draft_source || "?";
-    const wall = ((performance.now() - t0) / 1000).toFixed(2);
-    statsEl.textContent =
-      `Ready · source=${src} · draft ${timing.draft ?? "?"}s · vector ${timing.vectorize ?? "?"}s · wall ${wall}s · Play to scrub plot`;
+}
+
+function placeholderTypeHtml(title) {
+  return `
+    <h3>${title}</h3>
+    <div class="coming-online">
+      Same Letters Dev Panel pattern — content options for ${title.toLowerCase()} come online next.
+      Use <strong>Personal</strong> to vectorize and download plot-ready SVG / motion JSON now.
+    </div>
+  `;
+}
+
+function bindLetterTypeRail() {
+  document.querySelectorAll("#letter-types button").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.type === letterType);
+    btn.onclick = () => {
+      letterType = btn.dataset.type;
+      renderLetters();
+    };
+  });
+}
+
+async function vectorizePersonalLetter() {
+  const root = letterContentRoot();
+  selectedPaletteId = lval("palette", selectedPaletteId);
+  const useLlm = !!root.querySelector("#use_llm")?.checked;
+  const bodyText = lval("body").trim();
+  lettersStatsEl.textContent = bodyText
+    ? "Vectorizing…"
+    : useLlm
+      ? "Drafting with Ollama…"
+      : "Template draft + vectorize…";
+  const t0 = performance.now();
+  const data = await api("/api/letters/draft", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      names: lval("names"),
+      language: lval("lang"),
+      era: lval("era"),
+      mood: lval("mood"),
+      facts: lval("facts"),
+      guest_quote: lval("quote") || null,
+      body: bodyText || null,
+      use_llm: useLlm,
+      highlight: !!root.querySelector("#highlight")?.checked,
+      optimize: false,
+      palette_id: selectedPaletteId,
+      seed: lnum("seed", 7),
+      paper: document.getElementById("letters-paper").value,
+      orientation: document.getElementById("letters-orientation").value,
+      size_mm: lnum("size_mm", 4.5),
+      tracking: lnum("tracking", 0.15),
+      humanize: lnum("humanize", 0.08),
+    }),
+  });
+  lastJob = data.job;
+  lastPayload = data.emulator;
+  lastLayers = data.layers || data.emulator?.layers || null;
+  lastSettings = data.settings;
+  lettersPlayer.load(lastPayload);
+  lettersPlayer.skipEnd();
+  setLettersDownloads(true, lastJob?.id);
+  renderLetterLayerPanel(lastLayers);
+  const timing = data.settings?.timing_s || {};
+  const src = data.draft?.source || "?";
+  const wall = ((performance.now() - t0) / 1000).toFixed(2);
+  const missing = (data.settings?.missing_scripts || []).join(",") || "none";
+  lettersStatsEl.textContent =
+    `Ready · ${src} · draft ${timing.draft ?? "?"}s · vector ${timing.vectorize ?? "?"}s · wall ${wall}s · missing scripts: ${missing}`;
+}
+
+function renderLetters() {
+  setShellForApp("lettersbot");
+  bindLetterTypeRail();
+  updatePaperFrame();
+  ["letters-paper", "letters-orientation", "letters-margin"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.onchange = updatePaperFrame;
+  });
+
+  const root = letterContentRoot();
+  const titles = {
+    professional: "Professional letters",
+    marketing: "Marketing letters",
+    envelopes: "Envelopes",
+    personal: "Personal letter",
+    invitations: "Invitation letters + envelopes",
+    postcards: "Postcards",
   };
+  if (letterType === "personal") {
+    root.innerHTML = personalLetterFormHtml();
+    root.querySelector("#palette").value = selectedPaletteId;
+    root.querySelector("#go").onclick = () => vectorizePersonalLetter().catch((e) => {
+      lettersStatsEl.textContent = String(e);
+      console.error(e);
+    });
+  } else {
+    root.innerHTML = placeholderTypeHtml(titles[letterType] || letterType);
+  }
+  renderLetterLayerPanel(lastLayers);
+  setLettersDownloads(!!lastJob?.id, lastJob?.id);
 }
 
 function renderRdlab() {
