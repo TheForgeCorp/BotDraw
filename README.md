@@ -4,7 +4,16 @@ Software-first multi-bot pen plotter platform with a high-fidelity **emulator**.
 
 Internal product names: **BotDraw** core, **GenArtBot**, **PortraitBot**, **LettersBot**, **R&D Lab**.
 
-## Quick start
+## Mini-PC launch (“go”)
+
+Say **go** to Claude Code. The agent must **ask you first** (IP/hostname, SSH user, auth, sudo, branch, etc.), then SSH to the mini-PC and install.
+
+→ **[GO.md](./GO.md)** — Phase 0 questions + connect/install checklist  
+→ On the box after SSH: `sudo ./scripts/go.sh`
+
+Detail: [docs/host/](./docs/host/) · Ops: [docs/ops/](./docs/ops/) · Hermes: [docs/ops/hermes/](./docs/ops/hermes/)
+
+## Quick start (dev laptop)
 
 ```bash
 cd /path/to/repo
@@ -39,7 +48,29 @@ Open `http://127.0.0.1:8080` — **Dev Lab** UI for vectorization, palette layer
 | LettersBot | EN/HI/PA/UR letters, wedding/Bollywood draft flow, guest quotes, highlight passes |
 | R&D Lab | Experimental motifs + rotating-base kinematics in the emulator |
 
-## Deploy to BotDraw host (SSH)
+## Deploy / mini-PC host (Ubuntu)
+
+Single portable always-on box (home or venue). Local **Ollama** is installed up front; Hermes uses **Claude Max** as primary.
+
+```bash
+# on the mini-PC after first SSH
+sudo mkdir -p /opt/botdraw && sudo chown "$USER":"$USER" /opt/botdraw
+git clone https://github.com/TheForgeCorp/BotDraw.git /opt/botdraw
+cd /opt/botdraw
+sudo ./scripts/bootstrap_minipc.sh
+hermes model   # interactive: authenticate Claude Max
+```
+
+Full runbook: [`docs/host/UBUNTU_MINIPC.md`](docs/host/UBUNTU_MINIPC.md) · hardware: [`docs/ops/HARDWARE.md`](docs/ops/HARDWARE.md) · venue plotter: [`docs/host/PLOTTER_NODE.md`](docs/host/PLOTTER_NODE.md)
+
+Venue / remote plotter node (home Hermes stays up; **no plotter required for E2E**):
+
+```bash
+export BOTDRAW_API=http://botdraw-home:8080   # Tailscale address
+botdraw plot-worker --driver stub             # E2E remote test; later: axidraw
+```
+
+Optional sync-from-laptop (BotDraw app only):
 
 ```bash
 export BOTDRAW_HOST=your-mini-pc.local
@@ -52,6 +83,14 @@ export BOTDRAW_USER=ubuntu
 - `botdraw palette list` / `botdraw palette calibrate ...`
 - `botdraw bench --style stipple --profile booth-balanced`
 - Motion plan schema: `botdraw/schemas/motion_plan.schema.json`
+
+## Ops / agent governance
+
+- [`docs/ops/`](docs/ops/) — charter, roles, channels (web/IG/Etsy), capabilities 1–28, governance, escalation  
+- Autonomy **v2**: agent runs website, Instagram (post+reply), Etsy shop(s), and stack upkeep  
+- **Hermes + Claude Max** + local **Ollama**; human only: **confirm booking dates**, **cash collection**, **phone calls**  
+- Hermes starter skills + **Ink** persona + handoff pack: [`docs/ops/hermes/`](docs/ops/hermes/)  
+- Agents should load [`docs/ops/OPERATOR_CHARTER.md`](docs/ops/OPERATOR_CHARTER.md) + [`docs/ops/CAPABILITIES.md`](docs/ops/CAPABILITIES.md)
 
 ## Notes
 

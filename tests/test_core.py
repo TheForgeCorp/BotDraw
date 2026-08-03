@@ -68,6 +68,39 @@ def test_export_pack_and_layers_summary():
     assert any(seg.get("pass_id") for seg in payload["segments"])
 
 
+def test_plot_queue_claim_complete():
+    from fastapi.testclient import TestClient
+
+    from botdraw.api.main import app
+    from botdraw.core.jobs import load_job
+    from botdraw.core.models import JobStatus
+
+    job, _payload, _layers = render_job(
+        app="test",
+        style_id="blueprint",
+        seed=3,
+        quality=QualityPreset.BOOTH_FAST,
+    )
+    client = TestClient(app)
+    queue = client.get("/api/plot/queue").json()
+    assert any(item["id"] == job.id for item in queue)
+
+    claimed = client.post(f"/api/plot/claim/{job.id}", params={"node": "venue-test"}).json()
+    assert claimed["status"] == JobStatus.PLOTTING.value
+    assert claimed["params"]["plot_node"] == "venue-test"
+
+    conflict = client.post(f"/api/plot/claim/{job.id}", params={"node": "other-node"})
+    assert conflict.status_code == 409
+
+    done = client.post(
+        f"/api/plot/complete/{job.id}",
+        params={"node": "venue-test"},
+        json={"driver": "stub"},
+    ).json()
+    assert done["status"] == JobStatus.DONE.value
+    assert load_job(job.id).status == JobStatus.DONE
+
+
 def test_motion_schema_file_exists():
     schema = Path(__file__).resolve().parents[1] / "botdraw" / "schemas" / "motion_plan.schema.json"
     data = json.loads(schema.read_text())

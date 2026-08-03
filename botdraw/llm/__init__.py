@@ -17,9 +17,17 @@ class NoneProvider:
 
 
 class LocalOllamaProvider:
-    def __init__(self, model: str = "llama3.2:3b", base_url: str = "http://127.0.0.1:11434"):
-        self.model = model
-        self.base_url = base_url.rstrip("/")
+    def __init__(
+        self,
+        model: str | None = None,
+        base_url: str | None = None,
+    ):
+        import os
+
+        self.model = model or os.environ.get("BOTDRAW_OLLAMA_MODEL", "llama3.2:3b")
+        self.base_url = (base_url or os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")).rstrip("/")
+        if not self.base_url.startswith("http"):
+            self.base_url = f"http://{self.base_url}"
 
     def draft(self, prompt: str) -> str:
         import httpx
@@ -54,10 +62,14 @@ def is_loaded() -> bool:
 def try_local_ollama() -> bool:
     try:
         import httpx
+        import os
 
-        r = httpx.get("http://127.0.0.1:11434/api/tags", timeout=1.5)
+        host = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
+        if not host.startswith("http"):
+            host = f"http://{host}"
+        r = httpx.get(f"{host.rstrip('/')}/api/tags", timeout=1.5)
         if r.status_code == 200:
-            set_provider(LocalOllamaProvider())
+            set_provider(LocalOllamaProvider(base_url=host))
             return True
     except Exception:
         pass

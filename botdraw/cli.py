@@ -115,5 +115,68 @@ def serve(host: str = "0.0.0.0", port: int = 8080):
     uvicorn.run("botdraw.api.main:app", host=host, port=port, reload=False)
 
 
+@app.command("plot-worker")
+def plot_worker_cmd(
+    api: str = typer.Option(..., envvar="BOTDRAW_API", help="Home BotDraw base URL"),
+    node: str = typer.Option("venue-1", envvar="BOTDRAW_PLOT_NODE"),
+    driver: str = typer.Option("stub", help="stub | emulator | axidraw"),
+    poll: float = typer.Option(5.0, help="Seconds between empty-queue polls"),
+    speed: float = 1.0,
+    cache_dir: Optional[Path] = typer.Option(None, help="Optional offline motion cache"),
+    once: bool = typer.Option(False, help="Process at most one job then exit"),
+):
+    """Venue node: claim ready jobs from home API and plot locally."""
+    from botdraw.plotter.worker import BotDrawApiClient, run_loop
+
+    client = BotDrawApiClient(api, node_id=node)
+    print(f"[cyan]plot-worker[/cyan] api={api} node={node} driver={driver}")
+    run_loop(
+        client,
+        driver_name=driver,  # type: ignore[arg-type]
+        poll_s=poll,
+        speed=speed,
+        cache_dir=cache_dir,
+        once=once,
+    )
+
+
+@app.command("plot")
+def plot_cmd(
+    api: str = typer.Option(..., envvar="BOTDRAW_API", help="Home BotDraw base URL"),
+    job_id: str = typer.Option(..., help="Job id to claim and plot"),
+    node: str = typer.Option("venue-1", envvar="BOTDRAW_PLOT_NODE"),
+    driver: str = typer.Option("stub", help="stub | emulator | axidraw"),
+    speed: float = 1.0,
+    cache_dir: Optional[Path] = None,
+):
+    from botdraw.plotter.worker import BotDrawApiClient, run_one
+
+    client = BotDrawApiClient(api, node_id=node)
+    result = run_one(
+        client,
+        job_id=job_id,
+        driver_name=driver,  # type: ignore[arg-type]
+        speed=speed,
+        cache_dir=cache_dir,
+    )
+    print(json.dumps(result, indent=2, default=str))
+
+
+@app.command("plot-sync")
+def plot_sync_cmd(
+    api: str = typer.Option(..., envvar="BOTDRAW_API"),
+    out: Path = typer.Option(Path("jobs/plot-cache"), help="Local cache directory"),
+    node: str = typer.Option("venue-1", envvar="BOTDRAW_PLOT_NODE"),
+):
+    """Download ready motion plans from home for offline booth use."""
+    from botdraw.plotter.worker import BotDrawApiClient, sync_ready_jobs
+
+    client = BotDrawApiClient(api, node_id=node)
+    ids = sync_ready_jobs(client, out)
+    print(f"[green]synced {len(ids)} jobs → {out}[/green]")
+    for jid in ids:
+        print(f"  {jid}")
+
+
 if __name__ == "__main__":
     app()

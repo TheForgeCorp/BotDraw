@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -461,6 +462,92 @@ def api_plot_stub(job_id: str):
     emu.connect()
     emu_result = emu.plot(plan, speed_multiplier=50)
     return {"stub": result, "emulator_run": {"elapsed_s": emu_result["elapsed_s"], "segments": emu_result["segment_count"]}}
+
+
+@app.get("/api/plot/queue")
+def api_plot_queue():
+    """Ready jobs with motion plans — for venue plotter nodes."""
+    from botdraw.core.models import JobStatus
+
+    ready = []
+    for job in list_jobs(limit=100):
+        if job.status != JobStatus.READY:
+            continue
+        if not job.motion_path or not Path(job.motion_path).exists():
+            continue
+        ready.append(
+            {
+                "id": job.id,
+                "app": job.app,
+                "style_id": job.style_id,
+                "palette_id": job.palette_id,
+                "paper": job.paper.value if hasattr(job.paper, "value") else job.paper,
+                "updated_at": job.updated_at,
+                "motion_path": job.motion_path,
+            }
+        )
+    return ready
+
+
+@app.post("/api/plot/claim/{job_id}")
+def api_plot_claim(job_id: str, node: str = "venue-1"):
+    from botdraw.core.jobs import update_job_status
+    from botdraw.core.models import JobStatus
+
+    job = load_job(job_id)
+    if job.status == JobStatus.PLOTTING:
+        owner = (job.params or {}).get("plot_node")
+        if owner and owner != node:
+            raise HTTPException(409, f"Job already claimed by {owner}")
+        return job.model_dump()
+    if job.status != JobStatus.READY:
+        raise HTTPException(409, f"Job status is {job.status}; need ready")
+    if not job.motion_path or not Path(job.motion_path).exists():
+        raise HTTPException(404, "Motion plan missing")
+    params = dict(job.params or {})
+    params["plot_node"] = node
+    params["plot_claimed_at"] = time.time()
+    updated = update_job_status(job_id, JobStatus.PLOTTING, params=params)
+    return updated.model_dump()
+
+
+@app.post("/api/plot/complete/{job_id}")
+def api_plot_complete(
+    job_id: str,
+    node: str = "venue-1",
+    body: dict[str, Any] = Body(default_factory=dict),
+):
+    from botdraw.core.jobs import update_job_status
+    from botdraw.core.models import JobStatus
+
+    job = load_job(job_id)
+    if job.status not in (JobStatus.PLOTTING, JobStatus.READY):
+        raise HTTPException(409, f"Cannot complete from status {job.status}")
+    params = dict(job.params or {})
+    if params.get("plot_node") and params["plot_node"] != node:
+        raise HTTPException(409, f"Job owned by {params['plot_node']}")
+    params["plot_node"] = node
+    params["plot_completed_at"] = time.time()
+    params["plot_result"] = body
+    updated = update_job_status(job_id, JobStatus.DONE, params=params)
+    return updated.model_dump()
+
+
+@app.post("/api/plot/fail/{job_id}")
+def api_plot_fail(job_id: str, node: str = "venue-1", error: str = "plot failed", requeue: bool = True):
+    from botdraw.core.jobs import update_job_status
+    from botdraw.core.models import JobStatus
+
+    job = load_job(job_id)
+    params = dict(job.params or {})
+    if params.get("plot_node") and params["plot_node"] != node:
+        raise HTTPException(409, f"Job owned by {params['plot_node']}")
+    params["plot_node"] = node
+    params["plot_error"] = error
+    params["plot_failed_at"] = time.time()
+    status = JobStatus.READY if requeue else JobStatus.FAILED
+    updated = update_job_status(job_id, status, params=params, error=None if requeue else error)
+    return updated.model_dump()
 
 
 @app.get("/api/jobs")
