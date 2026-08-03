@@ -53,6 +53,14 @@ export BOTDRAW_USER=ubuntu
 - `botdraw bench --style stipple --profile booth-balanced`
 - Motion plan schema: `botdraw/schemas/motion_plan.schema.json`
 
+## Ops / agent governance
+
+Stack-agnostic operator pack for Hermes or OpenClaw on the BotDraw mini-PC:
+
+- [`docs/ops/`](docs/ops/) — charter, roles, governance, escalation, stack notes  
+- v1 autonomy: **book + draft**; Nav approves public posts and all money moves  
+- Agents should load [`docs/ops/OPERATOR_CHARTER.md`](docs/ops/OPERATOR_CHARTER.md) as session soul/context
+
 ## Notes
 
 - No physical plotter required for the MVP PoC.
