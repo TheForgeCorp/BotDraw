@@ -1,0 +1,43 @@
+{
+  "id": "default-6",
+  "name": "Studio Six",
+  "paper_notes": "General multicolor set for art and portraits",
+  "pens": [
+    {
+      "id": "black",
+      "name": "Black Fineliner",
+      "color_hex": "#1a1a1a",
+      "profile": { "width_mm": 0.4, "nib_type": "fineliner", "opacity": 1.0 }
+    },
+    {
+      "id": "navy",
+      "name": "Navy",
+      "color_hex": "#1e3a5f",
+      "profile": { "width_mm": 0.5, "nib_type": "fineliner", "opacity": 1.0 }
+    },
+    {
+      "id": "crimson",
+      "name": "Crimson",
+      "color_hex": "#9b1b30",
+      "profile": { "width_mm": 0.5, "nib_type": "marker", "opacity": 1.0 }
+    },
+    {
+      "id": "ochre",
+      "name": "Ochre",
+      "color_hex": "#c4832a",
+      "profile": { "width_mm": 0.6, "nib_type": "marker", "opacity": 1.0 }
+    },
+    {
+      "id": "teal",
+      "name": "Teal",
+      "color_hex": "#2a6f6f",
+      "profile": { "width_mm": 0.5, "nib_type": "fineliner", "opacity": 1.0 }
+    },
+    {
+      "id": "highlight",
+      "name": "Yellow Highlighter",
+      "color_hex": "#f5e642",
+      "profile": { "width_mm": 3.5, "nib_type": "highlighter", "opacity": 0.4 }
+    }
+  ]
+}

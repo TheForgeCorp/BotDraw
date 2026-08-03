@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://botdraw.local/schemas/motion_plan.schema.json",
+  "title": "BotDrawMotionPlan",
+  "type": "object",
+  "required": ["schema_version", "width_mm", "height_mm", "segments", "stats"],
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0.0" },
+    "width_mm": { "type": "number" },
+    "height_mm": { "type": "number" },
+    "pen_up_speed_mm_s": { "type": "number" },
+    "pen_down_speed_mm_s": { "type": "number" },
+    "segments": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/segment" }
+    },
+    "stats": { "$ref": "#/$defs/stats" },
+    "palette_snapshot": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/penSnapshot" }
+    }
+  },
+  "$defs": {
+    "segment": {
+      "type": "object",
+      "required": ["kind", "x0", "y0", "x1", "y1", "duration_s"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["pen_up", "pen_down", "pen_change", "dwell"] },
+        "x0": { "type": "number" },
+        "y0": { "type": "number" },
+        "x1": { "type": "number" },
+        "y1": { "type": "number" },
+        "pen_id": { "type": ["string", "null"] },
+        "pass_id": { "type": ["string", "null"] },
+        "duration_s": { "type": "number" },
+        "base_theta_rad": { "type": ["number", "null"] },
+        "opacity": { "type": ["number", "null"] },
+        "width_mm": { "type": ["number", "null"] },
+        "color_hex": { "type": ["string", "null"] }
+      }
+    },
+    "stats": {
+      "type": "object",
+      "required": [
+        "path_length_mm",
+        "pen_up_travel_mm",
+        "pen_down_travel_mm",
+        "estimated_time_s",
+        "stroke_count",
+        "pass_count",
+        "pen_ids"
+      ],
+      "properties": {
+        "path_length_mm": { "type": "number" },
+        "pen_up_travel_mm": { "type": "number" },
+        "pen_down_travel_mm": { "type": "number" },
+        "estimated_time_s": { "type": "number" },
+        "stroke_count": { "type": "integer" },
+        "pass_count": { "type": "integer" },
+        "pen_ids": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "penSnapshot": {
+      "type": "object",
+      "required": ["id", "name", "color_hex", "width_mm", "opacity", "nib_type"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "color_hex": { "type": "string" },
+        "width_mm": { "type": "number" },
+        "opacity": { "type": "number" },
+        "nib_type": { "type": "string" }
+      }
+    }
+  }
+}

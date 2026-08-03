@@ -1,0 +1,25 @@
+{
+  "id": "wedding-highlight",
+  "name": "Wedding Letter Set",
+  "paper_notes": "Ink + highlighter for love letters",
+  "pens": [
+    {
+      "id": "ink",
+      "name": "Letter Ink",
+      "color_hex": "#2b2118",
+      "profile": { "width_mm": 0.45, "nib_type": "fineliner", "opacity": 1.0 }
+    },
+    {
+      "id": "rose",
+      "name": "Rose Accent",
+      "color_hex": "#a64d6d",
+      "profile": { "width_mm": 0.5, "nib_type": "marker", "opacity": 1.0 }
+    },
+    {
+      "id": "highlight",
+      "name": "Gold Highlighter",
+      "color_hex": "#e6c35c",
+      "profile": { "width_mm": 3.2, "nib_type": "highlighter", "opacity": 0.42 }
+    }
+  ]
+}
