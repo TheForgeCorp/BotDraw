@@ -429,9 +429,9 @@ function personalLetterFormHtml() {
     selectedPaletteId = "wedding-highlight";
   }
   return `
-    <h3>Personal letter</h3>
-    <p class="muted">Paste a body to vectorize immediately, or draft from details.</p>
-    ${field("Letter body", `<textarea id="body" placeholder="HELLO\n\nOr paste a short wedding letter…">HELLO</textarea>`)}
+    <h3>Personal</h3>
+    <p class="muted">Paste text to vectorize, or fill details for a template draft.</p>
+    ${field("Body", `<textarea id="body" placeholder="HELLO">HELLO</textarea>`)}
     ${field("Names", `<input id="names" value="Aanya & Kabir" />`)}
     <div class="grid-2">
       ${field("Language", `<select id="lang"><option value="en">en</option><option value="hi">hi</option><option value="pa">pa</option><option value="ur">ur</option></select>`)}
@@ -442,15 +442,15 @@ function personalLetterFormHtml() {
       ${field("Seed", `<input id="seed" type="number" value="7" />`)}
     </div>
     ${field("Facts", `<textarea id="facts" style="min-height:56px">Met at a cousin's wedding.</textarea>`)}
-    ${field("Guest quote", `<textarea id="quote" style="min-height:56px" placeholder="Optional lyric / line"></textarea>`)}
-    <h4>Craft</h4>
+    ${field("Guest quote", `<textarea id="quote" style="min-height:56px" placeholder="Optional line"></textarea>`)}
+    <h4>Layout</h4>
     <div class="grid-2">
       ${field("Size mm", `<input id="size_mm" type="number" step="0.1" value="4.5" />`)}
       ${field("Tracking", `<input id="tracking" type="number" step="0.05" value="0.15" />`)}
     </div>
     ${field("Humanize", `<input id="humanize" type="range" min="0" max="1" step="0.01" value="0.08" />`)}
     <div class="chk-row">
-      <label><input id="highlight" type="checkbox" checked /> Highlighter pass</label>
+      <label><input id="highlight" type="checkbox" checked /> Highlighter</label>
       <label><input id="use_llm" type="checkbox" /> Local AI draft</label>
     </div>
     <h4>Palette</h4>
@@ -463,8 +463,8 @@ function placeholderTypeHtml(title) {
   return `
     <h3>${title}</h3>
     <div class="coming-online">
-      Same Letters Dev Panel pattern — content options for ${title.toLowerCase()} come online next.
-      Use <strong>Personal</strong> to vectorize and download plot-ready SVG / motion JSON now.
+      Content options for this type are not wired yet.
+      Use Personal to vectorize and download SVG / motion JSON.
     </div>
   `;
 }

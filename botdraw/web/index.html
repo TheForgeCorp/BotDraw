@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="/static/styles.css" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,600&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,600&display=swap" rel="stylesheet" />
 </head>
 <body>
   <div class="bg"></div>
@@ -68,33 +68,35 @@
   <main class="letters-lab" id="letters-shell" hidden>
     <header class="letters-top">
       <div class="letters-identity">
-        <span class="letters-mark">LETTERS</span>
-        <span class="letters-sub">Dev Panel</span>
+        <span class="letters-mark">Letters</span>
+        <span class="letters-sub">Dev panel</span>
       </div>
-      <div class="letters-stats" id="letters-stats">Ready</div>
+      <div class="letters-stats" id="letters-stats" aria-live="polite">Ready</div>
     </header>
 
     <div class="letters-grid">
       <aside class="letters-left panel">
-        <nav class="type-rail" id="letter-types" aria-label="Letter types">
-          <button type="button" data-type="professional">Professional</button>
-          <button type="button" data-type="marketing">Marketing</button>
-          <button type="button" data-type="envelopes">Envelopes</button>
-          <button type="button" data-type="personal" class="active">Personal</button>
-          <button type="button" data-type="invitations">Invitations</button>
-          <button type="button" data-type="postcards">Postcards</button>
-        </nav>
-        <div class="letter-content" id="letter-content"></div>
+        <div class="letters-left-split">
+          <nav class="type-rail" id="letter-types" aria-label="Letter types">
+            <button type="button" data-type="professional">Professional</button>
+            <button type="button" data-type="marketing">Marketing</button>
+            <button type="button" data-type="envelopes">Envelopes</button>
+            <button type="button" data-type="personal" class="active">Personal</button>
+            <button type="button" data-type="invitations">Invitations</button>
+            <button type="button" data-type="postcards">Postcards</button>
+          </nav>
+          <div class="letter-content" id="letter-content"></div>
+        </div>
       </aside>
 
       <section class="letters-center panel">
         <div class="center-head">
           <h2>Layers</h2>
-          <p class="muted">Pen selection by layer</p>
+          <p class="muted">Pen by pass</p>
         </div>
         <div class="layer-tabs" id="letter-layer-tabs"></div>
         <div class="layer-specs" id="letter-layer-specs">
-          <p class="muted">Vectorize a letter to inspect layer pens.</p>
+          <p class="muted">Vectorize to inspect pens.</p>
         </div>
       </section>
 
@@ -115,7 +117,7 @@
               <option value="landscape">Landscape</option>
             </select>
           </label>
-          <label>Print margin
+          <label>Margin
             <select id="letters-margin">
               <option value="12">12 mm</option>
               <option value="18" selected>18 mm</option>
@@ -130,13 +132,13 @@
         <div class="letters-transport">
           <button type="button" id="letters-play">Play</button>
           <button type="button" id="letters-pause">Pause</button>
-          <button type="button" id="letters-skip">Skip end</button>
-          <label>Speed <input id="letters-speed" type="range" min="1" max="60" value="16" /></label>
+          <button type="button" id="letters-skip">End</button>
+          <label class="speed-label">Speed <input id="letters-speed" type="range" min="1" max="60" value="16" /></label>
         </div>
         <div class="letters-download">
-          <button type="button" id="letters-dl-svg" disabled>Download SVG</button>
-          <button type="button" id="letters-dl-motion" disabled>Download motion</button>
-          <button type="button" id="letters-dl-pack" disabled>Download pack</button>
+          <button type="button" class="primary" id="letters-dl-svg" disabled>Download SVG</button>
+          <button type="button" id="letters-dl-motion" disabled>Motion JSON</button>
+          <button type="button" id="letters-dl-pack" disabled>Pack</button>
         </div>
       </section>
     </div>
