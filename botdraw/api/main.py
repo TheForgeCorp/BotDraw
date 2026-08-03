@@ -70,6 +70,12 @@ class LetterRequest(BaseModel):
     highlight: bool = True
     palette_id: str = "wedding-highlight"
     seed: int = 7
+    # Dev Lab default: skip Ollama. Booth / AI draft sets use_llm=true.
+    use_llm: bool = False
+    # If set, skip drafting and vectorize this body only (fast path).
+    body: Optional[str] = None
+    # Letters are already reading-order; greedy linesort is optional.
+    optimize: bool = False
 
 
 class HandwritingSample(BaseModel):
@@ -188,22 +194,47 @@ async def api_render_upload(
 
 @app.post("/api/letters/draft")
 def api_letter_draft(body: LetterRequest):
-    try_local_ollama()
-    draft = draft_wedding_letter(
-        names=body.names,
-        language=body.language,
-        era=body.era,
-        mood=body.mood,
-        facts=body.facts,
-        guest_quote=body.guest_quote,
-    )
-    unload()
+    import time
+
+    t0 = time.perf_counter()
+    if body.body and body.body.strip():
+        draft = {
+            "source": "provided",
+            "body": body.body.strip(),
+            "motif": None,
+        }
+    elif body.use_llm:
+        try_local_ollama()
+        draft = draft_wedding_letter(
+            names=body.names,
+            language=body.language,
+            era=body.era,
+            mood=body.mood,
+            facts=body.facts,
+            guest_quote=body.guest_quote,
+        )
+        # Keep Ollama warm across requests (unload only via explicit health/ops).
+    else:
+        unload()  # ensure leftover provider does not slow the fast path
+        draft = draft_wedding_letter(
+            names=body.names,
+            language=body.language,
+            era=body.era,
+            mood=body.mood,
+            facts=body.facts,
+            guest_quote=body.guest_quote,
+        )
+    t_draft = time.perf_counter() - t0
+
+    t1 = time.perf_counter()
+    # Only append guest_quote in layout if not already embedded in a provided body.
+    quote_for_layout = None if (body.body and body.body.strip()) else body.guest_quote
     layered = render_letter(
         draft["body"],
         palette_id=body.palette_id,
         language=body.language,
-        guest_quote=body.guest_quote,
-        highlight_words=["forever", "heart", "love"] if body.highlight else None,
+        guest_quote=quote_for_layout,
+        highlight_words=["forever", "heart", "love"] if body.highlight else [],
         seed=body.seed,
     )
     from botdraw.core.optimize import optimize_layered
@@ -214,9 +245,13 @@ def api_letter_draft(body: LetterRequest):
     from botdraw.core.pipeline import layers_summary
 
     palette = load_palette(body.palette_id)
-    layered = optimize_layered(layered)
+    if body.optimize:
+        layered = optimize_layered(layered)
+    else:
+        layered.meta["optimizer"] = "skipped-reading-order"
     plan = compile_motion_plan(layered, palette)
     layers = layers_summary(layered, palette)
+    t_vector = time.perf_counter() - t1
     settings = {
         "app": "lettersbot",
         "style_id": "letter",
@@ -228,6 +263,10 @@ def api_letter_draft(body: LetterRequest):
         "names": body.names,
         "guest_quote": body.guest_quote,
         "highlight": body.highlight,
+        "use_llm": body.use_llm,
+        "optimize": body.optimize,
+        "draft_source": draft.get("source"),
+        "timing_s": {"draft": round(t_draft, 3), "vectorize": round(t_vector, 3)},
     }
     job = JobRecord(app="lettersbot", style_id="letter", status=JobStatus.READY, seed=body.seed, palette_id=body.palette_id)
     out = artifact_dir(job.id)

@@ -96,7 +96,8 @@ function setExportEnabled(on) {
   });
 }
 
-function loadResult(data) {
+function loadResult(data, opts = {}) {
+  const autoplay = opts.autoplay !== false;
   lastJob = data.job;
   lastPayload = data.emulator;
   lastLayers = data.layers || data.emulator?.layers || null;
@@ -119,9 +120,10 @@ function loadResult(data) {
     layers: lastLayers,
     stats: lastPayload?.stats,
     job: lastJob,
+    draft: data.draft,
   };
   renderInspector();
-  player.play();
+  if (autoplay) player.play();
 }
 
 function currentPalette() {
@@ -296,7 +298,7 @@ function renderPortrait() {
 function renderLetters() {
   controls.innerHTML = `
     <h3>LettersBot · Dev</h3>
-    <p class="muted">Ink pass + highlighter overlay pass. Export settings/layers as JSON.</p>
+    <p class="muted">Stroke-font layout is fast. Slowdowns are usually local AI draft or emulator playback.</p>
     ${field("Names", `<input id="names" value="Aanya & Kabir" />`)}
     <div class="grid-2">
       ${field("Language", `<select id="lang"><option value="en">en</option><option value="hi">hi</option><option value="pa">pa</option><option value="ur">ur</option></select>`)}
@@ -305,6 +307,11 @@ function renderLetters() {
     ${field("Mood", `<input id="mood" value="romantic" />`)}
     ${field("Facts", `<textarea id="facts">Met at a cousin's wedding.</textarea>`)}
     ${field("Guest quote", `<textarea id="quote" placeholder="Paste lyric/line"></textarea>`)}
+    ${field("Or paste letter body (skips draft)", `<textarea id="body" placeholder="Leave empty to auto-draft"></textarea>`)}
+    <div class="row" style="gap:1rem;flex-wrap:wrap;margin:0.5rem 0">
+      <label><input id="use_llm" type="checkbox" /> Use local AI draft (slow if Ollama cold)</label>
+      <label><input id="highlight" type="checkbox" checked /> Highlighter pass</label>
+    </div>
     <h4>Palette</h4>
     ${field("Palette", paletteSelectHtml())}
     ${penChipsHtml(currentPalette())}
@@ -314,7 +321,14 @@ function renderLetters() {
   applyCommonDefaults();
   controls.querySelector("#go").onclick = async () => {
     selectedPaletteId = val("palette", selectedPaletteId);
-    statsEl.textContent = "Drafting letter…";
+    const useLlm = !!controls.querySelector("#use_llm")?.checked;
+    const bodyText = val("body").trim();
+    statsEl.textContent = bodyText
+      ? "Vectorizing pasted text…"
+      : useLlm
+        ? "Drafting with Ollama (can take a while)…"
+        : "Template draft + vectorize…";
+    const t0 = performance.now();
     const data = await api("/api/letters/draft", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -325,12 +339,21 @@ function renderLetters() {
         mood: val("mood"),
         facts: val("facts"),
         guest_quote: val("quote") || null,
-        highlight: true,
+        body: bodyText || null,
+        use_llm: useLlm,
+        highlight: !!controls.querySelector("#highlight")?.checked,
+        optimize: false,
         palette_id: selectedPaletteId,
         seed: num("seed", 7),
       }),
     });
-    loadResult(data);
+    loadResult(data, { autoplay: false });
+    player.skipEnd();
+    const timing = data.settings?.timing_s || {};
+    const src = data.draft?.source || data.settings?.draft_source || "?";
+    const wall = ((performance.now() - t0) / 1000).toFixed(2);
+    statsEl.textContent =
+      `Ready · source=${src} · draft ${timing.draft ?? "?"}s · vector ${timing.vectorize ?? "?"}s · wall ${wall}s · Play to scrub plot`;
   };
 }
 
