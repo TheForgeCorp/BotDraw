@@ -32,4 +32,11 @@ Bootstrap pulls `llama3.2:3b` always and `llama3.1:8b` when ≥28 GB RAM is dete
 
 ## Venue use
 
-Bring **this same mini-PC**. Needs power + internet (Claude Max, IG, Etsy). Control via SSH/phone Hermes chat; HDMI optional.
+Keep the **home mini-PC plugged in** (Hermes uninterrupted). Bring a **venue plotter node** (laptop) on Tailscale:
+
+```bash
+export BOTDRAW_API=http://botdraw-home:8080
+botdraw plot-worker --driver stub
+```
+
+Details: [../host/PLOTTER_NODE.md](../host/PLOTTER_NODE.md). Only bring the home box on-site if you need offline render with no home WAN.

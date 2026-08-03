@@ -25,14 +25,19 @@ Grant tools for website, Instagram, Etsy, calendar holds, support inboxes, BotDr
 ## Mini-PC layout
 
 ```text
-mini-PC (Ubuntu, 24/7, portable to venues)
-  ├─ ollama.service              # local AI
-  ├─ botdraw.service             # product API + Dev Lab :8080
-  ├─ hermes                      # operator (Claude Max + Ollama secondary)
-  ├─ /opt/botdraw                # this git repo
-  ├─ /etc/botdraw/botdraw.env    # host env (not secrets in git)
-  └─ docs/ops                    # governance soul pack
+HOME mini-PC (Ubuntu, 24/7)
+  ├─ ollama.service
+  ├─ botdraw.service             # control plane :8080
+  ├─ hermes                      # Telegram ops
+  └─ /opt/botdraw
+
+VENUE plotter node (laptop / small PC)
+  ├─ Tailscale → home API
+  ├─ botdraw plot-worker         # claim → plot → complete
+  └─ USB AxiDraw
 ```
+
+See [PLOTTER_NODE.md](../host/PLOTTER_NODE.md).
 
 ## Security minimums
 

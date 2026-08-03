@@ -52,7 +52,14 @@ sudo ./scripts/bootstrap_minipc.sh
 hermes model   # interactive: authenticate Claude Max
 ```
 
-Full runbook: [`docs/host/UBUNTU_MINIPC.md`](docs/host/UBUNTU_MINIPC.md) · hardware: [`docs/ops/HARDWARE.md`](docs/ops/HARDWARE.md)
+Full runbook: [`docs/host/UBUNTU_MINIPC.md`](docs/host/UBUNTU_MINIPC.md) · hardware: [`docs/ops/HARDWARE.md`](docs/ops/HARDWARE.md) · venue plotter: [`docs/host/PLOTTER_NODE.md`](docs/host/PLOTTER_NODE.md)
+
+Venue plotter node (home Hermes stays up):
+
+```bash
+export BOTDRAW_API=http://botdraw-home:8080   # Tailscale address
+botdraw plot-worker --driver stub             # later: axidraw
+```
 
 Optional sync-from-laptop (BotDraw app only):
 
