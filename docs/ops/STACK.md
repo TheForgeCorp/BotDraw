@@ -1,28 +1,30 @@
-# Agent Stack Notes (Hermes vs OpenClaw)
+# Agent Stack Notes
 
-**Decision status:** not locked. Governance in this folder is stack-agnostic.
+**Decision status:** Hermes selected · LLM = Nav Claude Max account  
+
+OpenClaw remains a possible alternate gateway later; governance stays readable by either.
 
 ## Recommendation for BotDraw mini-PC
 
-Prefer **Hermes Agent** (Nous Research) as the default long-running operator when you are ready to pick:
+**Hermes Agent** + Claude Max is the locked starting stack:
 
 - Persistent learning loop → booth FAQs and booking skills compound over time  
 - Cron / scheduled digests fit morning–evening ops loops  
 - Comfortable as a single always-on process beside BotDraw (`botdraw serve`)  
-- Migration path exists if you start on OpenClaw (`hermes claw migrate`)
+- Auth: `hermes model` → Anthropic / Claude Max path (API key or OAuth per Hermes docs)  
 
-Choose **OpenClaw** first if your near-term pain is **multi-channel inbox** (WhatsApp/IG/Telegram gateway) and you want human-authored skills from ClawHub before self-learning.
-
-Either way: load [OPERATOR_CHARTER.md](./OPERATOR_CHARTER.md) as soul/system context on every session. Grant tools for website CMS, Instagram publish/reply, Etsy multi-shop, calendar holds, and BotDraw health — **deny** dialer/VoIP and any “mark cash paid” tool that bypasses Nav ack.
+Either way: load [OPERATOR_CHARTER.md](./OPERATOR_CHARTER.md) as soul/system context on every session. Also load [CAPABILITIES.md](./CAPABILITIES.md). Grant tools for website CMS, Instagram publish/reply, Etsy multi-shop, calendar holds, support inboxes, and BotDraw health — **deny** dialer/VoIP and any “mark cash paid” tool that bypasses Nav ack.
 
 ## Mini-PC layout (suggested)
 
 ```text
 mini-PC
-  ├─ botdraw serve          # product API + Dev Lab
-  ├─ hermes | openclaw      # operator agent daemon
-  ├─ calendar + secrets     # agent-accessible, least privilege
-  └─ docs/ops (this pack)   # cloned with the repo or synced
+  ├─ botdraw serve              # product API + Dev Lab
+  ├─ hermes | openclaw          # operator agent daemon
+  ├─ website (CMS/static host)  # agent-managed
+  ├─ IG + Etsy credentials      # least privilege per shop
+  ├─ calendar                   # holds; Nav confirms dates
+  └─ docs/ops (this pack)       # cloned/synced with repo
 ```
 
 ## Security minimums (both stacks)

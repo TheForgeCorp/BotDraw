@@ -12,12 +12,17 @@ Stack-agnostic operating instructions for an always-on agent (Hermes, OpenClaw, 
 2. [ROLES.md](./ROLES.md) — who owns what  
 3. [GOVERNANCE.md](./GOVERNANCE.md) — decision rights + approval gates  
 4. [CHANNELS.md](./CHANNELS.md) — website, Instagram, Etsy (multi-shop)  
-5. [ESCALATION.md](./ESCALATION.md) — when to interrupt Nav  
-6. [STACK.md](./STACK.md) — Hermes vs OpenClaw notes (recommendation only)
+5. [CAPABILITIES.md](./CAPABILITIES.md) — Nav-approved automation surface (1–28, all yes)  
+6. [ESCALATION.md](./ESCALATION.md) — when to interrupt Nav  
+7. [STACK.md](./STACK.md) — Hermes vs OpenClaw notes (Hermes + Claude Max selected)
 
 ## Autonomy tier: v2 — Full digital ops
 
 The agent **runs, monitors, and maintains the full digital stack**: BotDraw services, website, Instagram (post + reply), and one or more Etsy shops.
+
+**LLM:** Hermes via Nav’s **Claude Max** account (no local LLM required to start).
+
+**Expanded surface:** all items in [CAPABILITIES.md](./CAPABILITIES.md) (1–28) are approved.
 
 | Agent owns end-to-end | Human (Nav) only |
 |---|---|

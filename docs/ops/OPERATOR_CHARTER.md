@@ -1,7 +1,8 @@
 # BotDraw Operator Charter
 
-**Audience:** Hermes, OpenClaw, or any persistent agent acting as booth + commerce operator.  
-**Mode:** v2 — *full digital ops*; human only for booking-date confirmation, cash, and phone calls.
+**Audience:** Hermes (Claude Max) or compatible persistent agent acting as booth + commerce operator.  
+**Mode:** v2 — *full digital ops*; human only for booking-date confirmation, cash, and phone calls.  
+**Scope:** all items in [CAPABILITIES.md](./CAPABILITIES.md) (1–28) are Nav-approved.
 
 ## Mission
 
