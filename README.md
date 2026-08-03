@@ -80,7 +80,7 @@ export BOTDRAW_USER=ubuntu
 - [`docs/ops/`](docs/ops/) — charter, roles, channels (web/IG/Etsy), capabilities 1–28, governance, escalation  
 - Autonomy **v2**: agent runs website, Instagram (post+reply), Etsy shop(s), and stack upkeep  
 - **Hermes + Claude Max** + local **Ollama**; human only: **confirm booking dates**, **cash collection**, **phone calls**  
-- Hermes starter skills: [`docs/ops/hermes/skills/`](docs/ops/hermes/skills/)  
+- Hermes starter skills + **Ink** persona + handoff pack: [`docs/ops/hermes/`](docs/ops/hermes/)  
 - Agents should load [`docs/ops/OPERATOR_CHARTER.md`](docs/ops/OPERATOR_CHARTER.md) + [`docs/ops/CAPABILITIES.md`](docs/ops/CAPABILITIES.md)
 
 ## Notes

@@ -9,13 +9,14 @@ ln -s /opt/botdraw/docs/ops/hermes/skills ~/.hermes/skills/botdraw
 # exact path may vary by Hermes version — adjust after `hermes` install
 ```
 
-Ask Hermes on first boot: *Review all BotDraw skills under docs/ops/hermes/skills, load botdraw-orientation, and propose an enablement order.*
+Ask Hermes on first boot: *You are Ink. Review PERSONA.md, all skills (start botdraw-orientation + persona-voice), and the handoff pack; propose enablement order.*
 
 ## Skill index
 
 | Skill | Purpose |
 |---|---|
-| `botdraw-orientation` | Load first on new sessions |
+| `botdraw-orientation` | Load first — mission, gates, read order |
+| `persona-voice` | Apply Ink personality + voice samples on every message |
 | `daily-ops-digest` | Compose and send Nav the daily ops digest: sales, holds awaiting date confirm, cash-to-col |
 | `booking-holds` | Qualify session leads, propose 1-3 slots, place calendar holds (hold_pending_nav) |
 | `customer-support` | Answer customer FAQs on email/WhatsApp/Telegram/IG/Etsy with approved scripts |
@@ -52,9 +53,10 @@ Ask Hermes on first boot: *Review all BotDraw skills under docs/ops/hermes/skill
 
 ## Review checklist for Hermes
 
-1. Read `botdraw-orientation`
-2. Confirm human gates still match `GOVERNANCE.md`
-3. Enable P0 skills first: `mini-pc-sre`, `daily-ops-digest`, `nav-human-queues`, `booking-holds`, `customer-support`
-4. Then commerce: `etsy-multi-shop`, `instagram-ops`, `website-ops`, `order-fulfill`
-5. Mark live/planned in `docs/ops/memory/capability-status.md`
+1. Read `botdraw-orientation` + `persona-voice` + `PERSONA.md`
+2. Skim `handoff/` (FAQ, brand kit, calendars, incidents)
+3. Confirm human gates still match `GOVERNANCE.md`
+4. Enable P0 skills first: `mini-pc-sre`, `daily-ops-digest`, `nav-human-queues`, `booking-holds`, `customer-support`
+5. Then commerce: `etsy-multi-shop`, `instagram-ops`, `website-ops`, `order-fulfill`
+6. Mark live/planned in `docs/ops/memory/capability-status.md`
 
