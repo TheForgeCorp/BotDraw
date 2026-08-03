@@ -34,4 +34,9 @@ where = ["."]
 include = ["botdraw*"]
 
 [tool.setuptools.package-data]
-botdraw = ["schemas/*.json", "palettes/presets/*.json", "letters/corpus/*.json"]
+botdraw = [
+  "schemas/*.json",
+  "palettes/presets/*.json",
+  "letters/corpus/*.json",
+  "web/*",
+]

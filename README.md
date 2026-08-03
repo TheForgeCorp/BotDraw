@@ -18,6 +18,11 @@ botdraw serve --port 8080
 
 Open `http://127.0.0.1:8080`.
 
+### Upload an image
+- **GenArtBot / PortraitBot / R&D Lab:** use **Upload image** in the left panel, pick a style, then render.
+- **Tools:** optional WAV upload for audio → vector.
+- **CLI:** `botdraw render --style stipple --image ./photo.jpg`
+
 ## Apps
 
 | App | Purpose |

@@ -77,35 +77,61 @@ function commonOpts() {
   `;
 }
 
+function imageUploadField(label = "Upload image (optional)") {
+  return field(label, `<input id="photo" type="file" accept="image/*" />`);
+}
+
+async function renderWithOptionalImage({ appName, busyText = "Rendering…" }) {
+  const fileInput = controls.querySelector("#photo");
+  const file = fileInput && fileInput.files && fileInput.files[0];
+  const palette_id = controls.querySelector("#palette").value;
+  const quality = controls.querySelector("#quality").value;
+  const seed = Number(controls.querySelector("#seed").value);
+  const density = Number(controls.querySelector("#density").value);
+  statsEl.textContent = busyText;
+  let data;
+  if (file) {
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("style_id", selectedStyle);
+    fd.append("app_name", appName);
+    fd.append("palette_id", palette_id);
+    fd.append("quality", quality);
+    fd.append("seed", String(seed));
+    fd.append("density", String(density));
+    data = await api("/api/render/upload", { method: "POST", body: fd });
+  } else {
+    data = await api("/api/render", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        app: appName,
+        style_id: selectedStyle,
+        palette_id,
+        quality,
+        seed,
+        density,
+      }),
+    });
+  }
+  loadIntoPlayer(data.emulator, data.job);
+  player.play();
+}
+
 function renderGenArt() {
   const list = styles.filter((s) => ["artistic", "pattern", "technical"].includes(s.category));
   if (!list.find((s) => s.id === selectedStyle)) selectedStyle = list[0]?.id || "stipple";
   controls.innerHTML = `
     <h3>GenArtBot</h3>
-    <p class="muted">Multicolor generative styles → SVG → emulator</p>
+    <p class="muted">Multicolor generative styles → SVG → emulator. Upload a photo for image-based styles.</p>
     ${styleButtons(list, selectedStyle)}
     ${commonOpts()}
+    ${imageUploadField("Upload image (optional)")}
     <div class="row"><button class="primary" id="go">Render &amp; Emulate</button></div>
   `;
   bindStyleGrid();
-  controls.querySelector("#go").onclick = async () => {
-    const body = {
-      app: "genartbot",
-      style_id: selectedStyle,
-      palette_id: controls.querySelector("#palette").value,
-      quality: controls.querySelector("#quality").value,
-      seed: Number(controls.querySelector("#seed").value),
-      density: Number(controls.querySelector("#density").value),
-    };
-    statsEl.textContent = "Rendering…";
-    const data = await api("/api/render", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    loadIntoPlayer(data.emulator, data.job);
-    player.play();
-  };
+  controls.querySelector("#go").onclick = () =>
+    renderWithOptionalImage({ appName: "genartbot", busyText: "Rendering…" });
 }
 
 function renderPortrait() {
@@ -116,41 +142,12 @@ function renderPortrait() {
     <p class="muted">Multi-style portrait gallery. Event default falls back to booth-fast if needed.</p>
     ${styleButtons(list, selectedStyle)}
     ${commonOpts()}
-    ${field("Upload photo (optional)", `<input id="photo" type="file" accept="image/*" />`)}
+    ${imageUploadField("Upload photo (optional)")}
     <div class="row"><button class="primary" id="go">Capture Style</button></div>
   `;
   bindStyleGrid();
-  controls.querySelector("#go").onclick = async () => {
-    const file = controls.querySelector("#photo").files[0];
-    statsEl.textContent = "Rendering portrait…";
-    let data;
-    if (file) {
-      const fd = new FormData();
-      fd.append("file", file);
-      fd.append("style_id", selectedStyle);
-      fd.append("app_name", "portraitbot");
-      fd.append("palette_id", controls.querySelector("#palette").value);
-      fd.append("quality", controls.querySelector("#quality").value);
-      fd.append("seed", controls.querySelector("#seed").value);
-      fd.append("density", controls.querySelector("#density").value);
-      data = await api("/api/render/upload", { method: "POST", body: fd });
-    } else {
-      data = await api("/api/render", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          app: "portraitbot",
-          style_id: selectedStyle,
-          palette_id: controls.querySelector("#palette").value,
-          quality: controls.querySelector("#quality").value,
-          seed: Number(controls.querySelector("#seed").value),
-          density: Number(controls.querySelector("#density").value),
-        }),
-      });
-    }
-    loadIntoPlayer(data.emulator, data.job);
-    player.play();
-  };
+  controls.querySelector("#go").onclick = () =>
+    renderWithOptionalImage({ appName: "portraitbot", busyText: "Rendering portrait…" });
 }
 
 function renderLetters() {
@@ -192,16 +189,24 @@ function renderRdlab() {
     <h3>R&amp;D Lab</h3>
     <p class="muted">Experimental patterns + rotating-base kinematics in the emulator</p>
     ${styleButtons(list, selectedStyle)}
+    ${commonOpts()}
     ${field("Turntable RPM", `<input id="rpm" type="number" step="0.5" value="3" />`)}
-    ${field("Seed", `<input id="seed" type="number" value="42" />`)}
+    ${imageUploadField("Upload image (optional)")}
     <div class="row"><button class="primary" id="go">Run Experiment</button></div>
   `;
   bindStyleGrid();
   controls.querySelector("#go").onclick = async () => {
+    const file = controls.querySelector("#photo").files[0];
+    const fd = new FormData();
+    fd.append("style_id", selectedStyle);
+    fd.append("rpm", controls.querySelector("#rpm").value);
+    fd.append("seed", controls.querySelector("#seed").value);
+    fd.append("palette_id", controls.querySelector("#palette").value);
+    fd.append("quality", controls.querySelector("#quality").value);
+    fd.append("density", controls.querySelector("#density").value);
+    if (file) fd.append("file", file);
     statsEl.textContent = "R&D render…";
-    const rpm = controls.querySelector("#rpm").value;
-    const seed = controls.querySelector("#seed").value;
-    const data = await api(`/api/rdlab/render?style_id=${encodeURIComponent(selectedStyle)}&rpm=${rpm}&seed=${seed}`, { method: "POST" });
+    const data = await api("/api/rdlab/render", { method: "POST", body: fd });
     loadIntoPlayer(data.emulator, data.job);
     player.play();
   };
@@ -210,8 +215,9 @@ function renderRdlab() {
 function renderTools() {
   controls.innerHTML = `
     <h3>Tools</h3>
-    <p class="muted">Audio demo, handwriting clone, palette calibrate, plot stub</p>
-    <div class="row"><button class="primary" id="audio">Audio → Vector demo</button></div>
+    <p class="muted">Audio upload/demo, handwriting clone, palette calibrate, plot stub</p>
+    ${field("Upload WAV (optional)", `<input id="wav" type="file" accept="audio/wav,audio/*" />`)}
+    <div class="row"><button class="primary" id="audio">Audio → Vector</button></div>
     <div class="row"><button id="hw">Handwriting demo (Hello)</button></div>
     ${field("Calibrate palette", `<select id="palette"><option>default-6</option><option>wedding-highlight</option></select>`)}
     ${field("Pen id", `<input id="pen" value="highlight" />`)}
@@ -221,7 +227,16 @@ function renderTools() {
     <div class="row"><button id="stub">Run AxiDraw stub</button></div>
   `;
   controls.querySelector("#audio").onclick = async () => {
-    const data = await api("/api/audio/demo", { method: "POST" });
+    const file = controls.querySelector("#wav").files[0];
+    statsEl.textContent = "Audio render…";
+    let data;
+    if (file) {
+      const fd = new FormData();
+      fd.append("file", file);
+      data = await api("/api/audio/upload", { method: "POST", body: fd });
+    } else {
+      data = await api("/api/audio/demo", { method: "POST" });
+    }
     loadIntoPlayer(data.emulator, data.job);
     player.play();
   };

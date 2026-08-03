@@ -231,15 +231,13 @@ def api_hw_render(user_id: str = "demo", text: str = "Hello"):
     return {"job": job.model_dump(), "emulator": payload}
 
 
-@app.post("/api/audio/demo")
-def api_audio_demo():
+def _audio_job(layered):
     from botdraw.core.optimize import optimize_layered
     from botdraw.core.motion_plan import compile_motion_plan
     from botdraw.core.jobs import artifact_dir, save_job
     from botdraw.core.models import JobRecord, JobStatus
     from botdraw.core.svg import save_svg
 
-    layered = render_demo_tone()
     palette = load_palette("default-6")
     layered = optimize_layered(layered)
     plan = compile_motion_plan(layered, palette)
@@ -254,15 +252,53 @@ def api_audio_demo():
     return {"job": job.model_dump(), "emulator": payload}
 
 
+@app.post("/api/audio/demo")
+def api_audio_demo():
+    return _audio_job(render_demo_tone())
+
+
+@app.post("/api/audio/upload")
+async def api_audio_upload(file: UploadFile = File(...)):
+    from botdraw.core.jobs import artifact_dir
+    from uuid import uuid4
+
+    tmp = artifact_dir(uuid4().hex[:8]) / (file.filename or "audio.wav")
+    tmp.write_bytes(await file.read())
+    return _audio_job(render_audio_file(tmp))
+
+
 @app.post("/api/rdlab/render")
-def api_rdlab(style_id: str = "spiral", rpm: float = 3.0, seed: int = 42):
+async def api_rdlab(
+    style_id: str = Form("spiral"),
+    rpm: float = Form(3.0),
+    seed: int = Form(42),
+    palette_id: str = Form("default-6"),
+    quality: str = Form("booth-balanced"),
+    density: float = Form(1.0),
+    file: UploadFile | None = File(None),
+):
     from botdraw.core.jobs import artifact_dir, save_job
     from botdraw.core.models import JobRecord, JobStatus
     from botdraw.core.svg import save_svg
+    from uuid import uuid4
 
-    layered, plan = render_experimental(style_id, seed=seed, rpm=rpm)
-    palette = load_palette("default-6")
-    job = JobRecord(app="rdlab", style_id=style_id, status=JobStatus.READY, seed=seed)
+    image_path = None
+    if file is not None and file.filename:
+        tmp = artifact_dir(uuid4().hex[:8]) / file.filename
+        tmp.write_bytes(await file.read())
+        image_path = str(tmp)
+
+    layered, plan = render_experimental(
+        style_id,
+        palette_id=palette_id,
+        seed=seed,
+        rpm=rpm,
+        image_path=image_path,
+        quality=QualityPreset(quality),
+        density=density,
+    )
+    palette = load_palette(palette_id)
+    job = JobRecord(app="rdlab", style_id=style_id, status=JobStatus.READY, seed=seed, palette_id=palette_id)
     out = artifact_dir(job.id)
     job.svg_path = str(save_svg(layered, palette, out / "art.svg"))
     plan.save(out / "motion_plan.json")
