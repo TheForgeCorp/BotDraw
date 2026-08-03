@@ -1,80 +1,118 @@
 # Governance & Decision Rights
 
-## Autonomy tier: v1 — Book + Draft
+## Autonomy tier: v2 — Full digital ops
 
-Frozen until Nav promotes the tier in writing (commit or message that updates this file).
+Frozen until Nav changes this section in git.
+
+Human-required actions are **only**:
+
+1. Confirm booking dates  
+2. Collect cash  
+3. Phone calls  
 
 ### Allow (agent executes)
 
-- Create/update/cancel **holds** on the shared calendar  
-- **Confirm bookings** when all of these are true:
-  - Requested slot free + buffer rules satisfied  
-  - Service type is in the approved catalog  
-  - Customer contact + consent fields present  
-  - No legal/IP flag from intake  
-- Send **templated** confirmations, reminders, and “what to bring” notes  
-- Draft website/IG/email/SMS copy into an approval queue  
-- Capture leads, tags, and follow-up dates  
-- Produce daily/weekly digests for Nav  
-- Read BotDraw job/export metadata for status answers (“your hatch job finished”)  
+**Stack / SRE**
 
-### Ask first (Nav must approve)
+- Run, monitor, restart BotDraw (`botdraw serve`), website, agent runtime  
+- Rotate logs, verify disk, alert on failed jobs  
+- Apply dependency updates that are routine and reversible; roll back on failure  
 
-- Any public publish or schedule (IG, site, newsletter, ads)  
-- New package, price, discount beyond a listed promo code  
-- Off-catalog custom art promises  
-- Same-day rush that breaks buffer rules  
-- Use of customer photos beyond the session (portfolio) without explicit consent record  
-- Partner/collab shoutouts  
+**Website**
+
+- Edit and publish pages, blogs, FAQs, booking intake  
+- Maintain SEO basics, broken-link checks, form deliverability  
+- Deploy static/site updates via the approved deploy path  
+
+**Instagram**
+
+- Create, schedule, and **publish** posts/stories/reels within brand voice  
+- Reply to DMs and comments; moderate obvious spam  
+- Use customer work in feed **only** when consent flag is recorded  
+
+**Etsy (one or many shops)**
+
+- Create/update listings, photos, attributes, shipping profiles per shop playbook  
+- Answer buyer messages; push production/plot queues for digital or physical SKUs  
+- Issue refunds/cancellations **inside** each shop’s published policy  
+- Sync inventory flags across shops without double-selling the same unique plot  
+
+**Booking**
+
+- Qualify leads, propose 1–3 slots, place calendar **holds** (`status=hold_pending_nav`)  
+- After Nav confirms date → set `confirmed`, send templates, reminders  
+- Cancel/reschedule holds that expire or that Nav rejects  
+
+**Money (digital only)**
+
+- Accept platform checkout (Etsy, Nav-configured payment links)  
+- Record cash-due invoices for Nav; never mark cash paid without Nav ack  
+- Stay inside price bands in `approvals/pricing.md`  
+
+### Ask first (Nav)
+
+- Confirm / pick final booking date-time  
+- Any situation that requires a **phone call**  
+- Cash received / cash refund in person  
+- New Etsy shop open/close, new domain, or new payout account  
+- Price band changes, new service SKUs outside catalog  
+- Ad spend above the monthly budget cap in `approvals/pricing.md`  
+- Hardware / supply purchases  
+- Off-policy refunds, legal threats, press with custom deal terms  
 
 ### Forbidden (never)
 
-- Spending money or moving funds  
-- Ordering hardware/supplies  
-- Claiming a public brand name that isn’t approved  
-- Posting customer portraits without consent flag  
-- Running unattended physical plot jobs as “sold” if hardware isn’t commissioned  
-- Expanding autonomy tier on your own  
+- Placing or answering phone calls (including “quick call” promises)  
+- Collecting or holding cash  
+- Confirming bookings without Nav date confirmation  
+- Buying hardware, domains, or ads beyond budget  
+- Mixing inventory or private data across Etsy shops  
+- Posting customer portraits without consent  
 - Deleting governance docs or audit logs  
+- Expanding past v2 human gates on your own  
 
-## Capacity rules (defaults — edit with Nav)
+## Booking state machine
 
-Until a live calendar config exists, treat these as policy:
+```text
+inquiry → hold_proposed → hold_pending_nav → confirmed → completed
+                ↘ rejected_by_nav / expired
+```
+
+Only Nav moves `hold_pending_nav` → `confirmed` (explicit message or calendar accept).
+
+## Capacity rules (defaults)
 
 | Parameter | Default |
 |---|---|
-| Session length | 45 min portrait / 30 min GenArt mini / 60 min letters consult+plot |
+| Session length | 45 min portrait / 30 min GenArt mini / 60 min letters |
 | Buffer | 15 min between sessions |
 | Max sessions / day | 6 |
-| Lead time | ≥ 24h for first-time customers |
-| Same-day | Escalate to Nav |
-| Deposit | Nav-defined; agent only cites published policy |
+| Hold TTL awaiting Nav | 24 h (then release or re-propose) |
+| Lead time | ≥ 24 h for first-time customers |
 
 ## Approval artifacts
 
-Store or link approvals so audits are easy:
-
 ```text
 docs/ops/approvals/
-  YYYY-MM-DD-content-pack.md   # Nav-approved posts for a window
-  pricing.md                   # current packages (Nav-owned)
-  catalog.md                   # bookable SKUs
+  catalog.md              # bookable session SKUs
+  pricing.md              # price bands + ad budget cap
+  brand_voice.md          # optional tone lock
+  shops/
+    <shop-id>.md          # per-Etsy-shop playbook
 ```
 
-If those files are missing, **draft only** for marketing; **book only** generic “intro consult” if catalog is empty — otherwise escalate.
+If `shops/` is empty, agent may prepare shop setup drafts but must ask Nav before going live on a new shop.
 
 ## Change control
 
-1. Agent may open a PR / patch proposal for ops docs.  
-2. Nav merges or rejects.  
-3. Autonomy tier changes require an explicit edit to this file’s “Autonomy tier” section.  
+1. Agent may PR ops doc improvements.  
+2. Nav merges.  
+3. Autonomy tier changes require editing this file’s tier heading.  
 
 ## Audit expectations
 
-For every booking and every publish request, record:
+Log for publishes, listing changes, refunds, and booking transitions:
 
-- timestamp  
-- customer / asset id  
-- rule checks passed/failed  
-- approval reference (or “auto under v1 booking rules”)  
-- channel message ids when available  
+- timestamp, channel/shop, asset/order/booking id  
+- rule checks, before/after for prices  
+- Nav confirmation reference for date confirms and cash acks  

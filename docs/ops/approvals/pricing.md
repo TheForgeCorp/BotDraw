@@ -1,16 +1,26 @@
-# Pricing (Nav-owned placeholder)
+# Pricing & budgets (Nav-owned bands)
 
-Replace with real numbers before public booking.
+Operator may price **inside** bands. Changing bands requires Nav.
 
-| sku | list_price | currency | deposit | status |
-|---|---|---|---|---|
-| intro-30 | TBD | | TBD | hidden |
-| portrait-45 | TBD | | TBD | hidden |
-| genart-30 | TBD | | TBD | hidden |
-| letters-60 | TBD | | TBD | hidden |
+| sku | min | target | max | currency | status |
+|---|---|---|---|---|---|
+| intro-30 | TBD | TBD | TBD | | hidden |
+| portrait-45 | TBD | TBD | TBD | | hidden |
+| genart-30 | TBD | TBD | TBD | | hidden |
+| letters-60 | TBD | TBD | TBD | | hidden |
 
-Until prices are filled and `status` is `public`, the operator:
+## Etsy listing bands
 
-- May discuss **process and timing**  
-- Must **not** quote a price  
-- Escalates pricing questions to Nav (P1)
+Fill per shop in `shops/<shop-id>.md`. Global rule: do not go below shop min without Nav.
+
+## Ad budget
+
+| period | cap | status |
+|---|---|---|
+| monthly | TBD | locked until set |
+
+Operator may spend ≤ cap across Meta/IG boosts without asking. Above cap → ask Nav.
+
+## Cash
+
+Cash invoices are tracked by the agent; **Nav collects** and acks payment in the ops channel.

@@ -57,8 +57,9 @@ export BOTDRAW_USER=ubuntu
 
 Stack-agnostic operator pack for Hermes or OpenClaw on the BotDraw mini-PC:
 
-- [`docs/ops/`](docs/ops/) — charter, roles, governance, escalation, stack notes  
-- v1 autonomy: **book + draft**; Nav approves public posts and all money moves  
+- [`docs/ops/`](docs/ops/) — charter, roles, channels (web/IG/Etsy), governance, escalation  
+- Autonomy **v2**: agent runs website, Instagram (post+reply), Etsy shop(s), and stack upkeep  
+- Human only: **confirm booking dates**, **cash collection**, **phone calls**  
 - Agents should load [`docs/ops/OPERATOR_CHARTER.md`](docs/ops/OPERATOR_CHARTER.md) as session soul/context
 
 ## Notes

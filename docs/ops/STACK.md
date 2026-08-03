@@ -13,7 +13,7 @@ Prefer **Hermes Agent** (Nous Research) as the default long-running operator whe
 
 Choose **OpenClaw** first if your near-term pain is **multi-channel inbox** (WhatsApp/IG/Telegram gateway) and you want human-authored skills from ClawHub before self-learning.
 
-Either way: load [OPERATOR_CHARTER.md](./OPERATOR_CHARTER.md) as soul/system context on every session.
+Either way: load [OPERATOR_CHARTER.md](./OPERATOR_CHARTER.md) as soul/system context on every session. Grant tools for website CMS, Instagram publish/reply, Etsy multi-shop, calendar holds, and BotDraw health — **deny** dialer/VoIP and any “mark cash paid” tool that bypasses Nav ack.
 
 ## Mini-PC layout (suggested)
 

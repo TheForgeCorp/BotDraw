@@ -1,48 +1,64 @@
 # Escalation Guide
 
-Ping Nav when any row matches. Use the owner’s preferred channel (Telegram/Slack/SMS — configure in agent runtime). Include: what happened, what you tried, recommended action, deadline.
+Ping Nav when any row matches. Preferred channels: async only (Telegram/Slack/SMS — configure in runtime). Include: what, tried, need, deadline.
 
 ## P0 — interrupt now
 
-- Payment dispute, chargeback threat, or “you scammed me”  
+- Needs a **phone call** (customer insists / safety / fraud)  
+- **Cash** dispute or cash session starting without Nav available  
+- Payment chargeback / “scam” accusation  
 - Safety / harassment / illegal request  
-- Suspected data leak (customer photos, messages)  
-- Mini-PC or BotDraw API down during booked sessions  
-- Agent almost took a forbidden action (self-report)  
+- Suspected data leak  
+- Website + IG + Etsy or BotDraw down during active orders/sessions  
+- Agent almost violated date/cash/phone gates (self-report)  
 
 ## P1 — same day
 
-- Booking conflict it cannot resolve with buffers  
-- Custom portrait + commercial likeness ask  
-- Guest quote that looks like copyrighted lyrics  
-- Refund / discount request  
-- Press / influencer asking for collab  
-- Calendar over capacity  
+- Holds stuck in `hold_pending_nav` approaching TTL  
+- Booking conflict Nav must pick between  
+- Off-policy refund or custom commercial deal  
+- New shop / domain / payout account needed  
+- Ad budget would exceed cap  
+- Guest quote / likeness IP risk  
+- Press or large collab  
 
 ## P2 — in the next digest
 
-- Soft FAQ the scripts don’t cover  
-- Draft pack ready for weekly approval  
-- Repeated no-shows / flaky leads pattern  
+- Content performance notes  
+- Soft FAQs to fold into scripts  
+- Non-urgent job failures (retry exhausted)  
 - Skill/process improvement proposals  
-- Non-urgent job pipeline failures  
+- Price-band tweak proposals  
 
 ## Do not escalate
 
-- Routine FAQ answered by script  
-- Normal confirmed booking under rules  
-- Single failed draft generation (retry, then digest)  
-- Cosmetic IG caption A/B variants awaiting the weekly pack  
+- Routine IG posts/replies and Etsy messages inside policy  
+- Normal holds awaiting Nav’s date confirm (list them in digest, don’t spam)  
+- Successful platform checkouts  
+- Single service restart that recovered  
+
+## Human action queues (every digest)
+
+```text
+DATE CONFIRM:
+  - booking_id · customer · proposed slots · hold expiry
+
+CASH TO COLLECT:
+  - invoice_id · customer · amount · when/where
+
+PHONE NEEDED:
+  - why · customer · callback window · context link
+```
 
 ## Escalation message template
 
 ```text
 [BotDraw Ops · P0|P1|P2]
 What: …
-Customer/asset: …
-Risk: money | legal | brand | hardware | schedule
+Shop/channel/booking: …
+Risk: cash | phone | date | legal | stack | brand
 Tried: …
-Need from Nav: approve | decide | take over
+Need from Nav: confirm-date | collect-cash | call | decide
 Deadline: …
-Links: calendar · draft · job id
+Links: …
 ```

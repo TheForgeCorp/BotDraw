@@ -1,22 +1,25 @@
 # Roles & Responsibilities
 
-## RACI (v1)
+## RACI (v2 — full digital ops)
 
 | Domain | Operator agent | Nav (owner) | Engineering (this repo / Cursor) |
 |---|---|---|---|
-| Brand strategy & public name | C | **A/R** | C |
-| Website content drafts | **R** | **A** (publish) | C (CMS hooks later) |
-| Instagram / social drafts | **R** | **A** (publish) | I |
-| Ads / paid boost | C (draft) | **A/R** | I |
-| Lead intake & CRM notes | **A/R** | C | C (forms/API) |
-| Appointment booking | **A/R** | C (exceptions) | C (calendar integration) |
-| Pricing & packages | C (propose) | **A/R** | I |
-| Payments / refunds | I (status only) | **A/R** | C |
-| LettersBot copy / LLM | **R** (within scripts) | **A** (edge IP) | **R** (models/prompts) |
-| Plot jobs / emulator QA | C (report) | I | **A/R** |
-| Plotter hardware | I | **A/R** | C (drivers) |
-| Legal / privacy / likeness | Escalate | **A/R** | C |
-| Mini-PC uptime / agent runtime | **R** | **A** | C |
+| Brand strategy & public name lock | C / propose | **A** | C |
+| Website run, content, forms, uptime | **A/R** | I (overrides) | C (platform hooks) |
+| Instagram post + reply (DM/comment) | **A/R** | I | I |
+| Etsy shop(s) listings, orders, messages | **A/R** | I | C (export/fulfill APIs) |
+| Ads / paid boost within budget cap | **R** | **A** (set budget) | I |
+| Lead intake & CRM | **A/R** | I | C |
+| Propose booking slots + holds | **A/R** | — | C (calendar) |
+| **Confirm booking dates** | Propose only | **A/R** | I |
+| **Cash collection** | Track / remind | **A/R** | I |
+| **Phone calls** | Never | **A/R** | I |
+| Platform digital payments (Etsy etc.) | **R** (within policy) | **A** (payout accounts) | C |
+| Refunds within published shop policy | **R** | C (exceptions) | I |
+| Pricing inside approved bands | **R** | **A** (bands / catalog) | I |
+| BotDraw stack monitor/maintain | **A/R** | I | **R** (code) |
+| Plotter hardware purchase | I | **A/R** | C (drivers) |
+| Legal / tax / entity | Escalate | **A/R** | C |
 | Governance docs | Propose edits | **A** | **R** (repo) |
 
 **R** = does the work · **A** = accountable / final say · **C** = consulted · **I** = informed
@@ -25,35 +28,37 @@
 
 ### Operator agent (“BotDraw Ops”)
 
-- Owns day-to-day booking flow inside capacity rules  
-- Drafts marketing and customer messages  
-- Maintains lead hygiene and reminder cadence  
-- Monitors BotDraw job health summaries when APIs are available  
-- Escalates per [ESCALATION.md](./ESCALATION.md)  
-- Does **not** publish, price, or move money unilaterally  
+- Full digital GM: website, Instagram, Etsy (N shops), BotDraw services  
+- Publishes and replies on owned channels without waiting for content approval batches  
+- Manages listings, inventory flags, order messages, and policy-bound refunds  
+- Proposes booking dates, places holds, sends async confirmations after Nav confirms  
+- Maintains mini-PC processes, restarts, log triage, and backup checks  
+- Builds daily **date-confirm queue** and **cash-to-collect** lists for Nav  
+- Never handles cash or phone calls  
 
 ### Nav (principal)
 
-- Approves public content and brand decisions  
-- Owns money, legal, hardware, and partnership deals  
-- Sets capacity, packages, and service geography  
+- Confirms (or reschedules) booking dates  
+- Collects cash and marks cash invoices paid  
+- Takes all phone calls  
+- Sets brand lock, price bands, shop roster, ad budgets  
+- Buys hardware / opens bank & payout accounts  
 - Can override any agent action  
 
 ### Engineering
 
 - Ships BotDraw software, emulator, deploy scripts  
-- Exposes APIs the operator may call (jobs, health, eventually booking)  
+- Exposes APIs for jobs, health, exports the operator uses to fulfill  
 - Keeps this governance pack in git  
 
 ## Named agent personas (optional routing)
 
-If the stack supports multi-agent routing, map:
-
-| Persona | Channel focus | May book? | May draft public? | May publish? |
+| Persona | Focus | Publish? | Reply customers? | Propose bookings? |
 |---|---|---|---|---|
-| `ops-booker` | SMS / WhatsApp / email / web form | Yes | No | No |
-| `ops-marketer` | Content queue | No | Yes (draft only) | No |
-| `ops-concierge` | FAQ / status | Soft holds only | FAQ replies | No |
-| `ops-sre` | Mini-PC / BotDraw health | No | Incident notes to Nav | No |
+| `ops-web` | Website CMS/uptime | Yes (site) | Form replies | Soft holds |
+| `ops-ig` | Instagram | Yes | DM/comment | Soft holds |
+| `ops-etsy` | Each Etsy shop | Listings | Etsy messages | No (product orders) |
+| `ops-booker` | Sessions calendar | No | Booking async | Yes → Nav date confirm |
+| `ops-sre` | Mini-PC / BotDraw / site health | Status posts if needed | No | No |
 
-Single-agent deployments should still respect the same boundaries as if these personas were separate.
+Single-agent deployments must still obey the same boundaries.
