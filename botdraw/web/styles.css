@@ -141,7 +141,8 @@ body[data-app="lettersbot"] .tabs button.active {
   color: var(--l-ink);
   padding: 0 1rem 1.25rem;
 }
-.letters-lab[hidden] { display: none !important; }
+.letters-lab[hidden],
+.layout.lab[hidden] { display: none !important; }
 .letters-top {
   display: flex; justify-content: space-between; align-items: baseline;
   padding: 0.55rem 0.15rem 0.85rem; gap: 1rem;
