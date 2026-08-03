@@ -13,16 +13,20 @@ Stack-agnostic operating instructions for an always-on agent (Hermes, OpenClaw, 
 3. [GOVERNANCE.md](./GOVERNANCE.md) — decision rights + approval gates  
 4. [CHANNELS.md](./CHANNELS.md) — website, Instagram, Etsy (multi-shop)  
 5. [CAPABILITIES.md](./CAPABILITIES.md) — Nav-approved automation surface (1–28, all yes)  
-6. [ESCALATION.md](./ESCALATION.md) — when to interrupt Nav  
-7. [STACK.md](./STACK.md) — Hermes vs OpenClaw notes (Hermes + Claude Max selected)
+6. [HARDWARE.md](./HARDWARE.md) — mini-PC specs (local AI up front)  
+7. [ESCALATION.md](./ESCALATION.md) — when to interrupt Nav  
+8. [STACK.md](./STACK.md) — Hermes + Claude Max + Ollama  
+9. Host bootstrap: [`../host/README.md`](../host/README.md)
 
 ## Autonomy tier: v2 — Full digital ops
 
 The agent **runs, monitors, and maintains the full digital stack**: BotDraw services, website, Instagram (post + reply), and one or more Etsy shops.
 
-**LLM:** Hermes via Nav’s **Claude Max** account (no local LLM required to start).
+**LLM:** Hermes via Nav’s **Claude Max** account; **Ollama local AI installed up front** on the same mini-PC (LettersBot + Hermes fallback).
 
 **Expanded surface:** all items in [CAPABILITIES.md](./CAPABILITIES.md) (1–28) are approved.
+
+**Host install:** [`../host/UBUNTU_MINIPC.md`](../host/UBUNTU_MINIPC.md) · [`../../scripts/bootstrap_minipc.sh`](../../scripts/bootstrap_minipc.sh)
 
 | Agent owns end-to-end | Human (Nav) only |
 |---|---|

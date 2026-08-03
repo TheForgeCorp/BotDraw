@@ -38,7 +38,7 @@ Hermes may implement and operate every item below. Prioritize by ROI; do not blo
 25. Autonomy scoreboard (human minutes/day, confirm latency, errors)  
 26. Weekly skill/process writeback into `docs/ops/memory/`  
 27. Personal-assistant side tasks on the same box (calendar, reminders) — keep **separate** from BotDraw brand voice/channels  
-28. Local LettersBot LLM babysitting (Ollama up/down) when enabled  
+28. Local LettersBot LLM babysitting (Ollama up/down) — **installed up front** via host bootstrap  
 
 ## Build order (suggested)
 

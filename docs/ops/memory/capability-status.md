@@ -29,4 +29,4 @@
 | 25 | Autonomy scoreboard | planned | |
 | 26 | Weekly skill writeback | planned | |
 | 27 | Personal assistant (separate) | planned | |
-| 28 | Ollama babysitting | planned | |
+| 28 | Ollama babysitting | planned | Installed up front by bootstrap_minipc.sh |

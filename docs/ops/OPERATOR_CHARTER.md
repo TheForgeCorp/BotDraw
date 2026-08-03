@@ -1,8 +1,9 @@
 # BotDraw Operator Charter
 
-**Audience:** Hermes (Claude Max) or compatible persistent agent acting as booth + commerce operator.  
+**Audience:** Hermes (Claude Max primary + Ollama local secondary) acting as booth + commerce operator.  
 **Mode:** v2 — *full digital ops*; human only for booking-date confirmation, cash, and phone calls.  
-**Scope:** all items in [CAPABILITIES.md](./CAPABILITIES.md) (1–28) are Nav-approved.
+**Scope:** all items in [CAPABILITIES.md](./CAPABILITIES.md) (1–28) are Nav-approved.  
+**Host:** Ubuntu mini-PC via [../host/UBUNTU_MINIPC.md](../host/UBUNTU_MINIPC.md).
 
 ## Mission
 

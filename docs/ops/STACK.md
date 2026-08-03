@@ -1,45 +1,48 @@
 # Agent Stack Notes
 
-**Decision status:** Hermes selected · LLM = Nav Claude Max account  
+**Decision status:** Hermes + Claude Max (primary) · **Ollama local AI up front** (LettersBot + Hermes fallback)  
+**Host OS:** Ubuntu 22.04/24.04 mini-PC — see [`docs/host/`](../host/)
 
-OpenClaw remains a possible alternate gateway later; governance stays readable by either.
+## Locked stack
 
-## Recommendation for BotDraw mini-PC
+| Layer | Choice |
+|---|---|
+| Operator agent | **Hermes Agent** |
+| Primary LLM | Nav **Claude Max** (Anthropic via `hermes model`) |
+| Local LLM | **Ollama** on the same mini-PC (`llama3.2:3b` min; `llama3.1:8b` if ≥28 GB RAM) |
+| Product API | `botdraw serve` systemd unit |
+| Bootstrap | [`scripts/bootstrap_minipc.sh`](../../scripts/bootstrap_minipc.sh) |
 
-**Hermes Agent** + Claude Max is the locked starting stack:
+Load every session:
 
-- Persistent learning loop → booth FAQs and booking skills compound over time  
-- Cron / scheduled digests fit morning–evening ops loops  
-- Comfortable as a single always-on process beside BotDraw (`botdraw serve`)  
-- Auth: `hermes model` → Anthropic / Claude Max path (API key or OAuth per Hermes docs)  
+- [OPERATOR_CHARTER.md](./OPERATOR_CHARTER.md)  
+- [CAPABILITIES.md](./CAPABILITIES.md)  
+- [GOVERNANCE.md](./GOVERNANCE.md)  
 
-Either way: load [OPERATOR_CHARTER.md](./OPERATOR_CHARTER.md) as soul/system context on every session. Also load [CAPABILITIES.md](./CAPABILITIES.md). Grant tools for website CMS, Instagram publish/reply, Etsy multi-shop, calendar holds, support inboxes, and BotDraw health — **deny** dialer/VoIP and any “mark cash paid” tool that bypasses Nav ack.
+Grant tools for website, Instagram, Etsy, calendar holds, support inboxes, BotDraw health.  
+**Deny** dialer/VoIP and any “mark cash paid” tool that bypasses Nav ack.
 
-## Mini-PC layout (suggested)
+## Mini-PC layout
 
 ```text
-mini-PC
-  ├─ botdraw serve              # product API + Dev Lab
-  ├─ hermes | openclaw          # operator agent daemon
-  ├─ website (CMS/static host)  # agent-managed
-  ├─ IG + Etsy credentials      # least privilege per shop
-  ├─ calendar                   # holds; Nav confirms dates
-  └─ docs/ops (this pack)       # cloned/synced with repo
+mini-PC (Ubuntu, 24/7, portable to venues)
+  ├─ ollama.service              # local AI
+  ├─ botdraw.service             # product API + Dev Lab :8080
+  ├─ hermes                      # operator (Claude Max + Ollama secondary)
+  ├─ /opt/botdraw                # this git repo
+  ├─ /etc/botdraw/botdraw.env    # host env (not secrets in git)
+  └─ docs/ops                    # governance soul pack
 ```
 
-## Security minimums (both stacks)
+## Security minimums
 
-- Separate credentials for: social draft tools, calendar, BotDraw API, Nav notify channel  
-- No production payment secret in the agent tool list for v1  
-- Publish actions disabled or gated behind a human approval tool  
-- Log tool calls for bookings and outbound customer messages  
-- Sandbox shell if the agent can run commands; BotDraw deploy stays Nav/engineering owned  
+- Separate credentials for social, calendar, shops, Nav notify channel  
+- Claude Max / Anthropic tokens only in Hermes auth store or root-restricted env — **never commit**  
+- No production payment secret in loose agent tools  
+- Log booking + outbound customer tool calls  
+- Sandbox shell where Hermes allows it  
 
-## When to lock the choice
+## Replication
 
-Lock in `STACK.md` (this file) after a 1–2 week bakeoff on the mini-PC measuring:
-
-1. Booking completion rate without Nav  
-2. Draft quality (Nav edit distance)  
-3. False escalations / missed escalations  
-4. Uptime beside `botdraw serve`  
+New node = clone repo → `sudo ./scripts/bootstrap_minipc.sh` → `hermes model`.  
+Details: [UBUNTU_MINIPC.md](../host/UBUNTU_MINIPC.md)
