@@ -30,13 +30,13 @@
 
 Bootstrap pulls `llama3.2:3b` always and `llama3.1:8b` when ≥28 GB RAM is detected.
 
-## Venue use
+## Venue / remote plotter node
 
-Keep the **home mini-PC plugged in** (Hermes uninterrupted). Bring a **venue plotter node** (laptop) on Tailscale:
+Keep the **home mini-PC plugged in** (Hermes uninterrupted). E2E test on **any remote PC** over Tailscale with no plotter:
 
 ```bash
 export BOTDRAW_API=http://botdraw-home:8080
 botdraw plot-worker --driver stub
 ```
 
-Details: [../host/PLOTTER_NODE.md](../host/PLOTTER_NODE.md). Only bring the home box on-site if you need offline render with no home WAN.
+Later at booths: same worker with `--driver axidraw`. Details: [../host/PLOTTER_NODE.md](../host/PLOTTER_NODE.md).

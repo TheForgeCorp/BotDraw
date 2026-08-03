@@ -19,7 +19,7 @@ Then finish Hermes Claude Max auth once interactively (`hermes model`).
 | Doc | Purpose |
 |---|---|
 | [UBUNTU_MINIPC.md](./UBUNTU_MINIPC.md) | Full install / SSH runbook (home brain) |
-| [PLOTTER_NODE.md](./PLOTTER_NODE.md) | Venue plotter node — Hermes stays home |
+| [PLOTTER_NODE.md](./PLOTTER_NODE.md) | Venue / remote plotter node — E2E test with stub, no hardware |
 | [../ops/HARDWARE.md](../ops/HARDWARE.md) | Specs (with local AI up front) |
 | [../ops/STACK.md](../ops/STACK.md) | Hermes + Claude Max + Ollama roles |
 
