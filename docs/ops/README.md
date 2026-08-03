@@ -16,7 +16,8 @@ Stack-agnostic operating instructions for an always-on agent (Hermes, OpenClaw, 
 6. [HARDWARE.md](./HARDWARE.md) — mini-PC specs (local AI up front)  
 7. [ESCALATION.md](./ESCALATION.md) — when to interrupt Nav  
 8. [STACK.md](./STACK.md) — Hermes + Claude Max + Ollama  
-9. Host bootstrap: [`../host/README.md`](../host/README.md)
+9. Host bootstrap: [`../host/README.md`](../host/README.md)  
+10. **Hermes skills pack:** [`hermes/skills/README.md`](./hermes/skills/README.md)
 
 ## Autonomy tier: v2 — Full digital ops
 

@@ -18,6 +18,7 @@ Load every session:
 - [OPERATOR_CHARTER.md](./OPERATOR_CHARTER.md)  
 - [CAPABILITIES.md](./CAPABILITIES.md)  
 - [GOVERNANCE.md](./GOVERNANCE.md)  
+- Starter skills: [hermes/skills/](./hermes/skills/)  
 
 Grant tools for website, Instagram, Etsy, calendar holds, support inboxes, BotDraw health.  
 **Deny** dialer/VoIP and any “mark cash paid” tool that bypasses Nav ack.
