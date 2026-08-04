@@ -411,6 +411,58 @@ function renderGenArt() {
     withBusy("#go", () => renderWithSettings({ appName: "genartbot", busyText: "Rendering GenArt…" }));
 }
 
+function fractalDevOpts() {
+  return `
+    <h4>Page</h4>
+    <div class="grid-2">
+      ${field("Paper", `<select id="paper"><option>A4</option><option>Letter</option><option>A3</option><option>A5</option><option>Card</option></select>`)}
+      ${field("Orientation", segHtml("orient", [
+        { value: "portrait", label: "Portrait" },
+        { value: "landscape", label: "Landscape" },
+      ], state.orientation))}
+    </div>
+    <h4>Render</h4>
+    ${field("Quality", segHtml("quality-seg", [
+      { value: "booth-fast", label: "Fast" },
+      { value: "booth-balanced", label: "Balanced" },
+      { value: "studio-hq", label: "HQ" },
+    ], state.quality))}
+    <div class="grid-2">
+      ${field("Seed", `<input id="seed" type="number" value="${state.seed}" />`)}
+      ${field("Density", `<input id="density" type="number" step="0.1" value="${state.density}" />`)}
+    </div>
+    <div class="grid-2">
+      ${field("Pen-up mm/s", `<input id="pen_up" type="number" value="${state.pen_up_speed_mm_s}" />`)}
+      ${field("Pen-down mm/s", `<input id="pen_down" type="number" value="${state.pen_down_speed_mm_s}" />`)}
+    </div>
+    <h4>Palette</h4>
+    ${field("Established palette", paletteSelectHtml())}
+    ${penChipsHtml(currentPalette())}
+    <h4>Input</h4>
+    ${field("Import settings JSON", `<input id="import-settings" type="file" accept="application/json,.json" />`)}
+  `;
+}
+
+function renderFractal() {
+  const list = styles.filter((s) => s.category === "fractal");
+  if (!list.find((s) => s.id === selectedStyle)) selectedStyle = list[0]?.id || "hilbert_curve";
+  controls.innerHTML = `
+    <h3>Fractal</h3>
+    <p class="muted">Escape-time + single-stroke space-filling / L-system curves for plotter wall art.</p>
+    <div class="fractal-ref">
+      <img src="/static/previews/single_line_fractals.png" alt="Single-line fractal family" />
+    </div>
+    <h4>Style</h4>
+    ${styleButtons(list)}
+    ${fractalDevOpts()}
+    <div class="row"><button class="primary" id="go">Render &amp; Inspect</button></div>
+  `;
+  bindStyleGrid();
+  applyCommonDefaults();
+  controls.querySelector("#go").onclick = () =>
+    withBusy("#go", () => renderWithSettings({ appName: "fractalbot", busyText: "Rendering fractal…" }));
+}
+
 function renderPortrait() {
   const list = styles.filter((s) => s.category === "portrait");
   if (!list.find((s) => s.id === selectedStyle)) selectedStyle = list[0]?.id || "portrait_linework";
@@ -728,6 +780,7 @@ async function renderControls() {
   if (!styles.length) styles = await api("/api/styles");
   if (!palettes.length) palettes = await api("/api/palettes");
   if (currentApp === "genartbot") return renderGenArt();
+  if (currentApp === "fractalbot") return renderFractal();
   if (currentApp === "portraitbot") return renderPortrait();
   if (currentApp === "lettersbot") return renderLetters();
   if (currentApp === "rdlab") return renderRdlab();

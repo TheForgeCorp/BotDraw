@@ -17,6 +17,76 @@ def test_styles_registered():
     assert "brick" in ids
     assert "portrait_cubism" in ids
     assert "hilbert" in ids
+    assert "mandelbrot" in ids
+    fractal_ids = {s["id"] for s in list_styles(category="fractal")}
+    assert fractal_ids >= {
+        "mandelbrot",
+        "hilbert_curve",
+        "peano",
+        "moore",
+        "gosper",
+        "dragon",
+        "levy_c",
+        "sierpinski_arrowhead",
+        "koch",
+        "fibonacci_word",
+        "quadratic_koch",
+        "terdragon",
+    }
+
+
+def test_mandelbrot_renders_nonempty():
+    ensure_styles_loaded()
+    palette = load_palette("default-6")
+    layered = get_style("mandelbrot").render(
+        palette=palette,
+        params=StyleParams(seed=42, quality=QualityPreset.BOOTH_FAST, density=0.6),
+        paper=PaperSize.A5,
+    )
+    assert layered.meta.get("style") == "mandelbrot"
+    assert layered.passes
+    assert sum(len(p.polylines) for p in layered.passes) >= 1
+    assert all(len(pl.points) >= 2 for p in layered.passes for pl in p.polylines)
+
+
+def test_hilbert_curve_single_stroke():
+    ensure_styles_loaded()
+    palette = load_palette("default-6")
+    layered = get_style("hilbert_curve").render(
+        palette=palette,
+        params=StyleParams(seed=7, quality=QualityPreset.BOOTH_FAST, density=1.0),
+        paper=PaperSize.A5,
+    )
+    assert layered.meta.get("style") == "hilbert_curve"
+    assert layered.meta.get("order") == 5
+    assert len(layered.passes) == 1
+    assert len(layered.passes[0].polylines) == 1
+    assert len(layered.passes[0].polylines[0].points) == 4**5  # order n → 4^n vertices
+
+
+def test_fractal_single_stroke_styles_render():
+    ensure_styles_loaded()
+    palette = load_palette("default-6")
+    params = StyleParams(seed=3, quality=QualityPreset.BOOTH_FAST, density=1.0)
+    for style_id in (
+        "peano",
+        "moore",
+        "gosper",
+        "dragon",
+        "levy_c",
+        "sierpinski_arrowhead",
+        "koch",
+        "fibonacci_word",
+        "quadratic_koch",
+        "terdragon",
+    ):
+        layered = get_style(style_id).render(palette=palette, params=params, paper=PaperSize.A5)
+        assert layered.meta.get("style") == style_id
+        assert layered.meta.get("single_stroke") is True
+        assert len(layered.passes) == 1
+        assert len(layered.passes[0].polylines) == 1
+        assert len(layered.passes[0].polylines[0].points) >= 8
+
 
 
 def test_overlay_highlight():

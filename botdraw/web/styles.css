@@ -334,7 +334,7 @@ button.loading::after {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 6px;
-  max-height: 236px;
+  max-height: 280px;
   overflow: auto;
   padding: 2px;
 }
@@ -359,6 +359,19 @@ button.loading::after {
 }
 
 .muted { color: var(--text-2); font-size: 12px; }
+
+.fractal-ref {
+  margin: 8px 0 12px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-m);
+  overflow: hidden;
+  background: var(--surface-2);
+}
+.fractal-ref img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
 
 /* Pen chips + palette editor */
 

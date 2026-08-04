@@ -35,6 +35,7 @@ Open `http://127.0.0.1:8080` — **Dev Lab** UI for vectorization, palette layer
 | App | Purpose |
 |---|---|
 | GenArtBot | Multicolor generative + technical + brick/weave/spiral styles |
+| Fractal | Escape-time Mandelbrot + single-stroke Hilbert/Peano/Moore/Gosper/Dragon/Lévy/Koch family |
 | PortraitBot | Multi-style portrait gallery (linework, squiggle, pen, shade, pointillism, dots, cubism, hatch, TSP) |
 | LettersBot | EN/HI/PA/UR letters, wedding/Bollywood draft flow, guest quotes, highlight passes |
 | R&D Lab | Experimental motifs + rotating-base kinematics in the emulator |
