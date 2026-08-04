@@ -2,7 +2,7 @@
 
 Software-first multi-bot pen plotter platform with a high-fidelity **emulator**.
 
-Internal product names: **BotDraw** core, **GenArtBot**, **PortraitBot**, **LettersBot**, **R&D Lab**.
+Internal product names: **BotDraw** core, **GenArtBot**, **PortraitBot**, **LettersBot**, **Fractals**, **Spirograph**, **R&D Lab**.
 
 ## Quick start
 
@@ -37,6 +37,8 @@ Open `http://127.0.0.1:8080` — **Dev Lab** UI for vectorization, palette layer
 | GenArtBot | Multicolor generative + technical + brick/weave/spiral styles |
 | PortraitBot | Multi-style portrait gallery (linework, squiggle, pen, shade, pointillism, dots, cubism, hatch, TSP) |
 | LettersBot | EN/HI/PA/UR letters, wedding/Bollywood draft flow, guest quotes, highlight passes |
+| Fractals | Scaffold: Koch snowflake starter (expand engines later) |
+| Spirograph | Scaffold: hypotrochoid starter (R/r/d controls later) |
 | R&D Lab | Experimental motifs + rotating-base kinematics in the emulator |
 
 ## Deploy to BotDraw host (SSH)

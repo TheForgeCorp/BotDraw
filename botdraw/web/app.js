@@ -293,6 +293,40 @@ function renderPortrait() {
     renderWithSettings({ appName: "portraitbot", busyText: "Rendering portrait…" });
 }
 
+function renderFractals() {
+  const list = styles.filter((s) => s.category === "fractals");
+  if (!list.find((s) => s.id === selectedStyle)) selectedStyle = list[0]?.id || "koch_snowflake";
+  controls.innerHTML = `
+    <h3>Fractals · Dev</h3>
+    <p class="muted">Scaffold category — starter engines only; iterate geometry &amp; params next.</p>
+    <h4>Fractal</h4>
+    ${styleButtons(list)}
+    ${commonDevOpts()}
+    <div class="row"><button class="primary" id="go">Render &amp; Inspect</button></div>
+  `;
+  bindStyleGrid();
+  applyCommonDefaults();
+  controls.querySelector("#go").onclick = () =>
+    renderWithSettings({ appName: "fractals", busyText: "Rendering fractal…" });
+}
+
+function renderSpirograph() {
+  const list = styles.filter((s) => s.category === "spirograph");
+  if (!list.find((s) => s.id === selectedStyle)) selectedStyle = list[0]?.id || "hypotrochoid";
+  controls.innerHTML = `
+    <h3>Spirograph · Dev</h3>
+    <p class="muted">Scaffold category — hypotrochoid starter; R/r/d controls come later.</p>
+    <h4>Curve</h4>
+    ${styleButtons(list)}
+    ${commonDevOpts()}
+    <div class="row"><button class="primary" id="go">Render &amp; Inspect</button></div>
+  `;
+  bindStyleGrid();
+  applyCommonDefaults();
+  controls.querySelector("#go").onclick = () =>
+    renderWithSettings({ appName: "spirograph", busyText: "Rendering spirograph…" });
+}
+
 function renderLetters() {
   controls.innerHTML = `
     <h3>LettersBot · Dev</h3>
@@ -573,6 +607,8 @@ async function renderControls() {
   if (currentApp === "genartbot") return renderGenArt();
   if (currentApp === "portraitbot") return renderPortrait();
   if (currentApp === "lettersbot") return renderLetters();
+  if (currentApp === "fractals") return renderFractals();
+  if (currentApp === "spirograph") return renderSpirograph();
   if (currentApp === "rdlab") return renderRdlab();
   if (currentApp === "palettes") return renderPalettes();
   return renderTools();
