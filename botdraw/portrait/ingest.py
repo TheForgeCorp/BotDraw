@@ -727,45 +727,57 @@ def ingest_portrait(
         hatch_polys = []  # filled from tone grid
 
     # Intensity tone grid → coded hatch (booth: codes 0–3; studio: allow scribble code 4)
+    # hatch_size <= 0 disables midtone hatch (structure-only ingest)
     max_tone_code = 3 if quality_enum == QualityPreset.BOOTH_FAST else 4
-    tone_pack = build_tone_grid(
-        lum.astype(np.float32),
-        ink_target,
-        cell_px=hsize,
-        edge_map=np.asarray(edges, dtype=np.float32),
-        page_w_mm=page_w,
-        page_h_mm=page_h,
-        max_code=max_tone_code,
-    )
-    hatch_polys = strokes_from_tone_grid(
-        tone_pack["tone_codes"],
-        cell_px=tone_pack["tone_cell_px"],
-        img_w=int(rgb.shape[1]),
-        img_h=int(rgb.shape[0]),
-        page_w=page_w,
-        page_h=page_h,
-        style="hatch",
-        jitter=jitter,
-        seed=1,
-        max_paths=hatch_budget,
-    )
-    if not hatch_polys:
-        # Fallback to classic linedraw hatch if grid skipped everything
-        lum_fallback = autocontrast_lum(lum.astype(np.float32), cutoff=10.0).astype(np.float32)
-        hatch_px = hatch_from_lum(
-            lum_fallback,
-            hatch_size=hsize,
-            jitter=jitter,
-            seed=1,
-            max_paths=hatch_budget,
+    if hsize <= 0:
+        tone_pack = {
+            "tone_grid": np.zeros((1, 1), dtype=np.float32),
+            "tone_codes": np.zeros((1, 1), dtype=np.uint8),
+            "tone_cell_px": 0.0,
+            "tone_cell_mm": 0.0,
+            "tone_origin_mm": (0.0, 0.0),
+            "grid_shape": (1, 1),
+        }
+        hatch_polys = []
+    else:
+        tone_pack = build_tone_grid(
+            lum.astype(np.float32),
+            ink_target,
+            cell_px=hsize,
+            edge_map=np.asarray(edges, dtype=np.float32),
+            page_w_mm=page_w,
+            page_h_mm=page_h,
+            max_code=max_tone_code,
         )
-        hatch_polys = polylines_to_mm(
-            hatch_px,
+        hatch_polys = strokes_from_tone_grid(
+            tone_pack["tone_codes"],
+            cell_px=tone_pack["tone_cell_px"],
             img_w=int(rgb.shape[1]),
             img_h=int(rgb.shape[0]),
             page_w=page_w,
             page_h=page_h,
+            style="hatch",
+            jitter=jitter,
+            seed=1,
+            max_paths=hatch_budget,
         )
+        if not hatch_polys:
+            # Fallback to classic linedraw hatch if grid skipped everything
+            lum_fallback = autocontrast_lum(lum.astype(np.float32), cutoff=10.0).astype(np.float32)
+            hatch_px = hatch_from_lum(
+                lum_fallback,
+                hatch_size=hsize,
+                jitter=jitter,
+                seed=1,
+                max_paths=hatch_budget,
+            )
+            hatch_polys = polylines_to_mm(
+                hatch_px,
+                img_w=int(rgb.shape[1]),
+                img_h=int(rgb.shape[0]),
+                page_w=page_w,
+                page_h=page_h,
+            )
     t_edges = time.perf_counter()
 
     region_budget = min(

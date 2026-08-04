@@ -77,12 +77,19 @@ def build_tone_grid(
         dtype=np.uint8,
     ) > 127
 
-    # Soft shade: also allow low-structure face midtones (cheeks)
-    face_mid = face_s & (u8.astype(np.float32) >= 70.0) & (u8.astype(np.float32) <= 210.0)
-    allow = allow | (face_mid & (ink_s >= 0.08))
+    # Soft shade on face: use raw luma (not autocontrast) so bright cheeks stay in-band
+    face_mid = (
+        face_s
+        & (lum_s >= 55.0)
+        & (lum_s <= 230.0)
+        & (ink_s >= 0.08)
+        & (ink_s <= 0.70)
+    )
+    allow = allow | face_mid
 
-    # Edge proximity → suppress muddy fill (code 5)
-    edge_near = np.zeros((h_s, w_s), dtype=bool)
+    # Strong edge occupancy (cell itself) → avoid muddy fill; do not 3×3-max
+    # or ensemble consensus floods the face and kills cheek hatch.
+    edge_strong = np.zeros((h_s, w_s), dtype=bool)
     if edge_map is not None:
         em = np.asarray(edge_map, dtype=np.float32)
         if em.shape != (h0, w0):
@@ -92,16 +99,15 @@ def build_tone_grid(
                 ),
                 dtype=np.float32,
             )
+        # Fraction of edge pixels in each grid cell
+        em_bin = (em > 40).astype(np.float32)
         em_s = np.asarray(
-            Image.fromarray((em > 20).astype(np.uint8) * 255, mode="L").resize(
-                (w_s, h_s), Image.Resampling.NEAREST
+            Image.fromarray((em_bin * 255).astype(np.uint8), mode="L").resize(
+                (w_s, h_s), Image.Resampling.BOX
             ),
-            dtype=np.uint8,
-        ) > 127
-        from numpy.lib.stride_tricks import sliding_window_view
-
-        pad = np.pad(em_s.astype(np.uint8), 1, mode="constant")
-        edge_near = sliding_window_view(pad, (3, 3)).max(axis=(2, 3)).astype(bool)
+            dtype=np.float32,
+        ) / 255.0
+        edge_strong = em_s >= 0.28
 
     tone_grid = np.zeros((h_s, w_s), dtype=np.float32)
     tone_codes = np.zeros((h_s, w_s), dtype=np.uint8)
@@ -115,24 +121,39 @@ def build_tone_grid(
             # Outside face: require more ink to avoid wall grids
             if not face_s[y, x] and ink < 0.22:
                 continue
-            if edge_near[y, x] and ink < 0.55:
-                # Structure cell — leave to edges
+            # Dense structure cell — leave to edges (glasses/hairline)
+            if edge_strong[y, x] and ink >= 0.35:
                 tone_grid[y, x] = ink
                 tone_codes[y, x] = 5
                 continue
             tone_grid[y, x] = ink
-            if ink < 0.12:
-                code = 0
-            elif ink < 0.28:
-                code = 1
-            elif ink < 0.42:
-                code = 2
-            elif ink < 0.58:
-                code = 3
-            elif ink < 0.78:
-                code = 4
+            # Face: relative bins (dark-bg selfies have high absolute ink)
+            if face_s[y, x]:
+                if ink < 0.14:
+                    code = 0
+                elif ink < 0.28:
+                    code = 1
+                elif ink < 0.40:
+                    code = 2
+                elif ink < 0.55:
+                    code = 3
+                elif ink < 0.72:
+                    code = 4
+                else:
+                    code = 4 if max_code >= 4 else 3  # keep deep face shade drawable
             else:
-                code = 5  # near-black: edges only
+                if ink < 0.12:
+                    code = 0
+                elif ink < 0.25:
+                    code = 1
+                elif ink < 0.40:
+                    code = 2
+                elif ink < 0.55:
+                    code = 3
+                elif ink < 0.72:
+                    code = 4
+                else:
+                    code = 5  # near-black outside face: edges only
             tone_codes[y, x] = min(code, max_code) if code < 5 else 5
             if max_code < 4 and tone_codes[y, x] == 4:
                 tone_codes[y, x] = 3
