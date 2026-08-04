@@ -977,8 +977,8 @@ function renderPortrait() {
     ${field("Palette", paletteSelectHtml())}
     <div class="pen-chips">${penList}</div>
     <div class="row" style="margin-top:0.55rem; gap:0.35rem; flex-wrap:wrap">
-      <button class="primary" id="portrait-ingest-btn">Ingest</button>
-      <button type="button" id="portrait-go">Vectorize</button>
+      <button type="button" class="btn" id="portrait-ingest-btn">Ingest</button>
+      <button type="button" class="btn btn-primary primary" id="portrait-go">Vectorize</button>
       <button type="button" id="portrait-apply" ${portraitIngestId ? "" : "disabled"}>Apply (restyle)</button>
       <button type="button" id="portrait-reingest">Re-ingest</button>
       <button type="button" id="reset-pen-map">Reset pen map</button>
@@ -2098,7 +2098,7 @@ function draftMetaHtml() {
     </div>
     <h4>Palette</h4>
     ${field("Palette", paletteSelectHtml())}
-    <div class="row"><button class="primary" id="go">Vectorize</button></div>
+    <div class="row"><button type="button" class="btn btn-primary primary" id="go">Vectorize</button></div>
   `;
 }
 
