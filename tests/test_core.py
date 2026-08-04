@@ -17,6 +17,23 @@ def test_styles_registered():
     assert "brick" in ids
     assert "portrait_cubism" in ids
     assert "hilbert" in ids
+    assert "koch_snowflake" in ids
+    assert "hypotrochoid" in ids
+    cats = {s["category"] for s in list_styles()}
+    assert "fractals" in cats
+    assert "spirograph" in cats
+
+
+def test_fractal_and_spirograph_scaffold_render():
+    ensure_styles_loaded()
+    palette = load_palette("default-6")
+    params = StyleParams(seed=3, quality=QualityPreset.BOOTH_FAST, density=1.0)
+    koch = get_style("koch_snowflake").render(palette=palette, params=params, paper=PaperSize.A5)
+    assert koch.passes and sum(len(p.polylines) for p in koch.passes) >= 1
+    assert koch.meta.get("category") == "fractals"
+    spiro = get_style("hypotrochoid").render(palette=palette, params=params, paper=PaperSize.A5)
+    assert spiro.passes and len(spiro.passes[0].polylines[0].points) > 100
+    assert spiro.meta.get("category") == "spirograph"
 
 
 def test_overlay_highlight():

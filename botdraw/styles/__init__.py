@@ -62,8 +62,10 @@ def ensure_styles_loaded() -> None:
     # Import modules for side-effect registration
     from botdraw.styles import (  # noqa: F401
         artistic,
+        fractals,
         obscure,
         patterns,
         portrait,
+        spirograph,
         technical,
     )
