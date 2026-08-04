@@ -570,6 +570,7 @@ def ingest_portrait(
         linedraw_edges_and_hatch,
         polylines_to_ink_map,
         polylines_to_mm,
+        refine_edge_polylines,
     )
     from botdraw.portrait.tone_variants import ENSEMBLE_RECIPES, ToneRecipe, apply_tone_recipe
 
@@ -678,15 +679,17 @@ def ingest_portrait(
         t_variants = time.perf_counter()
 
         consensus = consensus_from_ink_maps(ink_maps, core_votes=2, fill_votes=1)
-        edges_px6 = contours_from_edge_mask(
+        # Over-extract from consensus, then face-budget / island kill / arc repair
+        raw6 = contours_from_edge_mask(
             consensus,
             simplify=csimp,
             jitter=jitter,
             seed=99,
-            max_paths=edge_budget,
+            max_paths=min(edge_budget * 2, edge_budget + 200),
         )
-        edge_polys = polylines_to_mm(edges_px6, img_w=w_px, img_h=h_px, page_w=page_w, page_h=page_h)
         lum_u8 = autocontrast_lum(lum.astype(np.float32), cutoff=10.0).astype(np.float32)
+        edges_px6 = refine_edge_polylines(raw6, lum_u8, max_paths=edge_budget)
+        edge_polys = polylines_to_mm(edges_px6, img_w=w_px, img_h=h_px, page_w=page_w, page_h=page_h)
         hatch_px = hatch_from_lum(
             lum_u8,
             hatch_size=hsize,
@@ -698,11 +701,13 @@ def ingest_portrait(
         edges = consensus.astype(np.float32) * 255.0
         ensemble_meta = {
             "enabled": True,
+            "mode": "blur_pyramid",
             "recipes": recipe_ids,
             "variant_edge_counts": variant_edge_counts,
             "core_votes": 2,
             "fill_votes": 1,
             "consensus_ink_px": int(consensus.sum()),
+            "refine": "face_budget+island_kill+arc_repair",
         }
     else:
         edge_polys, hatch_polys, edges = linedraw_edges_and_hatch(

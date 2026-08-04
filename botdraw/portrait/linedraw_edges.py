@@ -834,6 +834,215 @@ def polylines_to_mm(
     return out
 
 
+def _path_length_px(pts: list[tuple[float, float]]) -> float:
+    t = 0.0
+    for i in range(1, len(pts)):
+        t += math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1])
+    return t
+
+
+def face_roi_mask(lum: np.ndarray) -> np.ndarray:
+    """
+    Bright central subject mask (face/torso) for budget + island kill.
+
+    Uses autocontrasted luma + central prior so dark walls stay outside.
+    """
+    from numpy.lib.stride_tricks import sliding_window_view
+
+    h, w = lum.shape
+    u8 = autocontrast_lum(np.asarray(lum, dtype=np.float32), cutoff=6.0).astype(np.float32)
+    bright = u8 >= 95.0
+    yy, xx = np.mgrid[0:h, 0:w]
+    cy, cx = h * 0.42, w * 0.5
+    # Elliptical prior covering head + shoulders
+    prior = (((yy - cy) / max(h * 0.42, 1.0)) ** 2 + ((xx - cx) / max(w * 0.38, 1.0)) ** 2) <= 1.0
+    mask = bright & prior
+    if int(mask.sum()) < max(64, (h * w) // 40):
+        mask = prior & (u8 >= 70.0)
+    pad = np.pad(mask.astype(np.uint8), 3, mode="constant")
+    return sliding_window_view(pad, (7, 7)).max(axis=(2, 3)).astype(bool)
+
+
+def _path_face_fraction(
+    pts: list[tuple[float, float]],
+    face: np.ndarray,
+) -> float:
+    h, w = face.shape
+    if len(pts) < 2:
+        return 0.0
+    step = max(1, len(pts) // 16)
+    hits = 0
+    n = 0
+    for x, y in pts[::step]:
+        ix, iy = int(round(x)), int(round(y))
+        n += 1
+        if 0 <= iy < h and 0 <= ix < w and face[iy, ix]:
+            hits += 1
+    return hits / max(1, n)
+
+
+def prune_edge_islands(
+    contours: list[list[tuple[float, float]]],
+    face: np.ndarray,
+    *,
+    outside_min_len: float = 52.0,
+    inside_min_len: float = 14.0,
+) -> list[list[tuple[float, float]]]:
+    """Drop short peripheral islands; keep structure inside face ROI."""
+    out: list[list[tuple[float, float]]] = []
+    for c in contours:
+        if len(c) < 2:
+            continue
+        plen = _path_length_px(c)
+        frac = _path_face_fraction(c, face)
+        if frac >= 0.35:
+            if plen >= inside_min_len:
+                out.append(c)
+        elif plen >= outside_min_len:
+            out.append(c)
+    return out
+
+
+def allocate_face_budget(
+    contours: list[list[tuple[float, float]]],
+    face: np.ndarray,
+    max_paths: int,
+    *,
+    face_fraction: float = 0.78,
+) -> list[list[tuple[float, float]]]:
+    """Spend most of the edge budget on face-touching strokes."""
+    max_paths = max(1, int(max_paths))
+    face_cap = max(1, int(round(max_paths * float(face_fraction))))
+    outside_cap = max(0, max_paths - face_cap)
+
+    scored_in: list[tuple[float, list[tuple[float, float]]]] = []
+    scored_out: list[tuple[float, list[tuple[float, float]]]] = []
+    for c in contours:
+        if len(c) < 2:
+            continue
+        plen = _path_length_px(c)
+        frac = _path_face_fraction(c, face)
+        score = plen + frac * 80.0
+        if frac >= 0.35:
+            scored_in.append((score, c))
+        else:
+            scored_out.append((score, c))
+    scored_in.sort(key=lambda t: t[0], reverse=True)
+    scored_out.sort(key=lambda t: t[0], reverse=True)
+    picked = [c for _, c in scored_in[:face_cap]]
+    # Unused face slots can absorb long outside structure
+    slack = max(0, face_cap - len(picked)) + outside_cap
+    picked.extend(c for _, c in scored_out[:slack])
+    return picked[:max_paths]
+
+
+def repair_arc_gaps(
+    contours: list[list[tuple[float, float]]],
+    lum: np.ndarray,
+    face: np.ndarray,
+    *,
+    min_gap: float = 6.0,
+    max_gap: float = 22.0,
+) -> list[list[tuple[float, float]]]:
+    """
+    Splice nearby stroke ends that continue a dark facial arc (glasses/jaw).
+
+    Bridges only inside the face ROI when the midpoint sits on a darker ridge.
+    """
+    if len(contours) < 2:
+        return contours
+    h, w = lum.shape
+    u8 = autocontrast_lum(np.asarray(lum, dtype=np.float32), cutoff=6.0).astype(np.float32)
+    alive: list[list[tuple[float, float]] | None] = [list(c) for c in contours if len(c) > 1]
+
+    def end_dir(pts: list[tuple[float, float]], at_end: bool) -> tuple[float, float]:
+        if len(pts) < 2:
+            return (1.0, 0.0)
+        if at_end:
+            x0, y0 = pts[-2]
+            x1, y1 = pts[-1]
+        else:
+            x0, y0 = pts[1]
+            x1, y1 = pts[0]
+        dx, dy = x1 - x0, y1 - y0
+        n = math.hypot(dx, dy) or 1.0
+        return (dx / n, dy / n)
+
+    def dark_mid(x: float, y: float) -> bool:
+        ix, iy = int(round(x)), int(round(y))
+        if not (1 <= iy < h - 1 and 1 <= ix < w - 1):
+            return False
+        if not face[iy, ix]:
+            return False
+        # Prefer darker-than-local-mean ridges (frames / jaw)
+        patch = u8[iy - 1 : iy + 2, ix - 1 : ix + 2]
+        return float(u8[iy, ix]) <= float(patch.mean()) + 8.0 and float(u8[iy, ix]) < 150.0
+
+    for _ in range(min(48, len(alive) * 2)):
+        best = None  # (score, i, j, rev_i, rev_j, mx, my)
+        n = len(alive)
+        for i in range(n):
+            if alive[i] is None:
+                continue
+            a = alive[i]
+            assert a is not None
+            for j in range(i + 1, n):
+                if alive[j] is None:
+                    continue
+                b = alive[j]
+                assert b is not None
+                # Try joining end(a)→start(b) under four orientations
+                configs = (
+                    (False, False, a[-1], b[0], end_dir(a, True), end_dir(b, False)),
+                    (False, True, a[-1], b[-1], end_dir(a, True), end_dir(list(reversed(b)), False)),
+                    (True, False, a[0], b[0], end_dir(list(reversed(a)), True), end_dir(b, False)),
+                    (True, True, a[0], b[-1], end_dir(list(reversed(a)), True), end_dir(list(reversed(b)), False)),
+                )
+                for rev_i, rev_j, p, q, da, db in configs:
+                    dist = math.hypot(p[0] - q[0], p[1] - q[1])
+                    if dist < min_gap or dist > max_gap:
+                        continue
+                    # Continuity: leaving a should point roughly toward arriving into b
+                    vx, vy = (q[0] - p[0]) / dist, (q[1] - p[1]) / dist
+                    align = da[0] * vx + da[1] * vy
+                    align_b = -(db[0] * vx + db[1] * vy)
+                    if align < 0.35 or align_b < 0.15:
+                        continue
+                    mx, my = (p[0] + q[0]) * 0.5, (p[1] + q[1]) * 0.5
+                    if not dark_mid(mx, my):
+                        continue
+                    score = align + align_b - dist * 0.02
+                    if best is None or score > best[0]:
+                        best = (score, i, j, rev_i, rev_j, mx, my)
+        if best is None:
+            break
+        _, i, j, rev_i, rev_j, mx, my = best
+        a = alive[i]
+        b = alive[j]
+        assert a is not None and b is not None
+        aa = list(reversed(a)) if rev_i else list(a)
+        bb = list(reversed(b)) if rev_j else list(b)
+        bridge = [aa[-1], (mx, my), bb[0]]
+        alive[i] = aa + bridge[1:] + bb[1:]
+        alive[j] = None
+
+    return [c for c in alive if c is not None and len(c) > 1]
+
+
+def refine_edge_polylines(
+    contours: list[list[tuple[float, float]]],
+    lum: np.ndarray,
+    *,
+    max_paths: int,
+) -> list[list[tuple[float, float]]]:
+    """Island kill + arc splice + face-weighted budget (final edge pass)."""
+    face = face_roi_mask(lum)
+    cleaned = prune_edge_islands(contours, face)
+    cleaned = repair_arc_gaps(cleaned, lum, face)
+    cleaned = _merge_bidirectional(cleaned, dist_thresh=8.0)
+    return allocate_face_budget(cleaned, face, max_paths)
+
+
 def linedraw_edges_and_hatch(
     lum: np.ndarray,
     *,
@@ -849,13 +1058,16 @@ def linedraw_edges_and_hatch(
     """Full linedraw-style pass → (edge_mm, hatch_mm, edge_map)."""
     h, w = lum.shape
     lum_u8 = autocontrast_lum(lum, cutoff=10.0).astype(np.float32)
+    # Over-extract then refine so face budget can choose
+    raw_budget = min(max_edge_paths * 2, max(max_edge_paths + 80, 400))
     contours_px, edge_map = contours_from_lum(
         lum_u8,
         simplify=contour_simplify,
         jitter=jitter,
         seed=seed,
-        max_paths=max_edge_paths,
+        max_paths=raw_budget,
     )
+    contours_px = refine_edge_polylines(contours_px, lum_u8, max_paths=max_edge_paths)
     hatch_px = hatch_from_lum(
         lum_u8,
         hatch_size=hatch_size,
