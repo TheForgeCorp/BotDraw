@@ -17,6 +17,21 @@ def test_styles_registered():
     assert "brick" in ids
     assert "portrait_cubism" in ids
     assert "hilbert" in ids
+    assert "mandelbrot" in ids
+
+
+def test_mandelbrot_renders_nonempty():
+    ensure_styles_loaded()
+    palette = load_palette("default-6")
+    layered = get_style("mandelbrot").render(
+        palette=palette,
+        params=StyleParams(seed=42, quality=QualityPreset.BOOTH_FAST, density=0.6),
+        paper=PaperSize.A5,
+    )
+    assert layered.meta.get("style") == "mandelbrot"
+    assert layered.passes
+    assert sum(len(p.polylines) for p in layered.passes) >= 1
+    assert all(len(pl.points) >= 2 for p in layered.passes for pl in p.polylines)
 
 
 def test_overlay_highlight():
