@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,600&display=swap" rel="stylesheet" />
 </head>
-<body>
+<body data-app="genartbot">
   <div class="bg"></div>
   <header class="top">
     <div class="brand">
@@ -49,7 +49,16 @@
           <div class="pane-label">Vector</div>
         </div>
       </div>
-      <canvas id="emu" width="900" height="1200"></canvas>
+      <div class="paper-frame lab-emu-frame" id="lab-emu-frame">
+        <canvas id="emu" width="900" height="1200"></canvas>
+      </div>
+      <div class="letters-zoom lab-zoom" id="lab-zoom">
+        <button type="button" id="lab-zoom-out" title="Zoom out">−</button>
+        <button type="button" id="lab-zoom-fit" title="Fit">Fit</button>
+        <button type="button" id="lab-zoom-in" title="Zoom in">+</button>
+        <button type="button" id="lab-loupe" title="Loupe (L)">Loupe</button>
+        <span class="zoom-label" id="lab-zoom-label">1.00×</span>
+      </div>
       <div class="transport">
         <button id="play">Play</button>
         <button id="pause">Pause</button>

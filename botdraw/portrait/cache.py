@@ -43,6 +43,10 @@ def make_ingest_key(
     ensemble: bool | None = None,
     scan_mode: str | None = None,
     line_source: str | None = None,
+    max_tone_code: int | None = None,
+    suppress_background: bool | None = None,
+    protect_subjects: list[str] | None = None,
+    orientation_deg: int | None = None,
 ) -> str:
     h = hashlib.sha256()
     if image_bytes:
@@ -51,11 +55,13 @@ def make_ingest_key(
         h.update(Path(image_path).read_bytes())
     else:
         h.update(b"synthetic")
+    prot = ",".join(sorted(protect_subjects or []))
     knobs = (
         f"|{mode}|{quality}|{paper}|{_crop_key(crop)}"
         f"|p{posterize_levels}|s{filter_speckle}|m{min_path_points}|c{contrast}"
         f"|cs{contour_simplify}|hs{hatch_size}|lj{linedraw_jitter}|e{ensemble}"
-        f"|sm{scan_mode}|ls{line_source}|mesh3"  # mesh IR + walks + neural line source
+        f"|sm{scan_mode}|ls{line_source}|mt{max_tone_code}|sb{suppress_background}"
+        f"|ps{prot}|od{orientation_deg}|mesh3ai1"
     )
     h.update(knobs.encode())
     return h.hexdigest()[:24]
@@ -182,6 +188,12 @@ def resolve_portrait_vector(
     ensemble: bool | None = None,
     scan_mode: str | None = None,
     line_source: str | None = None,
+    max_tone_code: int | None = None,
+    suppress_background: bool | None = None,
+    protect_subjects: list[str] | None = None,
+    orientation_deg: int | None = None,
+    ai_scene: dict | None = None,
+    image_array: Any = None,
 ) -> tuple[PortraitVector, bool]:
     """Return (vector, cache_hit)."""
     from botdraw.portrait.ingest import ingest_portrait
@@ -204,7 +216,12 @@ def resolve_portrait_vector(
         ensemble=ensemble,
         scan_mode=scan_mode,
         line_source=line_source,
+        max_tone_code=max_tone_code,
+        suppress_background=suppress_background,
+        protect_subjects=protect_subjects,
+        orientation_deg=orientation_deg,
     )
+    ingest_extra = dict(ai_scene=ai_scene) if ai_scene is not None else {}
 
     if not force_reingest:
         if reuse_ingest and ingest_id:
@@ -226,12 +243,14 @@ def resolve_portrait_vector(
 
     pv = ingest_portrait(
         image_path,
+        image_array=image_array,
         mode=mode,
         quality=quality,
         paper=paper,
         crop=crop,
         auto_frame=auto_frame if crop is None else False,
         **key_kwargs,
+        **ingest_extra,
     )
     iid = save_portrait_vector(pv)
     key = make_ingest_key(

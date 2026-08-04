@@ -36,6 +36,7 @@ let portraitEnsemble = null; // null = auto (studio-hq photo on); bool overrides
 let portraitScanMode = "auto"; // Inkscape Trace Bitmap–inspired filter
 let portraitPathSimplify = 2; // contour_simplify / Path→Simplify strength (1=finest)
 let portraitLineSource = "auto"; // auto | neural | classic
+let portraitAiReview = "off"; // off | live (scene) | studio (scene+critique)
 let portraitIngestUnderlay = "scan"; // scan | tone | photo | none
 let portraitIngestTimer = null;
 let portraitPenMap = null;
@@ -685,12 +686,14 @@ function applyLineStockToPortraitForm(root, stock) {
 function ensureLabEmuInCompare() {
   const compare = document.getElementById("lab-compare");
   const pane = document.querySelector(".lab-vector-pane");
+  const frame = document.getElementById("lab-emu-frame");
   const emu = document.getElementById("emu");
   if (!compare || !pane || !emu) return;
   compare.hidden = false;
-  const stage = emu.closest(".stage");
+  const stage = (frame || emu).closest(".stage");
   if (stage) stage.classList.add("compare-on");
-  if (emu.parentElement !== pane) pane.appendChild(emu);
+  const moveEl = frame || emu;
+  if (moveEl.parentElement !== pane) pane.appendChild(moveEl);
 }
 
 function drawLabSource(file) {
@@ -863,7 +866,16 @@ function renderPortrait() {
           <option value="classic"${portraitLineSource === "classic" ? " selected" : ""}>Classic</option>
         </select>`
       )}
+      ${field(
+        "AI review",
+        `<select id="ai-review" title="Live = scene knobs only (booth-safe). Studio = scene + one critique; may re-ingest once for structure.">
+          <option value="off"${portraitAiReview === "off" ? " selected" : ""}>Off</option>
+          <option value="live"${portraitAiReview === "live" ? " selected" : ""}>Live (scene)</option>
+          <option value="studio"${portraitAiReview === "studio" ? " selected" : ""}>Studio (scene+critique)</option>
+        </select>`
+      )}
     </div>
+    <p class="muted" style="margin-top:0.2rem" id="ai-review-hint">AI review off. Live = crop/suppress/tone only; Studio may re-ingest once for fidelity.</p>
     <p class="muted" style="margin-top:0.2rem">Lighter intermediates first — Brightness / Edges / Centerline map to linedraw knobs (no Potrace).</p>
     <h4>Portrait style</h4>
     ${styleButtons(list)}
@@ -1003,12 +1015,43 @@ function renderPortrait() {
     };
   }
   const qualityEl = root.querySelector("#quality");
+  const aiReviewEl = root.querySelector("#ai-review");
+  const aiHintEl = root.querySelector("#ai-review-hint");
+  const syncAiReviewHint = () => {
+    if (!aiHintEl || !aiReviewEl) return;
+    const m = aiReviewEl.value || "off";
+    if (m === "live") {
+      aiHintEl.textContent = "Live: scene knobs only (no critique / no AI re-ingest).";
+    } else if (m === "studio") {
+      aiHintEl.textContent = "Studio: scene + one critique; keep_more_edges may re-ingest once.";
+    } else {
+      aiHintEl.textContent = "AI review off. Live = crop/suppress/tone only; Studio may re-ingest once for fidelity.";
+    }
+  };
+  if (aiReviewEl) {
+    aiReviewEl.onchange = () => {
+      portraitAiReview = aiReviewEl.value || "off";
+      syncAiReviewHint();
+    };
+    syncAiReviewHint();
+  }
   if (qualityEl) {
     qualityEl.onchange = () => {
       state.quality = qualityEl.value;
       // Refresh ensemble checkbox default when quality changes and user hasn't forced
       if (portraitEnsemble == null && ensCb) {
         ensCb.checked = state.quality === "studio-hq" && portraitImageMode === "photo";
+      }
+      // Suggest mode when turning quality to studio-hq / booth while AI is on
+      if (aiReviewEl && portraitAiReview !== "off") {
+        if (state.quality === "studio-hq" && portraitAiReview === "live") {
+          aiReviewEl.value = "studio";
+          portraitAiReview = "studio";
+        } else if (state.quality !== "studio-hq" && portraitAiReview === "studio") {
+          aiReviewEl.value = "live";
+          portraitAiReview = "live";
+        }
+        syncAiReviewHint();
       }
     };
   }
@@ -1144,6 +1187,9 @@ async function runPortraitIngest(opts = {}) {
   knobs.scan_mode = root.querySelector("#scan-mode")?.value || portraitScanMode;
   knobs.contour_simplify = Number(root.querySelector("#path-simplify")?.value || portraitPathSimplify);
   knobs.line_source = root.querySelector("#line-source")?.value || portraitLineSource;
+  const aiEl = root.querySelector("#ai-review");
+  if (aiEl) portraitAiReview = aiEl.value || "off";
+  knobs.ai_review = portraitAiReview;
   portraitScanMode = knobs.scan_mode;
   portraitPathSimplify = knobs.contour_simplify;
   portraitLineSource = knobs.line_source;
@@ -1163,6 +1209,7 @@ async function runPortraitIngest(opts = {}) {
     fd.append("scan_mode", knobs.scan_mode);
     fd.append("contour_simplify", String(knobs.contour_simplify));
     fd.append("line_source", knobs.line_source);
+    if (knobs.ai_review && knobs.ai_review !== "off") fd.append("ai_review", knobs.ai_review);
     fd.append("file", uploadFile, uploadFile.name || "portrait.jpg");
     data = await api("/api/portrait/ingest/upload", { method: "POST", body: fd });
   } else {
@@ -1190,6 +1237,7 @@ async function runPortraitIngest(opts = {}) {
   const wall = ((performance.now() - t0) / 1000).toFixed(2);
   const timing = data.timing_s || {};
   const meta = data.meta || {};
+  const aiChip = portraitAiReviewStatusChip(data, meta);
   if (portraitStatsEl) {
     portraitStatsEl.textContent =
       `Ingest ready · edges ${data.edge_count} · hatch ${data.hatch_count ?? 0} · regions ${data.region_count} · wall ${wall}s` +
@@ -1198,6 +1246,7 @@ async function runPortraitIngest(opts = {}) {
       (portraitHatchEnabled ? "" : " · hatch off") +
       (meta.ensemble?.enabled ? " · ensemble 5+1" : "") +
       (meta.line_source ? ` · ${meta.line_source}` : "") +
+      aiChip +
       (data.scan_mode || meta.scan_mode ? ` · scan ${data.scan_mode || meta.scan_mode}` : "") +
       ` · id ${portraitIngestId || "?"}`;
   }
@@ -1253,6 +1302,9 @@ function collectPortraitExtra(root, { reuse = false, forceReingest = false } = {
   const lineSrcSel = root.querySelector("#line-source");
   if (lineSrcSel) portraitLineSource = lineSrcSel.value;
   extra.line_source = portraitLineSource || "auto";
+  const aiEl = root.querySelector("#ai-review");
+  if (aiEl) portraitAiReview = aiEl.value || "off";
+  if (portraitAiReview && portraitAiReview !== "off") extra.ai_review = portraitAiReview;
   if (portraitCrop) extra.crop = portraitCrop;
   if (portraitPenMap) extra.pen_map = portraitPenMap;
   if (reuse && portraitIngestId && !forceReingest && !portraitForceReingest) {
@@ -1355,15 +1407,42 @@ async function renderPortraitJob(opts = {}) {
   const wall = ((performance.now() - t0) / 1000).toFixed(2);
   const budget = data.layers?.budget || data.emulator?.budget;
   const cacheHit = data.emulator?.settings?.ingest_cache_hit;
+  const layerMeta = data.layers?.meta || data.emulator?.layers?.meta || {};
+  const settings = data.emulator?.settings || {};
+  const aiChip = portraitAiReviewStatusChip(
+    {
+      ai_review: layerMeta.ai_review || settings.params_extra?.ai_review || settings.ai_review,
+      ai_review_status: layerMeta.ai_review_status || settings.params_extra?.ai_review_status,
+      ai_scene: settings.ai_scene,
+      ai_critique: settings.ai_critique || settings.params_extra?.ai_critique,
+    },
+    layerMeta
+  );
   if (portraitStatsEl) {
     const budgetLabel = budget?.label || `passes ${data.layers?.pass_count ?? "?"}`;
     const warn = budget?.over_budget ? " · over budget" : "";
     portraitStatsEl.textContent =
       `Ready · ${selectedStyle} · ${portraitImageMode} · wall ${wall}s · ${budgetLabel}${warn}` +
-      (cacheHit ? " · cache hit" : " · ingest");
+      (cacheHit ? " · cache hit" : " · ingest") +
+      aiChip;
     if (budget?.over_budget) portraitStatsEl.style.color = "#b45309";
     else portraitStatsEl.style.color = "";
   }
+}
+
+function portraitAiReviewStatusChip(data, meta) {
+  const mode = data?.ai_review || meta?.ai_review;
+  if (!mode || mode === "off" || mode === false) return "";
+  const status = data?.ai_review_status || meta?.ai_review_status || "";
+  const sceneSum = (data?.ai_scene || meta?.ai_scene || {}).summary;
+  const critSum = (data?.ai_critique || meta?.ai_critique || {}).summary
+    || meta?.ai_critique_summary
+    || data?.ai_critique_summary;
+  let chip = ` · ai:${mode}`;
+  if (status) chip += `/${status}`;
+  if (critSum) chip += ` · “${String(critSum).slice(0, 48)}”`;
+  else if (sceneSum) chip += ` · “${String(sceneSum).slice(0, 48)}”`;
+  return chip;
 }
 
 function currentPalette() {
@@ -2810,8 +2889,9 @@ function wireZoomToolbar(prefix, emu) {
 
 wireZoomToolbar("letters", lettersPlayer);
 wireZoomToolbar("portrait", portraitPlayer);
-player.enableInteraction();
-player.syncSize();
+wireZoomToolbar("lab", player);
+
+setShellForApp(currentApp);
 
 renderControls().catch((e) => {
   statsEl.textContent = String(e);

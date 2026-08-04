@@ -48,6 +48,16 @@ if WEB_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")
 
 
+@app.middleware("http")
+async def _dev_lab_no_cache(request, call_next):
+    """Avoid stale Dev Lab JS/CSS when iterating on the UI behind a tunnel."""
+    response = await call_next(request)
+    path = request.url.path or ""
+    if path == "/" or path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-store, max-age=0"
+    return response
+
+
 class RenderRequest(BaseModel):
     app: str = "genartbot"
     style_id: str
@@ -331,6 +341,8 @@ class PortraitIngestRequest(BaseModel):
     ensemble: Optional[bool] = None
     scan_mode: Optional[str] = None
     line_source: Optional[str] = None
+    # off | live | studio | true/false (bool true resolves by quality)
+    ai_review: Any = False
 
 
 def _portrait_ingest_response(pv, *, include_preview_png: bool = True) -> dict[str, Any]:
@@ -339,7 +351,14 @@ def _portrait_ingest_response(pv, *, include_preview_png: bool = True) -> dict[s
     return portrait_vector_preview_dict(pv, include_preview_png=include_preview_png)
 
 
+def _parse_ai_review_value(raw: Any, *, quality: str | None = None) -> str:
+    from botdraw.portrait.claude_review import resolve_ai_review_mode
+
+    return resolve_ai_review_mode(raw, quality=quality)
+
+
 def _ingest_knobs_from_body(body: PortraitIngestRequest) -> dict[str, Any]:
+    mode = _parse_ai_review_value(body.ai_review, quality=body.quality.value)
     return {
         "posterize_levels": body.posterize_levels,
         "filter_speckle": body.filter_speckle,
@@ -351,7 +370,54 @@ def _ingest_knobs_from_body(body: PortraitIngestRequest) -> dict[str, Any]:
         "ensemble": body.ensemble,
         "scan_mode": body.scan_mode,
         "line_source": body.line_source,
+        "ai_review": mode,
+        "quality": body.quality.value,
     }
+
+
+def _merge_ai_scene_into_knobs(
+    knobs: dict[str, Any],
+    *,
+    image_path: str | None = None,
+    image_bytes: bytes | None = None,
+    quality: str | None = None,
+) -> dict[str, Any]:
+    """Optional scene review before resolve_portrait_vector (live + studio)."""
+    from botdraw.portrait.claude_review import (
+        ai_review_wants_scene,
+        maybe_review_and_merge_knobs,
+        resolve_ai_review_mode,
+    )
+
+    q = quality or knobs.get("quality")
+    mode = resolve_ai_review_mode(knobs.get("ai_review"), quality=q)
+    knobs = {**knobs, "ai_review": mode}
+    if not ai_review_wants_scene(mode):
+        return knobs
+    try:
+        import numpy as np
+        from PIL import Image
+
+        from botdraw.styles.image_utils import synthetic_portrait
+
+        if image_bytes:
+            import io
+
+            img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+            img.thumbnail((1280, 1280), Image.Resampling.LANCZOS)
+            rgb = np.asarray(img, dtype=np.float32)
+        elif image_path:
+            img = Image.open(image_path).convert("RGB")
+            img.thumbnail((1280, 1280), Image.Resampling.LANCZOS)
+            rgb = np.asarray(img, dtype=np.float32)
+        else:
+            rgb = synthetic_portrait(512).astype(np.float32)
+        _rgb2, merged = maybe_review_and_merge_knobs(
+            rgb, dict(knobs), enabled=True, mode=mode, quality=q
+        )
+        return merged
+    except Exception:
+        return {**knobs, "ai_review_status": "scene_failed"}
 
 
 @app.post("/api/portrait/ingest")
@@ -360,18 +426,39 @@ def api_portrait_ingest_json(body: PortraitIngestRequest):
     from botdraw.portrait import resolve_portrait_vector
 
     knobs = _ingest_knobs_from_body(body)
+    knobs = _merge_ai_scene_into_knobs(knobs, quality=body.quality.value)
+    resolve_keys = {
+        "posterize_levels",
+        "filter_speckle",
+        "min_path_points",
+        "contrast",
+        "contour_simplify",
+        "hatch_size",
+        "linedraw_jitter",
+        "ensemble",
+        "scan_mode",
+        "line_source",
+        "max_tone_code",
+        "suppress_background",
+        "protect_subjects",
+        "orientation_deg",
+        "ai_scene",
+    }
+    resolve_kw = {k: knobs[k] for k in resolve_keys if k in knobs}
+    crop = knobs.get("crop", body.crop)
+    auto_frame = knobs.get("auto_frame", body.auto_frame)
     if body.reuse_ingest and body.ingest_id and not body.force_reingest:
         pv, hit = resolve_portrait_vector(
             image_path=None,
             mode=body.image_mode,
             quality=body.quality.value,
             paper=body.paper.value,
-            crop=body.crop,
+            crop=crop,
             reuse_ingest=True,
             ingest_id=body.ingest_id,
             force_reingest=False,
-            auto_frame=body.auto_frame if body.crop is None else False,
-            **knobs,
+            auto_frame=auto_frame if crop is None else False,
+            **resolve_kw,
         )
     else:
         pv, hit = resolve_portrait_vector(
@@ -379,15 +466,20 @@ def api_portrait_ingest_json(body: PortraitIngestRequest):
             mode=body.image_mode,
             quality=body.quality.value,
             paper=body.paper.value,
-            crop=body.crop,
+            crop=crop,
             reuse_ingest=False,
             ingest_id=None,
             force_reingest=body.force_reingest,
-            auto_frame=body.auto_frame if body.crop is None else False,
-            **knobs,
+            auto_frame=auto_frame if crop is None else False,
+            **resolve_kw,
         )
     data = _portrait_ingest_response(pv, include_preview_png=body.include_preview_png)
     data["cache_hit"] = hit
+    data["ai_review"] = knobs.get("ai_review") or "off"
+    if knobs.get("ai_review_status"):
+        data["ai_review_status"] = knobs["ai_review_status"]
+    if knobs.get("ai_scene"):
+        data["ai_scene"] = knobs["ai_scene"]
     return data
 
 
@@ -412,6 +504,7 @@ async def api_portrait_ingest_upload(
     ensemble: Optional[str] = Form(None),
     scan_mode: Optional[str] = Form(None),
     line_source: Optional[str] = Form(None),
+    ai_review: Optional[str] = Form(None),
     file: UploadFile = File(...),
 ):
     from uuid import uuid4
@@ -428,9 +521,52 @@ async def api_portrait_ingest_upload(
     ensemble_flag: bool | None = None
     if ensemble is not None and str(ensemble).strip() != "":
         ensemble_flag = str(ensemble).strip().lower() in ("1", "true", "yes", "on")
+    ai_mode = _parse_ai_review_value(ai_review, quality=quality)
     tmp = artifact_dir(uuid4().hex[:8]) / (file.filename or "upload.png")
     raw = await file.read()
     tmp.write_bytes(raw)
+    knobs: dict[str, Any] = {
+        "posterize_levels": posterize_levels,
+        "filter_speckle": filter_speckle,
+        "min_path_points": min_path_points,
+        "contrast": contrast,
+        "contour_simplify": contour_simplify,
+        "hatch_size": hatch_size,
+        "linedraw_jitter": linedraw_jitter,
+        "ensemble": ensemble_flag,
+        "scan_mode": scan_mode,
+        "line_source": line_source,
+        "ai_review": ai_mode,
+        "quality": quality,
+        "crop": crop_obj,
+        "auto_frame": auto_frame,
+    }
+    knobs = _merge_ai_scene_into_knobs(
+        knobs, image_path=str(tmp), image_bytes=raw, quality=quality
+    )
+    crop_obj = knobs.get("crop", crop_obj)
+    auto_frame = bool(knobs.get("auto_frame", auto_frame))
+    resolve_kw = {
+        k: knobs[k]
+        for k in (
+            "posterize_levels",
+            "filter_speckle",
+            "min_path_points",
+            "contrast",
+            "contour_simplify",
+            "hatch_size",
+            "linedraw_jitter",
+            "ensemble",
+            "scan_mode",
+            "line_source",
+            "max_tone_code",
+            "suppress_background",
+            "protect_subjects",
+            "orientation_deg",
+            "ai_scene",
+        )
+        if k in knobs and knobs[k] is not None
+    }
     pv, hit = resolve_portrait_vector(
         image_path=str(tmp),
         mode=image_mode or "photo",
@@ -442,19 +578,24 @@ async def api_portrait_ingest_upload(
         force_reingest=force_reingest,
         auto_frame=auto_frame if crop_obj is None else False,
         image_bytes=raw,
-        posterize_levels=posterize_levels,
-        filter_speckle=filter_speckle,
-        min_path_points=min_path_points,
-        contrast=contrast,
-        contour_simplify=contour_simplify,
-        hatch_size=hatch_size,
-        linedraw_jitter=linedraw_jitter,
-        ensemble=ensemble_flag,
-        scan_mode=scan_mode,
-        line_source=line_source,
+        **resolve_kw,
     )
     data = _portrait_ingest_response(pv, include_preview_png=include_preview_png)
     data["cache_hit"] = hit
+    data["ai_review"] = knobs.get("ai_review") or "off"
+    if knobs.get("ai_review_status"):
+        data["ai_review_status"] = knobs["ai_review_status"]
+    if knobs.get("ai_scene"):
+        data["ai_scene"] = knobs["ai_scene"]
+    # Persist scene JSON on the ingest artifact for debugging
+    if knobs.get("ai_scene") and pv.ingest_id:
+        try:
+            from botdraw.core.jobs import artifact_dir as _ad
+
+            scene_path = _ad(f"ingest-{pv.ingest_id}") / "ai_scene.json"
+            scene_path.write_text(json.dumps(knobs["ai_scene"], indent=2), encoding="utf-8")
+        except Exception:
+            pass
     return data
 
 
