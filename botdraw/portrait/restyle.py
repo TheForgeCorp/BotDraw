@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 
-import numpy as np
+import numpy as np  # noqa: F401 — used throughout restylers
 
 from botdraw.core.models import (
     QUALITY_LIMITS,
@@ -96,30 +96,62 @@ def _bucketize(polys: list[Polyline]) -> dict[str, list[Polyline]]:
     return buckets
 
 
+def _region_outline_ok(pts: list[tuple[float, float]], *, page_w: float, page_h: float) -> bool:
+    """Reject spiky / page-spanning vtracer outlines that ruin linework likeness."""
+    if len(pts) < 4:
+        return False
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    bw = max(xs) - min(xs)
+    bh = max(ys) - min(ys)
+    if bw <= 0.5 or bh <= 0.5:
+        return False
+    # Spikes: long thin triangles / diagonals across the page
+    diag = math.hypot(page_w, page_h)
+    if math.hypot(bw, bh) > 0.45 * diag:
+        return False
+    # Perimeter vs bbox — very jagged closed paths often have huge perimeter
+    peri = 0.0
+    for i in range(1, len(pts)):
+        peri += math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1])
+    peri += math.hypot(pts[0][0] - pts[-1][0], pts[0][1] - pts[-1][1])
+    box = 2.0 * (bw + bh)
+    if box > 1e-3 and peri / box > 4.5:
+        return False
+    return True
+
+
 def restyle_linework(
     pv: PortraitVector,
     palette,
     params: StyleParams,
     *,
     include_hatch: bool = True,
-    include_regions: bool = True,
+    include_regions: bool = False,
 ) -> LayeredSVG:
-    """Primary vector style: linedraw edges (+ ingest hatch + dark region outlines)."""
+    """Primary vector style: linedraw edges + ingest hatch (regions off by default)."""
     limit = _budget(params)
     polys = _edge_polys(pv, palette, limit=limit)
     if include_hatch:
-        remain = max(0, limit - len(polys))
-        polys.extend(_ingest_hatch_polys(pv, palette, limit=remain))
+        # Keep hatch as supporting tone — do not drown edges
+        hatch_limit = max(0, min(limit - len(polys), max(80, limit // 3)))
+        polys.extend(_ingest_hatch_polys(pv, palette, limit=hatch_limit))
     if include_regions:
+        # Cap region outlines — they often introduce magenta/ochre spikes
+        region_budget = max(0, min(80, limit // 20))
+        added = 0
         for r in pv.regions:
-            if len(polys) >= limit:
+            if added >= region_budget or len(polys) >= limit:
                 break
             mean_l = 0.299 * r.mean_rgb[0] + 0.587 * r.mean_rgb[1] + 0.114 * r.mean_rgb[2]
-            if mean_l > 200:
+            if mean_l > 190 or mean_l < 25:
+                continue
+            pts = list(r.points_mm)
+            if not _region_outline_ok(pts, page_w=pv.page_w_mm, page_h=pv.page_h_mm):
                 continue
             pen = _pen_for(pv, palette, r.id, r.mean_rgb)
-            if len(r.points_mm) >= 2:
-                polys.append(Polyline(points=list(r.points_mm), pen_id=pen.id, closed=True))
+            polys.append(Polyline(points=pts, pen_id=pen.id, closed=True))
+            added += 1
 
     edge_pen = _pen_for(pv, palette, "edge")
     buckets = _bucketize(polys)

@@ -111,9 +111,17 @@ def assign_pens(
     # Edge role: narrowest non-highlighter
     edge_pen = min(pens, key=lambda p: (p.profile.width_mm, 0 if p.profile.nib_type == NibType.FINELINER else 1))
     auto_map["edge"] = edge_pen.id
-    # Hatch role: slightly wider than edge when available
-    wider = sorted(pens, key=lambda p: (p.profile.width_mm, p.id))
-    auto_map["hatch"] = wider[min(1, len(wider) - 1)].id if len(wider) > 1 else edge_pen.id
+    # Hatch role: darkest near-black / warm gray — not a vivid accent
+    def _lum(p) -> float:
+        r, g, b = _hex_to_rgb(p.color_hex)
+        return 0.299 * r + 0.587 * g + 0.114 * b
+
+    dark = sorted(pens, key=lambda p: (_lum(p), -p.profile.width_mm))
+    hatch_pen = next((p for p in dark if p.id != edge_pen.id and _lum(p) < 80), None)
+    if hatch_pen is None:
+        wider = sorted(pens, key=lambda p: (p.profile.width_mm, p.id))
+        hatch_pen = wider[min(1, len(wider) - 1)] if len(wider) > 1 else edge_pen
+    auto_map["hatch"] = hatch_pen.id
 
     # Merge overrides
     final = dict(auto_map)
