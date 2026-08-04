@@ -18,6 +18,21 @@ def test_styles_registered():
     assert "portrait_cubism" in ids
     assert "hilbert" in ids
     assert "mandelbrot" in ids
+    fractal_ids = {s["id"] for s in list_styles(category="fractal")}
+    assert fractal_ids >= {
+        "mandelbrot",
+        "hilbert_curve",
+        "peano",
+        "moore",
+        "gosper",
+        "dragon",
+        "levy_c",
+        "sierpinski_arrowhead",
+        "koch",
+        "fibonacci_word",
+        "quadratic_koch",
+        "terdragon",
+    }
 
 
 def test_mandelbrot_renders_nonempty():
@@ -47,6 +62,30 @@ def test_hilbert_curve_single_stroke():
     assert len(layered.passes) == 1
     assert len(layered.passes[0].polylines) == 1
     assert len(layered.passes[0].polylines[0].points) == 4**5  # order n → 4^n vertices
+
+
+def test_fractal_single_stroke_styles_render():
+    ensure_styles_loaded()
+    palette = load_palette("default-6")
+    params = StyleParams(seed=3, quality=QualityPreset.BOOTH_FAST, density=1.0)
+    for style_id in (
+        "peano",
+        "moore",
+        "gosper",
+        "dragon",
+        "levy_c",
+        "sierpinski_arrowhead",
+        "koch",
+        "fibonacci_word",
+        "quadratic_koch",
+        "terdragon",
+    ):
+        layered = get_style(style_id).render(palette=palette, params=params, paper=PaperSize.A5)
+        assert layered.meta.get("style") == style_id
+        assert layered.meta.get("single_stroke") is True
+        assert len(layered.passes) == 1
+        assert len(layered.passes[0].polylines) == 1
+        assert len(layered.passes[0].polylines[0].points) >= 8
 
 
 
