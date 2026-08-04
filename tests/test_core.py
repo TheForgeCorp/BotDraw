@@ -34,6 +34,22 @@ def test_mandelbrot_renders_nonempty():
     assert all(len(pl.points) >= 2 for p in layered.passes for pl in p.polylines)
 
 
+def test_hilbert_curve_single_stroke():
+    ensure_styles_loaded()
+    palette = load_palette("default-6")
+    layered = get_style("hilbert_curve").render(
+        palette=palette,
+        params=StyleParams(seed=7, quality=QualityPreset.BOOTH_FAST, density=1.0),
+        paper=PaperSize.A5,
+    )
+    assert layered.meta.get("style") == "hilbert_curve"
+    assert layered.meta.get("order") == 5
+    assert len(layered.passes) == 1
+    assert len(layered.passes[0].polylines) == 1
+    assert len(layered.passes[0].polylines[0].points) == 4**5  # order n → 4^n vertices
+
+
+
 def test_overlay_highlight():
     ensure_styles_loaded()
     palette = load_palette("wedding-highlight")
