@@ -1,6 +1,6 @@
 ---
 name: BotDraw
-description: Apple-Operate Dev Lab — system gray desk, elevated paper sheet, compact rail. Operate-mode tools; Persuade-mode venue later.
+description: Apple-Operate Dev Lab — system gray desk, elevated paper sheet, Settings-style rail groups, floating craft-bar toolbar. Operate-mode tools; Persuade-mode venue later.
 mode_default: Operate
 colors:
   desk: "#f5f5f7"
@@ -35,27 +35,34 @@ spacing:
 radius:
   control: "6px"
   panel: "8px"
+  group: "10px"
   sheet: "2px"
+  craft-bar: "999px"
 borders:
   default: "1px solid #d2d2d7"
 shadows:
-  paper: "0 12px 40px rgba(29,29,31,0.12), 0 2px 6px rgba(29,29,31,0.06)"
+  paper: "0 18px 48px rgba(29,29,31,0.16), 0 4px 12px rgba(29,29,31,0.08), 0 1px 0 rgba(255,255,255,0.65) inset"
   seg: "0 1px 2px rgba(29,29,31,0.08)"
+  craft-bar: "0 8px 28px rgba(29,29,31,0.12)"
 motion:
   duration: "160ms"
+  press: "100ms scale(0.97)"
+  sheet-swap: "280–320ms opacity + soft scale (critically damped; no bounce)"
   ease: "cubic-bezier(0.16, 1, 0.3, 1)"
+  reduced-motion: "cross-fade only; no press scale / sheet scale"
 dials:
   DESIGN_VARIANCE: 5
   MOTION_INTENSITY: 3
-  VISUAL_DENSITY_RAIL: 6
+  VISUAL_DENSITY_RAIL: 5
   VISUAL_DENSITY_STAGE: 3
 skills:
   - .cursor/skills/impeccable
   - .cursor/skills/design-taste-frontend
+  - .cursor/skills/apple-design
 surfaces:
   dev_lab:
     mode: Operate
-    goal: Compact controls + large paper-on-desk emulator across all apps.
+    goal: Compact grouped controls + large paper-on-desk emulator across all apps.
   venue_facing:
     mode: Persuade
     note: Same tokens; more air; paper preview as hero.
@@ -66,6 +73,8 @@ anti_patterns:
   - Pill CTA clusters / six equal export buttons
   - Nested cards / decorative glass
   - Permanent Source|Ingest|Vector strip stealing paper space
+  - Equal-weight bordered button soup in the rail
+  - Black filled mode tiles mixed with outline grids
 ---
 
 # BotDraw design system
@@ -77,41 +86,55 @@ anti_patterns:
 1. **Paper is the product.** The desk stage is the hero; the rail is a compact inspector.
 2. **One chrome.** Tab switches change rail content and stage mode only.
 3. **Restrained color.** Near-black ink accent; focus blue for state; pen swatches for plot color.
-4. **System type.** SF / system UI stack; mono only for mm, ETA, job IDs.
-5. **State motion only.** 160ms ease-out; no page-load choreography.
+4. **System type.** SF / system UI stack; mono only for mm, ETA, job IDs. Rail titles weight 600 / tracking −0.02em.
+5. **State motion only.** Press scale on pointer-down (~100ms); sheet swaps opacity+soft scale; no page-load choreography.
+6. **Settings grammar.** Rail blocks live in inset `.group` wells (`#f0f0f2` + white rows); primary CTA sits outside the group.
+7. **Progressive disclosure.** Common path first; Scan / Ensemble / AI / draft meta under Advanced.
 
 ## Dev Lab IA
 
 | Region | Role |
 |--------|------|
-| Top | Segmented app tabs |
-| Left rail (~300px) | App controls; GenArt also hosts Layers/JSON/Job |
-| Stage | Desk + elevated paper sheet + thin zoom/transport/Export… |
+| Top | Segmented app tabs (translucent material chrome) |
+| Left rail (~300px) | Grouped controls + Advanced; GenArt also hosts Layers/JSON/Job |
+| Stage | Desk + elevated paper + floating craft-bar (zoom / transport / Export…) |
 
 Portrait stage segments: **Source | Ingest | Vector** (one large view; default Vector).
 
+## Materials
+
+- **Desk:** soft vignette + faint grain over `#f5f5f7` → `#ececf0` (table plane, not flat fill)
+- **Sheet:** white idle; Paper Library cream only after render; strong contact shadow + bright top edge
+- **Craft bar:** translucent capsule over desk bottom (`backdrop-filter`); solid white when `prefers-reduced-transparency`
+- **Top bar:** frosted white; same reduced-transparency solid fallback
+
 ## Paper stage
 
-- Desk fill `#f5f5f7`
-- Idle sheet fill `#ffffff`; after render uses Paper Library `paper_color_hex` (cream stocks are product color, not theme chrome)
+- Idle sheet fill `#ffffff`; after render uses Paper Library `paper_color_hex`
 - True paper aspect, contact shadow
-- Shared HiDPI `EmulatorPlayer` (zoom, pan, loupe)
+- Shared HiDPI `EmulatorPlayer` (zoom, pan with rubber-band + velocity settle, loupe)
 - Write-optimized canvas context (`willReadFrequently: false`)
+- Empty cue centered on desk (“Drop a photo or Vectorize”); loading = stats + subtle sheet shimmer
 
 ## Responsive
 
 - Desktop: `300px` rail + flex stage, full viewport height
-- `≤900px`: rail stacks above stage (~34vh); stage toolbar sticky at bottom for zoom/play/export
+- `≤900px`: rail stacks above stage (~34vh); craft bar remains floating at stage bottom
 
 ## States
 
 | State | Behavior |
 |-------|----------|
-| Empty | White sheet on desk; stats “Ready”; Export actions disabled |
-| Loading | Stats line shows busy copy (Ingesting… / Vectorizing…) |
+| Empty | White sheet + mute empty cue; Export actions disabled |
+| Loading | Stats busy copy + `is-loading` sheet shimmer |
 | Ready | Sheet shows ink; Export… enabled for current app |
-| Error | Stats line shows message; controls remain usable |
+| Error | Stats line shows message under failed action path; controls remain usable |
 
-## Finish review (apple-devlab-shell-5528)
+## A11y
 
-Disposition: **pass with notes** (2026-08-04). Material fixes landed: style-grid name-only labels, idle white sheet, sticky mobile toolbar. Seeded demo ink on every tab left as follow-up.
+- `prefers-reduced-motion: reduce` — no press scale / sheet scale; sheet swaps cross-fade
+- `prefers-reduced-transparency: reduce` — solid top bar + craft bar
+
+## Finish review (apple-design materials pass)
+
+Disposition: **pass with notes** against emilkowalski/apple-design (2026-08-04). Materials, grouped rail, press response, craft-bar toolbar, reduced-motion/transparency, and progressive Advanced disclosures landed. Emulator rubber-band + velocity settle added. Ingest/vectorization quality remains frozen pending UI sign-off.

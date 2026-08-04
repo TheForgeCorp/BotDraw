@@ -241,6 +241,7 @@ function syncZoomLabel(z) {
 }
 
 function setPortraitStageSeg(seg) {
+  const prev = portraitStageSeg;
   portraitStageSeg = seg || "vector";
   if (stageSegEl) {
     stageSegEl.querySelectorAll("button").forEach((b) => {
@@ -252,6 +253,28 @@ function setPortraitStageSeg(seg) {
   });
   const toggles = document.getElementById("ingest-toggles");
   if (toggles) toggles.hidden = portraitStageSeg !== "ingest";
+  if (prev !== portraitStageSeg) {
+    animateSheetSwap(document.getElementById("portrait-sheet"));
+  }
+  if (portraitStageSeg === "vector") {
+    setDeskState({
+      empty: !lastPayload,
+      loading: false,
+      hint: "Drop a photo, then Ingest",
+    });
+  } else if (portraitStageSeg === "source") {
+    setDeskState({
+      empty: !portraitFile && !portraitIngestPreview,
+      loading: false,
+      hint: "Drop a photo or choose a file",
+    });
+  } else {
+    setDeskState({
+      empty: !portraitIngestPreview,
+      loading: false,
+      hint: "Ingest to preview linework",
+    });
+  }
   requestAnimationFrame(() => {
     portraitPlayer.syncSize();
     portraitPlayer.fitZoom();
@@ -259,6 +282,7 @@ function setPortraitStageSeg(seg) {
 }
 
 function setShellForApp(app) {
+  const prevApp = document.body.dataset.app;
   document.body.dataset.app = app;
   const letters = app === "lettersbot";
   const portrait = app === "portraitbot";
@@ -300,7 +324,19 @@ function setShellForApp(app) {
   void letterSvg;
   void portraitSvg;
 
-  if (portrait) setPortraitStageSeg(portraitStageSeg);
+  if (portrait) {
+    setPortraitStageSeg(portraitStageSeg);
+  } else {
+    setDeskState({
+      empty: !lastPayload,
+      loading: false,
+      hint: letters ? "Compose layers, then Vectorize" : "Drop a photo or Vectorize",
+    });
+  }
+  if (prevApp && prevApp !== app) {
+    const sheet = lab ? labSheet : letters ? lettersSheet : portraitSheet;
+    animateSheetSwap(sheet);
+  }
   requestAnimationFrame(() => {
     const pl = stagePlayer();
     pl.syncSize();
@@ -424,6 +460,7 @@ function loadResult(data, opts = {}) {
     setPortraitStageSeg("vector");
   }
   if (currentApp !== "portraitbot" && currentApp !== "lettersbot") setExportEnabled(true);
+  setDeskState({ loading: false, empty: false });
   inspectorJson = {
     settings: lastSettings,
     layers: lastLayers,
@@ -830,6 +867,7 @@ async function runLabIngest() {
     statsEl.textContent = "Choose a photo to ingest";
     return null;
   }
+  setDeskState({ loading: true, empty: false, hint: "Ingesting…" });
   statsEl.textContent = "Ingesting…";
   const fd = new FormData();
   fd.append("quality", state.quality);
@@ -843,6 +881,7 @@ async function runLabIngest() {
   ensureLabEmuInCompare();
   drawLabSource(file);
   drawLabIngestPng(data);
+  setDeskState({ loading: false, empty: false });
   statsEl.textContent =
     `Ingest ready · edges ${data.edge_count ?? "?"} · hatch ${data.hatch_count ?? 0}` +
     ` · id ${labIngestId || "?"}`;
@@ -884,105 +923,127 @@ function renderPortrait() {
         </div>`
     )
     .join("");
+  setDeskState({
+    empty: !lastPayload || currentApp !== "portraitbot",
+    loading: false,
+    hint: "Drop a photo, then Ingest",
+  });
   root.innerHTML = `
     <h3>Portrait</h3>
-    <p class="muted">Ingest linedraw vectors, then vectorize with a style. Stage: Source · Ingest · Vector.</p>
-    <h4>Image</h4>
-    <div class="portrait-drop ${portraitFile ? "has-file" : ""}" id="portrait-drop">
-      ${portraitFile ? portraitFile.name : "Drop a photo or choose a file"}
-      <div style="margin-top:0.45rem"><input id="portrait-photo" type="file" accept="image/*" /></div>
+    <p class="muted">Upload → Ingest → Vectorize. Stage switches Source · Ingest · Vector.</p>
+    <div class="group">
+      <div class="group-block">
+        <div class="group-title">Image</div>
+        <div class="portrait-drop ${portraitFile ? "has-file" : ""}" id="portrait-drop">
+          ${portraitFile ? portraitFile.name : "Drop a photo or choose a file"}
+          <div style="margin-top:0.45rem"><input id="portrait-photo" type="file" accept="image/*" /></div>
+        </div>
+        <div class="row" style="margin-top:0.35rem">
+          <label><input type="checkbox" id="auto-frame" ${portraitAutoFrame ? "checked" : ""}/> Auto frame</label>
+          <label><input type="checkbox" id="hatch-shading" ${portraitHatchEnabled ? "checked" : ""}/> Hatch</label>
+          <button type="button" class="btn btn-ghost" id="reset-frame">Reset frame</button>
+        </div>
+      </div>
+      <div class="group-block">
+        <div class="group-title">Image type</div>
+        <div class="seg mode-seg" id="image-mode-grid">
+          ${modes.map(([id, title, sub]) =>
+            `<button type="button" data-mode="${id}" class="${portraitImageMode === id ? "active" : ""}">
+              <strong>${title}</strong><span>${sub}</span>
+            </button>`
+          ).join("")}
+        </div>
+      </div>
+      <div class="group-block">
+        <div class="group-title">Style</div>
+        ${styleButtons(list)}
+      </div>
+      <div class="group-block">
+        <div class="group-title">Paper &amp; render</div>
+        <div class="grid-2">
+          ${field("Size", `<select id="paper"><option>A4</option><option>Letter</option><option>A3</option><option>A5</option><option>Card</option></select>`)}
+          ${field("Color", paperSelectHtml(portraitPaperId))}
+        </div>
+        <div class="grid-2">
+          ${field("Quality", `<select id="quality"><option value="booth-fast">booth-fast</option><option value="booth-balanced">booth-balanced</option><option value="studio-hq">studio-hq</option></select>`)}
+          ${field("Density", `<input id="density" type="number" step="0.1" value="${state.density}" />`)}
+        </div>
+        <div class="grid-2">
+          ${field("Seed", `<input id="seed" type="number" value="${state.seed}" />`)}
+          ${field("Line type", `<select id="line-type">${ltOpts}</select>`)}
+        </div>
+        ${field("Palette", paletteSelectHtml())}
+        <div class="pen-chips">${penList}</div>
+      </div>
     </div>
-    <div class="row" style="margin-top:0.35rem">
-      <label><input type="checkbox" id="auto-frame" ${portraitAutoFrame ? "checked" : ""}/> Auto frame subject</label>
-      <label><input type="checkbox" id="hatch-shading" ${portraitHatchEnabled ? "checked" : ""}/> Hatch shading</label>
-      <label title="5 tone variants + consensus pass (studio-hq photo; booth stays single-pass)"><input type="checkbox" id="ensemble-5plus1" ${
-        portraitEnsemble === true || (portraitEnsemble == null && state.quality === "studio-hq" && portraitImageMode === "photo") ? "checked" : ""
-      }/> Ensemble (5+1)</label>
-      <button type="button" id="reset-frame">Reset frame</button>
-    </div>
-    <p class="muted" style="margin-top:0.25rem">Ingest: teal contours · orange hatch · magenta regions. Quality preset drives detail. Ensemble auto-on for studio-hq photo.</p>
-    <h4>Image type</h4>
-    <div class="image-mode-grid" id="image-mode-grid">
-      ${modes.map(([id, title, sub]) =>
-        `<button type="button" data-mode="${id}" class="${portraitImageMode === id ? "active" : ""}">
-          <strong>${title}</strong><span>${sub}</span>
-        </button>`
-      ).join("")}
-    </div>
-    <h4>Scan filter <span class="muted">(Inkscape-style intermediate)</span></h4>
-    <div class="grid-2">
-      ${field(
-        "Mode",
-        `<select id="scan-mode">
-          <option value="auto">Auto (Hybrid C)</option>
-          <option value="brightness">Brightness</option>
-          <option value="edges">Edges</option>
-          <option value="centerline">Centerline</option>
-          <option value="color_bands">Color bands</option>
-        </select>`
-      )}
-      ${field(
-        "Path simplify",
-        `<input id="path-simplify" type="range" min="1" max="3" step="1" value="${portraitPathSimplify}" /><span id="path-simplify-val">${portraitPathSimplify}</span>`
-      )}
-    </div>
-    <div class="grid-2">
-      ${field(
-        "Line source",
-        `<select id="line-source" title="Neural = artist-line model + person matte (needs downloaded weights)">
-          <option value="auto"${portraitLineSource === "auto" ? " selected" : ""}>Auto (neural if available)</option>
-          <option value="neural"${portraitLineSource === "neural" ? " selected" : ""}>Neural</option>
-          <option value="classic"${portraitLineSource === "classic" ? " selected" : ""}>Classic</option>
-        </select>`
-      )}
-      ${field(
-        "AI review",
-        `<select id="ai-review" title="Live = scene knobs only (booth-safe). Studio = scene + one critique; may re-ingest once for structure.">
-          <option value="off"${portraitAiReview === "off" ? " selected" : ""}>Off</option>
-          <option value="live"${portraitAiReview === "live" ? " selected" : ""}>Live (scene)</option>
-          <option value="studio"${portraitAiReview === "studio" ? " selected" : ""}>Studio (scene+critique)</option>
-        </select>`
-      )}
-    </div>
-    <p class="muted" style="margin-top:0.2rem" id="ai-review-hint">AI review off. Live = crop/suppress/tone only; Studio may re-ingest once for fidelity.</p>
-    <p class="muted" style="margin-top:0.2rem">Lighter intermediates first — Brightness / Edges / Centerline map to linedraw knobs (no Potrace).</p>
-    <h4>Portrait style</h4>
-    ${styleButtons(list)}
-    <h4>Paper</h4>
-    <div class="grid-2">
-      ${field("Size", `<select id="paper"><option>A4</option><option>Letter</option><option>A3</option><option>A5</option><option>Card</option></select>`)}
-      ${field("Color (Paper Library)", paperSelectHtml(portraitPaperId))}
-    </div>
-    <h4>Render settings</h4>
-    <div class="grid-2">
-      ${field("Quality", `<select id="quality"><option value="booth-fast">booth-fast</option><option value="booth-balanced">booth-balanced</option><option value="studio-hq">studio-hq</option></select>`)}
-      ${field("Density", `<input id="density" type="number" step="0.1" value="${state.density}" />`)}
-    </div>
-    <div class="grid-2">
-      ${field("Seed", `<input id="seed" type="number" value="${state.seed}" />`)}
-      ${field("Line type", `<select id="line-type">${ltOpts}</select>`)}
-    </div>
-    ${field("Line library", lineSelectHtml(selectedLineId))}
-    <h4>Stroke ornament</h4>
-    ${field("Line spacing mm", `<input id="line-spacing" type="range" min="0.4" max="4" step="0.1" value="1.2" /><span id="line-spacing-val">1.2</span>`)}
-    <div id="ornament-amp" style="${needsAmp ? "" : "display:none"}">
-      ${field("Period mm", `<input id="pattern-period" type="range" min="0.4" max="8" step="0.1" value="2" /><span id="pattern-period-val">2.0</span>`)}
-      ${field("Amplitude mm", `<input id="pattern-amp" type="range" min="0" max="4" step="0.1" value="0.8" /><span id="pattern-amp-val">0.8</span>`)}
-    </div>
-    <div id="ornament-dash" style="${needsDash ? "" : "display:none"}">
-      ${field("Dash mm", `<input id="dash-mm" type="range" min="0.2" max="8" step="0.1" value="2" /><span id="dash-mm-val">2.0</span>`)}
-      ${field("Gap mm", `<input id="gap-mm" type="range" min="0.1" max="6" step="0.1" value="1.2" /><span id="gap-mm-val">1.2</span>`)}
-    </div>
-    <h4>Palette / pens</h4>
-    ${field("Palette", paletteSelectHtml())}
-    <div class="pen-chips">${penList}</div>
-    <div class="row" style="margin-top:0.55rem; gap:0.35rem; flex-wrap:wrap">
+    <div class="row" style="margin-top:0.35rem; gap:0.35rem; flex-wrap:wrap">
       <button type="button" class="btn" id="portrait-ingest-btn">Ingest</button>
       <button type="button" class="btn btn-primary primary" id="portrait-go">Vectorize</button>
-      <button type="button" id="portrait-apply" ${portraitIngestId ? "" : "disabled"}>Apply (restyle)</button>
-      <button type="button" id="portrait-reingest">Re-ingest</button>
-      <button type="button" id="reset-pen-map">Reset pen map</button>
+      <button type="button" class="btn" id="portrait-apply" ${portraitIngestId ? "" : "disabled"}>Apply</button>
     </div>
+    <details class="advanced">
+      <summary>Advanced</summary>
+      <div class="group">
+        <div class="group-block">
+          <div class="group-title">Scan &amp; AI</div>
+          <div class="grid-2">
+            ${field(
+              "Mode",
+              `<select id="scan-mode">
+                <option value="auto">Auto (Hybrid C)</option>
+                <option value="brightness">Brightness</option>
+                <option value="edges">Edges</option>
+                <option value="centerline">Centerline</option>
+                <option value="color_bands">Color bands</option>
+              </select>`
+            )}
+            ${field(
+              "Path simplify",
+              `<input id="path-simplify" type="range" min="1" max="3" step="1" value="${portraitPathSimplify}" /><span id="path-simplify-val">${portraitPathSimplify}</span>`
+            )}
+          </div>
+          <div class="grid-2">
+            ${field(
+              "Line source",
+              `<select id="line-source">
+                <option value="auto"${portraitLineSource === "auto" ? " selected" : ""}>Auto</option>
+                <option value="neural"${portraitLineSource === "neural" ? " selected" : ""}>Neural</option>
+                <option value="classic"${portraitLineSource === "classic" ? " selected" : ""}>Classic</option>
+              </select>`
+            )}
+            ${field(
+              "AI review",
+              `<select id="ai-review">
+                <option value="off"${portraitAiReview === "off" ? " selected" : ""}>Off</option>
+                <option value="live"${portraitAiReview === "live" ? " selected" : ""}>Live</option>
+                <option value="studio"${portraitAiReview === "studio" ? " selected" : ""}>Studio</option>
+              </select>`
+            )}
+          </div>
+          <p class="muted" id="ai-review-hint">Live = scene only; Studio may re-ingest once.</p>
+          <label title="5+1 ensemble"><input type="checkbox" id="ensemble-5plus1" ${
+            portraitEnsemble === true || (portraitEnsemble == null && state.quality === "studio-hq" && portraitImageMode === "photo") ? "checked" : ""
+          }/> Ensemble (5+1)</label>
+        </div>
+        <div class="group-block">
+          <div class="group-title">Ornament</div>
+          ${field("Line library", lineSelectHtml(selectedLineId))}
+          ${field("Line spacing mm", `<input id="line-spacing" type="range" min="0.4" max="4" step="0.1" value="1.2" /><span id="line-spacing-val">1.2</span>`)}
+          <div id="ornament-amp" style="${needsAmp ? "" : "display:none"}">
+            ${field("Period mm", `<input id="pattern-period" type="range" min="0.4" max="8" step="0.1" value="2" /><span id="pattern-period-val">2.0</span>`)}
+            ${field("Amplitude mm", `<input id="pattern-amp" type="range" min="0" max="4" step="0.1" value="0.8" /><span id="pattern-amp-val">0.8</span>`)}
+          </div>
+          <div id="ornament-dash" style="${needsDash ? "" : "display:none"}">
+            ${field("Dash mm", `<input id="dash-mm" type="range" min="0.2" max="8" step="0.1" value="2" /><span id="dash-mm-val">2.0</span>`)}
+            ${field("Gap mm", `<input id="gap-mm" type="range" min="0.1" max="6" step="0.1" value="1.2" /><span id="gap-mm-val">1.2</span>`)}
+          </div>
+          <div class="row">
+            <button type="button" class="btn" id="portrait-reingest">Re-ingest</button>
+            <button type="button" class="btn" id="reset-pen-map">Reset pen map</button>
+          </div>
+        </div>
+      </div>
+    </details>
   `;
 
   const bindRange = (id, labelId) => {
@@ -1226,6 +1287,7 @@ function renderPortrait() {
     });
   root.querySelector("#portrait-ingest-btn").onclick = () =>
     runPortraitIngest({ forceReingest: true }).catch((e) => {
+      setDeskState({ loading: false, empty: !portraitIngestPreview, hint: "Drop a photo, then Ingest" });
       if (portraitStatsEl) portraitStatsEl.textContent = portraitNetworkErrorMessage(e);
       console.error(e);
     });
@@ -1245,6 +1307,7 @@ async function runPortraitIngest(opts = {}) {
   portraitPaperId = root.querySelector("#paper-color")?.value || portraitPaperId;
   portraitAutoFrame = !!root.querySelector("#auto-frame")?.checked;
   if (root.querySelector("#hatch-shading")) portraitHatchEnabled = !!root.querySelector("#hatch-shading").checked;
+  setDeskState({ loading: true, empty: false, hint: "Ingesting…" });
   if (portraitStatsEl) portraitStatsEl.textContent = "Ingesting (no style)…";
   const t0 = performance.now();
   let data;
@@ -1303,6 +1366,7 @@ async function runPortraitIngest(opts = {}) {
   if (data.crop) portraitCrop = data.crop;
   drawPortraitSourcePreview(portraitFile, data.crop);
   drawPortraitIngestPreview(data);
+  setDeskState({ loading: false, empty: false });
   setPortraitStageSeg("ingest");
   const wall = ((performance.now() - t0) / 1000).toFixed(2);
   const timing = data.timing_s || {};
@@ -1397,6 +1461,7 @@ async function renderPortraitJob(opts = {}) {
   state.density = Number(root.querySelector("#density")?.value || state.density);
   selectedPaletteId = root.querySelector("#palette")?.value || selectedPaletteId;
   const extra = collectPortraitExtra(root, opts);
+  setDeskState({ loading: true, empty: false, hint: "Vectorizing…" });
   if (portraitStatsEl) {
     portraitStatsEl.textContent = extra.reuse_ingest ? "Restyling (cached ingest)…" : "Vectorizing portrait…";
   }
@@ -1452,6 +1517,7 @@ async function renderPortraitJob(opts = {}) {
       });
     }
   } catch (e) {
+    setDeskState({ loading: false, empty: !lastPayload, hint: "Drop a photo, then Ingest" });
     throw new Error(portraitNetworkErrorMessage(e));
   }
   portraitForceReingest = false;
@@ -1462,6 +1528,7 @@ async function renderPortraitJob(opts = {}) {
   if (ingestId) portraitIngestId = ingestId;
   currentApp = "portraitbot";
   loadResult(data, { autoplay: false });
+  setDeskState({ loading: false, empty: false });
   // Refresh ingest pane from cache so Source|Ingest|Vector stay aligned
   if (portraitIngestId && (!portraitIngestPreview || portraitIngestPreview.ingest_id !== portraitIngestId)) {
     try {
@@ -1537,25 +1604,58 @@ function penChipsHtml(palette) {
 
 function commonDevOpts() {
   return `
-    <h4>Render settings</h4>
-    <div class="grid-2">
-      ${field("Paper", `<select id="paper"><option>A4</option><option>Letter</option><option>A3</option><option>A5</option><option>Card</option></select>`)}
-      ${field("Quality", `<select id="quality"><option value="booth-fast">booth-fast</option><option value="booth-balanced">booth-balanced</option><option value="studio-hq">studio-hq</option></select>`)}
+    <div class="group">
+      <div class="group-block">
+        <div class="group-title">Render</div>
+        <div class="grid-2">
+          ${field("Paper", `<select id="paper"><option>A4</option><option>Letter</option><option>A3</option><option>A5</option><option>Card</option></select>`)}
+          ${field("Quality", `<select id="quality"><option value="booth-fast">booth-fast</option><option value="booth-balanced">booth-balanced</option><option value="studio-hq">studio-hq</option></select>`)}
+        </div>
+        <div class="grid-2">
+          ${field("Seed", `<input id="seed" type="number" value="${state.seed}" />`)}
+          ${field("Density", `<input id="density" type="number" step="0.1" value="${state.density}" />`)}
+        </div>
+      </div>
+      <div class="group-block">
+        <div class="group-title">Palette</div>
+        ${field("Established palette", paletteSelectHtml())}
+        ${penChipsHtml(currentPalette())}
+      </div>
+      <div class="group-block">
+        <div class="group-title">Source</div>
+        ${field("Upload image (optional)", `<input id="photo" type="file" accept="image/*" />`)}
+        ${field("Import settings JSON", `<input id="import-settings" type="file" accept="application/json,.json" />`)}
+      </div>
     </div>
-    <div class="grid-2">
-      ${field("Seed", `<input id="seed" type="number" value="${state.seed}" />`)}
-      ${field("Density", `<input id="density" type="number" step="0.1" value="${state.density}" />`)}
-    </div>
-    <div class="grid-2">
-      ${field("Pen-up mm/s", `<input id="pen_up" type="number" value="${state.pen_up_speed_mm_s}" />`)}
-      ${field("Pen-down mm/s", `<input id="pen_down" type="number" value="${state.pen_down_speed_mm_s}" />`)}
-    </div>
-    <h4>Palette</h4>
-    ${field("Established palette", paletteSelectHtml())}
-    ${penChipsHtml(currentPalette())}
-    ${field("Upload image (optional)", `<input id="photo" type="file" accept="image/*" />`)}
-    ${field("Import settings JSON", `<input id="import-settings" type="file" accept="application/json,.json" />`)}
+    <details class="advanced">
+      <summary>Advanced speeds</summary>
+      <div class="group">
+        <div class="group-block">
+          <div class="grid-2">
+            ${field("Pen-up mm/s", `<input id="pen_up" type="number" value="${state.pen_up_speed_mm_s}" />`)}
+            ${field("Pen-down mm/s", `<input id="pen_down" type="number" value="${state.pen_down_speed_mm_s}" />`)}
+          </div>
+        </div>
+      </div>
+    </details>
   `;
+}
+
+function setDeskState({ empty, loading, hint } = {}) {
+  const desk = document.getElementById("paper-desk");
+  const cue = document.getElementById("sheet-empty");
+  if (!desk) return;
+  if (empty != null) desk.classList.toggle("is-empty", !!empty);
+  if (loading != null) desk.classList.toggle("is-loading", !!loading);
+  if (cue && hint != null) cue.textContent = hint;
+}
+
+function animateSheetSwap(el) {
+  if (!el) return;
+  el.classList.add("is-entering");
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => el.classList.remove("is-entering"));
+  });
 }
 
 function applyCommonDefaults() {
@@ -1665,11 +1765,20 @@ function renderGenArt() {
     ["artistic", "pattern", "technical", "portrait"].includes(s.category)
   );
   if (!list.find((s) => s.id === selectedStyle)) selectedStyle = list[0]?.id || "stipple";
+  setDeskState({
+    empty: !lastPayload || currentApp !== "genartbot",
+    loading: false,
+    hint: "Drop a photo or Vectorize",
+  });
   controls.innerHTML = `
     <h3>GenArt</h3>
-    <p class="muted">Style, paper, optional photo ingest, then vectorize.</p>
-    <h4>Style</h4>
-    ${styleButtons(list)}
+    <p class="muted">Pick a style, ingest a photo if you want, then vectorize.</p>
+    <div class="group">
+      <div class="group-block">
+        <div class="group-title">Style</div>
+        ${styleButtons(list)}
+      </div>
+    </div>
     ${commonDevOpts()}
     <div class="row">
       <button type="button" class="btn" id="genart-ingest">Ingest</button>
@@ -1686,16 +1795,24 @@ function renderGenArt() {
       if (f) drawLabSource(f);
     };
   }
-  controls.querySelector("#genart-ingest").onclick = () =>
+  controls.querySelector("#genart-ingest").onclick = () => {
+    setDeskState({ loading: true, empty: false, hint: "Ingesting…" });
     runLabIngest().catch((e) => {
+      setDeskState({ loading: false, empty: true });
       statsEl.textContent = String(e.message || e);
       console.error(e);
     });
-  controls.querySelector("#go").onclick = () =>
-    renderWithSettings({ appName: "genartbot", busyText: "Vectorizing GenArt…" }).catch((e) => {
-      statsEl.textContent = String(e.message || e);
-      console.error(e);
-    });
+  };
+  controls.querySelector("#go").onclick = () => {
+    setDeskState({ loading: true, empty: false, hint: "Vectorizing…" });
+    renderWithSettings({ appName: "genartbot", busyText: "Vectorizing GenArt…" })
+      .then(() => setDeskState({ loading: false, empty: false }))
+      .catch((e) => {
+        setDeskState({ loading: false, empty: !lastPayload });
+        statsEl.textContent = String(e.message || e);
+        console.error(e);
+      });
+  };
 }
 
 function letterContentRoot() {
@@ -2083,22 +2200,26 @@ function draftMetaHtml() {
   }
   const def = LETTER_TYPE_DEFAULTS[letterType] || LETTER_TYPE_DEFAULTS.personal;
   return `
-    <h4>Draft meta</h4>
-    <p class="muted">Used for AI draft only. Letter text lives on layers above.</p>
-    ${field("Names", `<input id="names" value="${def.names}" />`)}
-    <div class="grid-2">
-      ${field("Mood", `<input id="mood" value="${def.mood}" />`)}
-      ${field("Seed", `<input id="seed" type="number" value="7" />`)}
-    </div>
-    ${field("Era", `<select id="era"><option>golden</option><option>70s</option><option selected>90s</option><option>2000s</option><option>contemporary</option></select>`)}
-    ${field("Facts", `<textarea id="facts" style="min-height:56px">${def.facts}</textarea>`)}
-    ${field("Guest quote", `<textarea id="quote" style="min-height:48px" placeholder="Optional line"></textarea>`)}
-    <div class="chk-row">
-      <label><input id="use_llm" type="checkbox" /> Local AI draft</label>
-    </div>
-    <h4>Palette</h4>
-    ${field("Palette", paletteSelectHtml())}
-    <div class="row"><button type="button" class="btn btn-primary primary" id="go">Vectorize</button></div>
+    <details class="advanced">
+      <summary>Advanced · AI draft</summary>
+      <div class="group">
+        <div class="group-block">
+          <div class="group-title">Draft meta</div>
+          <p class="muted">Used for AI draft only. Letter text lives on layers above.</p>
+          ${field("Names", `<input id="names" value="${def.names}" />`)}
+          <div class="grid-2">
+            ${field("Mood", `<input id="mood" value="${def.mood}" />`)}
+            ${field("Seed", `<input id="seed" type="number" value="7" />`)}
+          </div>
+          ${field("Era", `<select id="era"><option>golden</option><option>70s</option><option selected>90s</option><option>2000s</option><option>contemporary</option></select>`)}
+          ${field("Facts", `<textarea id="facts" style="min-height:56px">${def.facts}</textarea>`)}
+          ${field("Guest quote", `<textarea id="quote" style="min-height:48px" placeholder="Optional line"></textarea>`)}
+          <div class="chk-row">
+            <label><input id="use_llm" type="checkbox" /> Local AI draft</label>
+          </div>
+        </div>
+      </div>
+    </details>
   `;
 }
 
@@ -2106,19 +2227,28 @@ function letterEditorShellHtml() {
   const def = LETTER_TYPE_DEFAULTS[letterType] || LETTER_TYPE_DEFAULTS.personal;
   return `
     <h3>${def.title}</h3>
-    <p class="muted">Layers drive text passes · paper preview on the right.</p>
-    <div class="layers-head">
-      <div>
-        <h4>Layers</h4>
-        <p class="muted">Font or line · pen · snap</p>
+    <p class="muted">Edit layers → Vectorize. Paper preview fills the desk.</p>
+    <div class="group">
+      <div class="group-block">
+        <div class="group-title">Layers</div>
+        <div class="layers-head">
+          <p class="muted" style="margin:0">Font or line · pen · snap</p>
+          <div class="layer-actions">
+            <button type="button" id="letter-layer-add" title="Add text layer (Shift: line)">+</button>
+            <button type="button" id="letter-layer-remove" title="Remove layer">−</button>
+          </div>
+        </div>
+        <div class="layer-tabs" id="letter-layer-tabs"></div>
+        <div class="layer-specs" id="letter-layer-specs"></div>
       </div>
-      <div class="layer-actions">
-        <button type="button" id="letter-layer-add" title="Add text layer (Shift: line)">+</button>
-        <button type="button" id="letter-layer-remove" title="Remove layer">−</button>
+      <div class="group-block">
+        <div class="group-title">Palette</div>
+        ${field("Palette", paletteSelectHtml())}
       </div>
     </div>
-    <div class="layer-tabs" id="letter-layer-tabs"></div>
-    <div class="layer-specs" id="letter-layer-specs"></div>
+    <div class="row actions">
+      <button type="button" class="btn btn-primary primary" id="go">Vectorize</button>
+    </div>
     ${draftMetaHtml()}
   `;
 }
@@ -2225,6 +2355,7 @@ async function vectorizeLetter(opts = {}) {
   const useLlm = !!root?.querySelector("#use_llm")?.checked;
   const hasBody = letterLayersState.some((l) => (l.body || "").trim());
   if (!quiet) {
+    setDeskState({ loading: true, empty: false, hint: "Vectorizing…" });
     lettersStatsEl.textContent = hasBody
       ? "Vectorizing…"
       : useLlm
@@ -2232,30 +2363,36 @@ async function vectorizeLetter(opts = {}) {
         : "Template draft + vectorize…";
   }
   const t0 = performance.now();
-  const data = await api("/api/letters/draft", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      letter_type: letterType,
-      names: lval("names"),
-      language: letterLayersState[0]?.language || "en",
-      era: lval("era"),
-      mood: lval("mood"),
-      facts: lval("facts"),
-      guest_quote: lval("quote") || null,
-      body: letterLayersState[0]?.body || null,
-      use_llm: useLlm,
-      highlight: false,
-      optimize: false,
-      palette_id: selectedPaletteId,
-      seed: lnum("seed", 7),
-      paper: document.getElementById("letters-paper").value,
-      orientation: document.getElementById("letters-orientation").value,
-      margins: readMargins(),
-      font_name: letterLayersState[0]?.font_name || "simplex",
-      layers: letterLayersState,
-    }),
-  });
+  let data;
+  try {
+    data = await api("/api/letters/draft", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        letter_type: letterType,
+        names: lval("names"),
+        language: letterLayersState[0]?.language || "en",
+        era: lval("era"),
+        mood: lval("mood"),
+        facts: lval("facts"),
+        guest_quote: lval("quote") || null,
+        body: letterLayersState[0]?.body || null,
+        use_llm: useLlm,
+        highlight: false,
+        optimize: false,
+        palette_id: selectedPaletteId,
+        seed: lnum("seed", 7),
+        paper: document.getElementById("letters-paper").value,
+        orientation: document.getElementById("letters-orientation").value,
+        margins: readMargins(),
+        font_name: letterLayersState[0]?.font_name || "simplex",
+        layers: letterLayersState,
+      }),
+    });
+  } catch (e) {
+    if (!quiet) setDeskState({ loading: false, empty: !lastPayload, hint: "Compose layers, then Vectorize" });
+    throw e;
+  }
   lastJob = data.job;
   lastPayload = data.emulator;
   lastLayers = data.layers || data.emulator?.layers || null;
@@ -2301,6 +2438,7 @@ async function vectorizeLetter(opts = {}) {
     : "";
   lettersStatsEl.textContent =
     `Ready · ${src} · draft ${timing.draft ?? "?"}s · vector ${timing.vectorize ?? "?"}s · wall ${wall}s · missing ${missing}${tr}`;
+  if (!quiet) setDeskState({ loading: false, empty: false });
   return data;
 }
 
@@ -2366,27 +2504,47 @@ async function renderLetters() {
     scheduleLetterVectorize();
   };
   root.querySelector("#go").onclick = () => vectorizeLetter().catch((e) => {
+    setDeskState({ loading: false, empty: !lastPayload, hint: "Compose layers, then Vectorize" });
     lettersStatsEl.textContent = String(e);
     console.error(e);
   });
   renderLetterLayerEditor();
   setLettersDownloads(!!lastJob?.id, lastJob?.id);
+  setDeskState({
+    empty: !lastPayload,
+    loading: false,
+    hint: "Compose layers, then Vectorize",
+  });
   scheduleLetterVectorize();
 }
 
 function renderRdlab() {
   const list = styles.filter((s) => ["backlog", "pattern"].includes(s.category));
   if (!list.find((s) => s.id === selectedStyle)) selectedStyle = "spiral";
+  setDeskState({
+    empty: !lastPayload || currentApp !== "rdlab",
+    loading: false,
+    hint: "Pick an experiment, then Vectorize",
+  });
   controls.innerHTML = `
     <h3>R&amp;D Lab · Dev</h3>
     <p class="muted">Experimental motifs + rotating-base kinematics. Optional photo ingest.</p>
-    <h4>Experiment</h4>
-    ${styleButtons(list)}
+    <div class="group">
+      <div class="group-block">
+        <div class="group-title">Experiment</div>
+        ${styleButtons(list)}
+      </div>
+    </div>
     ${commonDevOpts()}
-    ${field("Turntable RPM", `<input id="rpm" type="number" step="0.5" value="${state.rpm}" />`)}
-    <div class="row">
-      <button type="button" id="rd-ingest">Ingest</button>
-      <button class="primary" id="go">Run &amp; Inspect</button>
+    <div class="group">
+      <div class="group-block">
+        <div class="group-title">Kinematics</div>
+        ${field("Turntable RPM", `<input id="rpm" type="number" step="0.5" value="${state.rpm}" />`)}
+      </div>
+    </div>
+    <div class="row actions">
+      <button type="button" class="btn" id="rd-ingest">Ingest</button>
+      <button type="button" class="btn btn-primary primary" id="go">Run &amp; Inspect</button>
     </div>
   `;
   bindStyleGrid();

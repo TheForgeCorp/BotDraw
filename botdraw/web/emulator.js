@@ -31,6 +31,7 @@ class EmulatorPlayer {
     this.onZoomChange = null;
     this._drag = null;
     this._panDrag = null;
+    this._settleRaf = null;
     this._spaceDown = false;
     this._bound = false;
     this._dpr = 1;
@@ -91,6 +92,7 @@ class EmulatorPlayer {
   setGhost(v) { this.showGhost = !!v; this.drawFrame(); }
 
   setZoom(z, anchorCss = null) {
+    this._cancelSettle();
     const next = Math.max(0.25, Math.min(16, Number(z) || 1));
     if (anchorCss && this._cssW) {
       // Zoom toward cursor (CSS px space)
@@ -105,6 +107,9 @@ class EmulatorPlayer {
     } else {
       this.zoom = next;
     }
+    const hard = this._clampPan(this.panX, this.panY);
+    this.panX = hard.x;
+    this.panY = hard.y;
     this.drawFrame();
     if (this.onZoomChange) this.onZoomChange(this.zoom);
   }
@@ -114,11 +119,76 @@ class EmulatorPlayer {
   }
 
   fitZoom() {
+    this._cancelSettle();
     this.zoom = 1;
     this.panX = 0;
     this.panY = 0;
     this.drawFrame();
     if (this.onZoomChange) this.onZoomChange(this.zoom);
+  }
+
+  _panLimits() {
+    const { w, h } = this._paperScaleCss();
+    const maxX = Math.max(24, (w * Math.max(0, this.zoom - 1)) / 2 + 24);
+    const maxY = Math.max(24, (h * Math.max(0, this.zoom - 1)) / 2 + 24);
+    return { maxX, maxY };
+  }
+
+  _clampPan(x, y, { rubber = false } = {}) {
+    const { maxX, maxY } = this._panLimits();
+    const axis = (v, max) => {
+      if (!rubber) return Math.max(-max, Math.min(max, v));
+      if (v > max) return max + (v - max) * 0.35;
+      if (v < -max) return -max + (v + max) * 0.35;
+      return v;
+    };
+    return { x: axis(x, maxX), y: axis(y, maxY) };
+  }
+
+  _cancelSettle() {
+    if (this._settleRaf) {
+      cancelAnimationFrame(this._settleRaf);
+      this._settleRaf = null;
+    }
+  }
+
+  _settlePan(vx = 0, vy = 0) {
+    this._cancelSettle();
+    const reduce = typeof window !== "undefined"
+      && window.matchMedia
+      && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduce) {
+      const hard = this._clampPan(this.panX, this.panY);
+      this.panX = hard.x;
+      this.panY = hard.y;
+      this.drawFrame();
+      return;
+    }
+    let velX = vx;
+    let velY = vy;
+    const step = () => {
+      const hard = this._clampPan(this.panX, this.panY);
+      const ax = (hard.x - this.panX) * 0.22;
+      const ay = (hard.y - this.panY) * 0.22;
+      velX = velX * 0.88 + ax;
+      velY = velY * 0.88 + ay;
+      this.panX += velX;
+      this.panY += velY;
+      const settled =
+        Math.abs(this.panX - hard.x) < 0.45
+        && Math.abs(this.panY - hard.y) < 0.45
+        && Math.hypot(velX, velY) < 0.35;
+      if (settled) {
+        this.panX = hard.x;
+        this.panY = hard.y;
+        this._settleRaf = null;
+        this.drawFrame();
+        return;
+      }
+      this.drawFrame();
+      this._settleRaf = requestAnimationFrame(step);
+    };
+    this._settleRaf = requestAnimationFrame(step);
   }
 
   setLoupe(on) {
@@ -294,7 +364,18 @@ class EmulatorPlayer {
       return;
     }
     if (this._spaceDown || e.button === 1 || e.buttons === 4) {
-      this._panDrag = { x: e.clientX, y: e.clientY, panX: this.panX, panY: this.panY };
+      this._cancelSettle();
+      this._panDrag = {
+        x: e.clientX,
+        y: e.clientY,
+        panX: this.panX,
+        panY: this.panY,
+        lastX: e.clientX,
+        lastY: e.clientY,
+        lastT: performance.now(),
+        vx: 0,
+        vy: 0,
+      };
       this.canvas.setPointerCapture?.(e.pointerId);
       e.preventDefault();
     }
@@ -304,8 +385,20 @@ class EmulatorPlayer {
     this._pointerCss = this._cssFromClient(e.clientX, e.clientY);
     if (this.loupeOn) this.drawFrame();
     if (this._panDrag) {
-      this.panX = this._panDrag.panX + (e.clientX - this._panDrag.x);
-      this.panY = this._panDrag.panY + (e.clientY - this._panDrag.y);
+      const now = performance.now();
+      const dt = Math.max(8, now - this._panDrag.lastT);
+      const idx = e.clientX - this._panDrag.lastX;
+      const idy = e.clientY - this._panDrag.lastY;
+      this._panDrag.vx = (idx / dt) * 16;
+      this._panDrag.vy = (idy / dt) * 16;
+      this._panDrag.lastX = e.clientX;
+      this._panDrag.lastY = e.clientY;
+      this._panDrag.lastT = now;
+      const rawX = this._panDrag.panX + (e.clientX - this._panDrag.x);
+      const rawY = this._panDrag.panY + (e.clientY - this._panDrag.y);
+      const c = this._clampPan(rawX, rawY, { rubber: true });
+      this.panX = c.x;
+      this.panY = c.y;
       this.drawFrame();
       return;
     }
@@ -324,7 +417,10 @@ class EmulatorPlayer {
 
   _onPointerUp(e) {
     if (this._panDrag) {
+      const vx = this._panDrag.vx;
+      const vy = this._panDrag.vy;
       this._panDrag = null;
+      this._settlePan(vx, vy);
       return;
     }
     if (!this._drag) return;

@@ -23,7 +23,9 @@
   --dur: 160ms;
   --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  --paper-shadow: 0 12px 40px rgba(29, 29, 31, 0.12), 0 2px 6px rgba(29, 29, 31, 0.06);
+  --paper-shadow: 0 18px 48px rgba(29, 29, 31, 0.16), 0 4px 12px rgba(29, 29, 31, 0.08), 0 1px 0 rgba(255, 255, 255, 0.65) inset;
+  --press-scale: 0.97;
+  --press-dur: 100ms;
 }
 
 * { box-sizing: border-box; }
@@ -83,9 +85,10 @@ button { cursor: pointer; }
   border-radius: 7px;
   font-size: 0.75rem;
   font-weight: 500;
-  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease), transform var(--press-dur) var(--ease);
 }
 .tabs button:hover { color: var(--ink); background: rgba(255,255,255,0.55); }
+.tabs button:active { transform: scale(var(--press-scale)); }
 .tabs button.active {
   background: var(--panel);
   color: var(--ink);
@@ -117,12 +120,8 @@ button { cursor: pointer; }
     padding-bottom: 0.5rem;
   }
   .stage-toolbar {
-    position: sticky;
-    bottom: 0;
-    background: rgba(245, 245, 247, 0.92);
-    backdrop-filter: blur(10px);
-    padding: 0.4rem 0;
-    z-index: 5;
+    border-radius: 14px;
+    max-width: calc(100% - 1rem);
   }
   #emu, #letters-emu, #portrait-emu, #portrait-src, #portrait-ingest {
     max-height: min(54vh, 640px);
@@ -177,20 +176,102 @@ button { cursor: pointer; }
   letter-spacing: -0.02em;
 }
 .rail h4 {
-  margin: 0.85rem 0 0.35rem;
+  margin: 0.75rem 0 0.3rem;
   font-size: 0.6875rem;
   font-weight: 600;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.02em;
   text-transform: uppercase;
   color: var(--faint);
 }
+.rail h4:first-of-type { margin-top: 0.35rem; }
 .muted { color: var(--muted); font-size: 0.75rem; line-height: 1.35; }
 .rail label {
   display: block;
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   color: var(--muted);
-  margin: 0.4rem 0 0.15rem;
+  margin: 0.55rem 0 0.15rem;
 }
+.rail label:first-child { margin-top: 0.15rem; }
+.layers-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+.layer-actions { display: flex; gap: 0.25rem; }
+.layer-actions button {
+  min-width: 28px;
+  height: 26px;
+  padding: 0;
+}
+.chk-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.35rem;
+}
+.row.actions { margin-top: 0.55rem; }
+
+/* Settings-style inset groups */
+.group {
+  background: var(--soft);
+  border-radius: 10px;
+  padding: 0.15rem 0;
+  margin: 0.45rem 0 0.65rem;
+  border: 1px solid transparent;
+}
+.group > .group-row,
+.group > .group-block {
+  background: var(--panel);
+  margin: 0 0.15rem;
+  padding: 0.45rem 0.55rem;
+  border-bottom: 1px solid var(--line);
+}
+.group > .group-row:first-child,
+.group > .group-block:first-child {
+  border-radius: 9px 9px 0 0;
+}
+.group > .group-row:last-child,
+.group > .group-block:last-child {
+  border-bottom: 0;
+  border-radius: 0 0 9px 9px;
+}
+.group > .group-row:only-child,
+.group > .group-block:only-child {
+  border-radius: 9px;
+}
+.group .group-title {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin: 0 0 0.35rem;
+}
+.group .style-grid { max-height: 120px; }
+details.advanced {
+  margin: 0.35rem 0 0.65rem;
+  border-radius: 10px;
+  background: var(--soft);
+  padding: 0.15rem 0.55rem 0.45rem;
+}
+details.advanced > summary {
+  cursor: pointer;
+  list-style: none;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--muted);
+  padding: 0.45rem 0.15rem;
+  user-select: none;
+}
+details.advanced > summary::-webkit-details-marker { display: none; }
+details.advanced > summary::after {
+  content: " ›";
+  color: var(--faint);
+}
+details.advanced[open] > summary::after { content: " ˅"; }
+details.advanced .group { margin-top: 0.15rem; }
 .rail input[type="text"],
 .rail input[type="number"],
 .rail input[type="file"],
@@ -231,6 +312,18 @@ button { cursor: pointer; }
 .rail button,
 .transport button,
 .export-panel button,
+.stage-toolbar summary,
+.zoom-bar button,
+.seg button,
+.style-grid button,
+.type-rail button,
+.image-mode-grid button {
+  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease), color var(--dur) var(--ease), transform var(--press-dur) ease-out, box-shadow var(--dur) var(--ease);
+}
+.btn,
+.rail button,
+.transport button,
+.export-panel button,
 .stage-toolbar summary {
   display: inline-flex;
   align-items: center;
@@ -243,15 +336,25 @@ button { cursor: pointer; }
   color: var(--ink);
   font-size: 0.75rem;
   font-weight: 500;
-  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease), transform 80ms var(--ease);
 }
 .btn:hover,
 .rail button:hover,
-.transport button:hover {
+.transport button:hover,
+.zoom-bar button:hover {
   background: var(--soft);
 }
 .btn:active,
-.rail button:active { transform: scale(0.98); }
+.rail button:active,
+.transport button:active,
+.export-panel button:active,
+.stage-toolbar summary:active,
+.zoom-bar button:active,
+.seg button:active,
+.style-grid button:active,
+.type-rail button:active,
+.image-mode-grid button:active {
+  transform: scale(var(--press-scale));
+}
 .btn:disabled,
 .rail button:disabled,
 .export-panel button:disabled {
@@ -309,6 +412,35 @@ button { cursor: pointer; }
   color: var(--ink);
   box-shadow: 0 1px 2px rgba(29, 29, 31, 0.08);
 }
+.seg.mode-seg {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  width: 100%;
+  gap: 2px;
+}
+.seg.mode-seg button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: auto;
+  min-height: 28px;
+  padding: 0.3rem 0.4rem;
+  text-align: center;
+}
+.seg.mode-seg button strong {
+  display: block;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: inherit;
+}
+.seg.mode-seg button span {
+  display: block;
+  font-size: 0.5625rem;
+  color: var(--faint);
+  font-weight: 400;
+}
+.seg.mode-seg button.active span { color: var(--muted); }
 
 .style-grid {
   display: grid;
@@ -333,8 +465,15 @@ button { cursor: pointer; }
   white-space: nowrap;
 }
 .style-grid button.selected {
-  outline: 2px solid var(--ink);
-  outline-offset: -1px;
+  background: rgba(29, 29, 31, 0.08);
+  color: var(--ink);
+  border-color: transparent;
+  outline: none;
+  box-shadow: inset 0 0 0 1px rgba(29, 29, 31, 0.12);
+}
+.style-grid button.selected strong {
+  color: var(--ink);
+  font-weight: 600;
 }
 
 .pen-chips { display: flex; flex-wrap: wrap; gap: 0.3rem; margin: 0.35rem 0; }
@@ -379,33 +518,7 @@ button { cursor: pointer; }
   color: #fff;
 }
 
-.image-mode-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.3rem;
-  margin: 0.35rem 0 0.55rem;
-}
-.image-mode-grid button {
-  height: auto;
-  text-align: left;
-  padding: 0.4rem 0.45rem;
-}
-.image-mode-grid button strong {
-  display: block;
-  font-size: 0.75rem;
-  color: var(--ink);
-}
-.image-mode-grid button span {
-  font-size: 0.625rem;
-  color: var(--faint);
-}
-.image-mode-grid button.active {
-  background: var(--ink);
-  color: #fff;
-  border-color: var(--ink);
-}
-.image-mode-grid button.active strong,
-.image-mode-grid button.active span { color: inherit; }
+.image-mode-grid { display: none !important; } /* replaced by .seg.mode-seg */
 
 .portrait-drop {
   border: 1px dashed var(--line);
@@ -415,9 +528,10 @@ button { cursor: pointer; }
   color: var(--muted);
   font-size: 0.75rem;
   background: var(--soft);
-  margin: 0.45rem 0 0.65rem;
+  margin: 0.15rem 0 0.35rem;
 }
 .portrait-drop.has-file { border-style: solid; color: var(--text); }
+.group .portrait-drop { background: var(--soft); }
 
 .mode-toggle { margin: 0.35rem 0 0.55rem; }
 .mode-toggle button.active {
@@ -496,6 +610,7 @@ button { cursor: pointer; }
   min-height: 0;
   background: var(--desk);
   padding: 0.65rem 0.85rem 0.75rem;
+  position: relative;
 }
 .stage-head {
   display: flex;
@@ -519,11 +634,53 @@ button { cursor: pointer; }
   justify-content: center;
   position: relative;
   background:
-    radial-gradient(1200px 600px at 50% 40%, #ffffff 0%, transparent 55%),
-    var(--desk);
+    radial-gradient(ellipse 70% 55% at 50% 42%, rgba(255, 255, 255, 0.9) 0%, transparent 62%),
+    radial-gradient(ellipse 90% 70% at 50% 100%, rgba(29, 29, 31, 0.06) 0%, transparent 50%),
+    repeating-linear-gradient(
+      90deg,
+      rgba(29, 29, 31, 0.015) 0,
+      rgba(29, 29, 31, 0.015) 1px,
+      transparent 1px,
+      transparent 7px
+    ),
+    linear-gradient(180deg, #f7f7f9 0%, #ececf0 100%);
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: 14px;
   overflow: hidden;
+  padding-bottom: 3.25rem; /* room for floating craft bar */
+}
+.paper-desk::before {
+  content: "";
+  position: absolute;
+  left: 12%;
+  right: 12%;
+  bottom: 18%;
+  height: 28%;
+  background: radial-gradient(ellipse at center, rgba(29, 29, 31, 0.07) 0%, transparent 70%);
+  pointer-events: none;
+  z-index: 0;
+}
+.sheet-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 2;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  letter-spacing: -0.01em;
+  opacity: 0;
+  transition: opacity 220ms var(--ease);
+}
+.paper-desk.is-empty .sheet-empty { opacity: 0.85; }
+.paper-desk.is-loading .paper-sheet canvas {
+  animation: sheet-shimmer 1.1s ease-in-out infinite;
+}
+@keyframes sheet-shimmer {
+  0%, 100% { filter: brightness(1); }
+  50% { filter: brightness(0.97); }
 }
 
 .sheet-wrap {
@@ -533,9 +690,18 @@ button { cursor: pointer; }
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 0.65rem 0.85rem;
+  padding: 0.65rem 0.85rem 0.35rem;
   gap: 0.45rem;
   min-height: 0;
+  position: relative;
+  z-index: 1;
+  opacity: 1;
+  transform: scale(1);
+  transition: opacity 280ms var(--ease), transform 320ms var(--ease);
+}
+.sheet-wrap.is-entering {
+  opacity: 0;
+  transform: scale(0.985);
 }
 .sheet-meta {
   display: flex;
@@ -589,7 +755,8 @@ button { cursor: pointer; }
   max-width: 100%;
   max-height: min(82vh, 920px);
   background: #fff;
-  border: 1px solid rgba(29, 29, 31, 0.08);
+  border: 1px solid rgba(29, 29, 31, 0.1);
+  border-top-color: rgba(255, 255, 255, 0.85);
   border-radius: 2px;
   box-shadow: var(--paper-shadow);
   aspect-ratio: 3 / 4;
@@ -628,13 +795,39 @@ button { cursor: pointer; }
   background: #fff;
 }
 
-/* —— Stage toolbar —— */
+/* —— Stage toolbar (floating craft capsule) —— */
 .stage-toolbar {
+  position: absolute;
+  left: 50%;
+  bottom: 0.65rem;
+  transform: translateX(-50%);
+  z-index: 8;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.55rem;
-  margin-top: 0.55rem;
+  justify-content: center;
+  gap: 0.45rem 0.65rem;
+  max-width: calc(100% - 1.5rem);
+  padding: 0.35rem 0.55rem;
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(18px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  border-top-color: rgba(255, 255, 255, 0.85);
+  border-radius: 999px;
+  box-shadow: 0 8px 28px rgba(29, 29, 31, 0.12), 0 1px 0 rgba(255, 255, 255, 0.5) inset;
+}
+.stage-toolbar .btn,
+.stage-toolbar summary,
+.stage-toolbar .zoom-bar button {
+  border-color: transparent;
+  background: transparent;
+  height: 26px;
+  border-radius: 999px;
+}
+.stage-toolbar .btn:hover,
+.stage-toolbar summary:hover,
+.stage-toolbar .zoom-bar button:hover {
+  background: rgba(29, 29, 31, 0.06);
 }
 .zoom-bar button { min-width: 28px; }
 .zoom-label {
@@ -721,3 +914,42 @@ button { cursor: pointer; }
 .letters-lab, .layout.lab { display: contents; }
 .controls .primary { /* covered by .btn-primary */ }
 .link { color: var(--focus); }
+
+/* Apple-design §14 — reduced motion / transparency */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .btn:active,
+  .rail button:active,
+  .tabs button:active,
+  .seg button:active,
+  .style-grid button:active,
+  .zoom-bar button:active,
+  .transport button:active,
+  .type-rail button:active {
+    transform: none;
+  }
+  /* Cross-fade sheet swaps; no scale springs */
+  .sheet-wrap {
+    transition: opacity 200ms ease !important;
+    transition-duration: 200ms !important;
+    transform: none !important;
+  }
+  .sheet-wrap.is-entering {
+    opacity: 0;
+    transform: none !important;
+  }
+  .paper-desk.is-loading .paper-sheet canvas { animation: none; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .top,
+  .stage-toolbar {
+    background: #ffffff;
+    backdrop-filter: none;
+  }
+}
