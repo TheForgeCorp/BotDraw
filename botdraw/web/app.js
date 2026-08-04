@@ -19,6 +19,7 @@ let inspectorJson = null;
 
 const state = {
   paper: "A4",
+  orientation: "portrait",
   quality: "booth-balanced",
   seed: 42,
   density: 1.0,
@@ -27,11 +28,80 @@ const state = {
   rpm: 3,
 };
 
-document.getElementById("play").onclick = () => player.play();
-document.getElementById("pause").onclick = () => player.pause();
+/* ---------------- transport ---------------- */
+
+const playToggle = document.getElementById("play-toggle");
+const iconPlay = playToggle.querySelector(".i-play");
+const iconPause = playToggle.querySelector(".i-pause");
+const scrub = document.getElementById("scrub");
+const timeNow = document.getElementById("time-now");
+const timeTotal = document.getElementById("time-total");
+const ghostBtn = document.getElementById("ghost-btn");
+
+function fmtTime(s) {
+  s = Math.max(0, Math.round(s));
+  const m = Math.floor(s / 60);
+  return `${m}:${String(s % 60).padStart(2, "0")}`;
+}
+
+function setPlayIcon(playing) {
+  iconPlay.hidden = playing;
+  iconPause.hidden = !playing;
+  playToggle.setAttribute("aria-label", playing ? "Pause" : "Play");
+}
+
+playToggle.onclick = () => player.toggle();
 document.getElementById("skip").onclick = () => player.skipEnd();
-document.getElementById("speed").oninput = (e) => player.setSpeed(e.target.value);
-document.getElementById("ghost").onchange = (e) => player.setGhost(e.target.checked);
+document.getElementById("fit").onclick = () => player.fitView();
+
+player.onPlayState = setPlayIcon;
+player.onTime = (t, total, playing) => {
+  timeNow.textContent = fmtTime(t);
+  timeTotal.textContent = fmtTime(total);
+  const p = total > 0 ? (t / total) * 100 : 0;
+  scrub.value = String(Math.round(p * 10));
+  scrub.style.setProperty("--p", p);
+  setPlayIcon(playing);
+};
+
+scrub.addEventListener("input", () => {
+  player.seekFraction(Number(scrub.value) / 1000);
+});
+
+document.querySelectorAll("#speed-seg button").forEach((btn) => {
+  btn.onclick = () => {
+    document.querySelectorAll("#speed-seg button").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    player.setSpeed(btn.dataset.speed);
+  };
+});
+
+function toggleGhost() {
+  const on = ghostBtn.getAttribute("aria-pressed") !== "true";
+  ghostBtn.setAttribute("aria-pressed", String(on));
+  ghostBtn.classList.toggle("active", on);
+  player.setGhost(on);
+}
+ghostBtn.onclick = toggleGhost;
+
+document.addEventListener("keydown", (e) => {
+  const t = e.target;
+  if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) return;
+  if (e.code === "Space") {
+    e.preventDefault();
+    player.toggle();
+  } else if (e.key === "ArrowRight") {
+    e.preventDefault();
+    player.nudge(Math.max(2, player.duration * 0.02));
+  } else if (e.key === "ArrowLeft") {
+    e.preventDefault();
+    player.nudge(-Math.max(2, player.duration * 0.02));
+  } else if (e.key === "g" || e.key === "G") {
+    toggleGhost();
+  }
+});
+
+/* ---------------- app tabs / inspector tabs ---------------- */
 
 document.querySelectorAll("#tabs button").forEach((btn) => {
   btn.onclick = () => {
@@ -51,6 +121,8 @@ document.querySelectorAll(".insp-tabs button").forEach((btn) => {
   };
 });
 
+/* ---------------- helpers ---------------- */
+
 function downloadJson(filename, obj) {
   const blob = new Blob([JSON.stringify(obj, null, 2)], { type: "application/json" });
   const a = document.createElement("a");
@@ -66,6 +138,25 @@ async function api(path, opts) {
   return res.json();
 }
 
+async function withBusy(btn, fn) {
+  const b = typeof btn === "string" ? controls.querySelector(btn) : btn;
+  if (b) {
+    b.classList.add("loading");
+    b.disabled = true;
+  }
+  try {
+    return await fn();
+  } catch (e) {
+    statsEl.textContent = String(e.message || e);
+    console.error(e);
+  } finally {
+    if (b) {
+      b.classList.remove("loading");
+      b.disabled = false;
+    }
+  }
+}
+
 function field(label, html) {
   return `<label>${label}</label>${html}`;
 }
@@ -79,9 +170,36 @@ function num(id, fallback = 0) {
   return Number(val(id, fallback));
 }
 
+function segHtml(id, options, selected) {
+  return `<div class="seg-control mini wide" id="${id}" role="group">${options
+    .map(
+      (o) =>
+        `<button type="button" data-value="${o.value}" class="${o.value === selected ? "active" : ""}">${o.label}</button>`
+    )
+    .join("")}</div>`;
+}
+
+function bindSeg(id, onChange) {
+  const el = controls.querySelector(`#${id}`);
+  if (!el) return;
+  el.querySelectorAll("button").forEach((b) => {
+    b.onclick = () => {
+      el.querySelectorAll("button").forEach((x) => x.classList.remove("active"));
+      b.classList.add("active");
+      if (onChange) onChange(b.dataset.value);
+    };
+  });
+}
+
+function segVal(id, fallback) {
+  const el = controls.querySelector(`#${id} button.active`);
+  return el ? el.dataset.value : fallback;
+}
+
 function syncStateFromForm() {
   if (controls.querySelector("#paper")) state.paper = val("paper", state.paper);
-  if (controls.querySelector("#quality")) state.quality = val("quality", state.quality);
+  if (controls.querySelector("#orient")) state.orientation = segVal("orient", state.orientation);
+  if (controls.querySelector("#quality-seg")) state.quality = segVal("quality-seg", state.quality);
   if (controls.querySelector("#seed")) state.seed = num("seed", state.seed);
   if (controls.querySelector("#density")) state.density = num("density", state.density);
   if (controls.querySelector("#pen_up")) state.pen_up_speed_mm_s = num("pen_up", state.pen_up_speed_mm_s);
@@ -91,12 +209,13 @@ function syncStateFromForm() {
 }
 
 function setExportEnabled(on) {
-  ["export-pack", "export-settings", "export-layers", "export-motion", "export-palette", "copy-json"].forEach((id) => {
+  ["export-pack", "export-more"].forEach((id) => {
     document.getElementById(id).disabled = !on;
   });
 }
 
 function loadResult(data) {
+  if (!data) return;
   lastJob = data.job;
   lastPayload = data.emulator;
   lastLayers = data.layers || data.emulator?.layers || null;
@@ -109,6 +228,7 @@ function loadResult(data) {
     density: data.job?.params?.density,
   };
   player.load(lastPayload);
+  scrub.disabled = false;
   if (lastJob?.id) {
     downloadSvg.hidden = false;
     downloadSvg.href = `/api/jobs/${lastJob.id}/svg`;
@@ -146,11 +266,20 @@ function penChipsHtml(palette) {
 
 function commonDevOpts() {
   return `
-    <h4>Render settings</h4>
+    <h4>Page</h4>
     <div class="grid-2">
       ${field("Paper", `<select id="paper"><option>A4</option><option>Letter</option><option>A3</option><option>A5</option><option>Card</option></select>`)}
-      ${field("Quality", `<select id="quality"><option value="booth-fast">booth-fast</option><option value="booth-balanced">booth-balanced</option><option value="studio-hq">studio-hq</option></select>`)}
+      ${field("Orientation", segHtml("orient", [
+        { value: "portrait", label: "Portrait" },
+        { value: "landscape", label: "Landscape" },
+      ], state.orientation))}
     </div>
+    <h4>Render</h4>
+    ${field("Quality", segHtml("quality-seg", [
+      { value: "booth-fast", label: "Fast" },
+      { value: "booth-balanced", label: "Balanced" },
+      { value: "studio-hq", label: "HQ" },
+    ], state.quality))}
     <div class="grid-2">
       ${field("Seed", `<input id="seed" type="number" value="${state.seed}" />`)}
       ${field("Density", `<input id="density" type="number" step="0.1" value="${state.density}" />`)}
@@ -162,6 +291,7 @@ function commonDevOpts() {
     <h4>Palette</h4>
     ${field("Established palette", paletteSelectHtml())}
     ${penChipsHtml(currentPalette())}
+    <h4>Input</h4>
     ${field("Upload image (optional)", `<input id="photo" type="file" accept="image/*" />`)}
     ${field("Import settings JSON", `<input id="import-settings" type="file" accept="application/json,.json" />`)}
   `;
@@ -169,9 +299,9 @@ function commonDevOpts() {
 
 function applyCommonDefaults() {
   const paper = controls.querySelector("#paper");
-  const quality = controls.querySelector("#quality");
   if (paper) paper.value = state.paper;
-  if (quality) quality.value = state.quality;
+  bindSeg("orient", (v) => { state.orientation = v; });
+  bindSeg("quality-seg", (v) => { state.quality = v; });
   const palette = controls.querySelector("#palette");
   if (palette) {
     palette.onchange = () => {
@@ -188,6 +318,7 @@ function applyCommonDefaults() {
       const obj = JSON.parse(text);
       Object.assign(state, {
         paper: obj.paper || state.paper,
+        orientation: obj.orientation || state.orientation,
         quality: obj.quality || state.quality,
         seed: obj.seed ?? state.seed,
         density: obj.density ?? state.density,
@@ -233,6 +364,7 @@ async function renderWithSettings({ appName, busyText = "Rendering…", extraFor
     fd.append("palette_id", selectedPaletteId);
     fd.append("quality", state.quality);
     fd.append("paper", state.paper);
+    fd.append("orientation", state.orientation);
     fd.append("seed", String(state.seed));
     fd.append("density", String(state.density));
     fd.append("pen_up_speed_mm_s", String(state.pen_up_speed_mm_s));
@@ -248,6 +380,7 @@ async function renderWithSettings({ appName, busyText = "Rendering…", extraFor
         style_id: selectedStyle,
         palette_id: selectedPaletteId,
         paper: state.paper,
+        orientation: state.orientation,
         quality: state.quality,
         seed: state.seed,
         density: state.density,
@@ -259,11 +392,13 @@ async function renderWithSettings({ appName, busyText = "Rendering…", extraFor
   loadResult(data);
 }
 
+/* ---------------- app views ---------------- */
+
 function renderGenArt() {
   const list = styles.filter((s) => ["artistic", "pattern", "technical"].includes(s.category));
   if (!list.find((s) => s.id === selectedStyle)) selectedStyle = list[0]?.id || "stipple";
   controls.innerHTML = `
-    <h3>GenArtBot · Dev</h3>
+    <h3>GenArtBot</h3>
     <p class="muted">Tune vectorization + multicolor layers, then inspect / export JSON.</p>
     <h4>Style</h4>
     ${styleButtons(list)}
@@ -273,14 +408,14 @@ function renderGenArt() {
   bindStyleGrid();
   applyCommonDefaults();
   controls.querySelector("#go").onclick = () =>
-    renderWithSettings({ appName: "genartbot", busyText: "Rendering GenArt…" });
+    withBusy("#go", () => renderWithSettings({ appName: "genartbot", busyText: "Rendering GenArt…" }));
 }
 
 function renderPortrait() {
   const list = styles.filter((s) => s.category === "portrait");
   if (!list.find((s) => s.id === selectedStyle)) selectedStyle = list[0]?.id || "portrait_linework";
   controls.innerHTML = `
-    <h3>PortraitBot · Dev</h3>
+    <h3>PortraitBot</h3>
     <p class="muted">Face/image → style engine → palette-quantized layers.</p>
     <h4>Portrait style</h4>
     ${styleButtons(list)}
@@ -290,12 +425,12 @@ function renderPortrait() {
   bindStyleGrid();
   applyCommonDefaults();
   controls.querySelector("#go").onclick = () =>
-    renderWithSettings({ appName: "portraitbot", busyText: "Rendering portrait…" });
+    withBusy("#go", () => renderWithSettings({ appName: "portraitbot", busyText: "Rendering portrait…" }));
 }
 
 function renderLetters() {
   controls.innerHTML = `
-    <h3>LettersBot · Dev</h3>
+    <h3>LettersBot</h3>
     <p class="muted">Ink pass + highlighter overlay pass. Export settings/layers as JSON.</p>
     ${field("Names", `<input id="names" value="Aanya & Kabir" />`)}
     <div class="grid-2">
@@ -312,33 +447,34 @@ function renderLetters() {
     <div class="row"><button class="primary" id="go">Draft &amp; Inspect</button></div>
   `;
   applyCommonDefaults();
-  controls.querySelector("#go").onclick = async () => {
-    selectedPaletteId = val("palette", selectedPaletteId);
-    statsEl.textContent = "Drafting letter…";
-    const data = await api("/api/letters/draft", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        names: val("names"),
-        language: val("lang"),
-        era: val("era"),
-        mood: val("mood"),
-        facts: val("facts"),
-        guest_quote: val("quote") || null,
-        highlight: true,
-        palette_id: selectedPaletteId,
-        seed: num("seed", 7),
-      }),
+  controls.querySelector("#go").onclick = () =>
+    withBusy("#go", async () => {
+      selectedPaletteId = val("palette", selectedPaletteId);
+      statsEl.textContent = "Drafting letter…";
+      const data = await api("/api/letters/draft", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          names: val("names"),
+          language: val("lang"),
+          era: val("era"),
+          mood: val("mood"),
+          facts: val("facts"),
+          guest_quote: val("quote") || null,
+          highlight: true,
+          palette_id: selectedPaletteId,
+          seed: num("seed", 7),
+        }),
+      });
+      loadResult(data);
     });
-    loadResult(data);
-  };
 }
 
 function renderRdlab() {
   const list = styles.filter((s) => ["backlog", "pattern"].includes(s.category));
   if (!list.find((s) => s.id === selectedStyle)) selectedStyle = "spiral";
   controls.innerHTML = `
-    <h3>R&amp;D Lab · Dev</h3>
+    <h3>R&amp;D Lab</h3>
     <p class="muted">Experimental motifs + rotating-base kinematics.</p>
     <h4>Experiment</h4>
     ${styleButtons(list)}
@@ -348,26 +484,28 @@ function renderRdlab() {
   `;
   bindStyleGrid();
   applyCommonDefaults();
-  controls.querySelector("#go").onclick = async () => {
-    syncStateFromForm();
-    const file = controls.querySelector("#photo")?.files?.[0];
-    const fd = new FormData();
-    fd.append("style_id", selectedStyle);
-    fd.append("rpm", String(state.rpm));
-    fd.append("seed", String(state.seed));
-    fd.append("palette_id", selectedPaletteId);
-    fd.append("quality", state.quality);
-    fd.append("density", String(state.density));
-    if (file) fd.append("file", file);
-    statsEl.textContent = "R&D render…";
-    const data = await api("/api/rdlab/render", { method: "POST", body: fd });
-    loadResult(data);
-  };
+  controls.querySelector("#go").onclick = () =>
+    withBusy("#go", async () => {
+      syncStateFromForm();
+      const file = controls.querySelector("#photo")?.files?.[0];
+      const fd = new FormData();
+      fd.append("style_id", selectedStyle);
+      fd.append("rpm", String(state.rpm));
+      fd.append("seed", String(state.seed));
+      fd.append("palette_id", selectedPaletteId);
+      fd.append("quality", state.quality);
+      fd.append("density", String(state.density));
+      fd.append("orientation", state.orientation);
+      if (file) fd.append("file", file);
+      statsEl.textContent = "R&D render…";
+      const data = await api("/api/rdlab/render", { method: "POST", body: fd });
+      loadResult(data);
+    });
 }
 
 function renderPalettes() {
   const palette = currentPalette();
-  const pensHtml = (palette?.pens || []).map((pen, idx) => `
+  const penBlock = (pen, idx) => `
     <div class="pen-block" data-idx="${idx}">
       <div class="grid-2">
         ${field("id", `<input data-k="id" value="${pen.id}" />`)}
@@ -380,13 +518,13 @@ function renderPalettes() {
       <div class="grid-2">
         ${field("opacity", `<input data-k="opacity" type="number" step="0.05" min="0" max="1" value="${pen.profile?.opacity ?? 1}" />`)}
         ${field("nib", `<select data-k="nib_type">
-          ${["fineliner","marker","brush","calligraphy","highlighter"].map((n) =>
+          ${["fineliner", "marker", "brush", "calligraphy", "highlighter"].map((n) =>
             `<option ${((pen.profile?.nib_type) || "fineliner") === n ? "selected" : ""}>${n}</option>`
           ).join("")}
         </select>`)}
       </div>
     </div>
-  `).join("");
+  `;
 
   controls.innerHTML = `
     <h3>Palette Lab</h3>
@@ -396,7 +534,7 @@ function renderPalettes() {
     ${field("New palette id", `<input id="new_id" value="${palette?.id || "custom"}-dev" />`)}
     ${field("Name", `<input id="new_name" value="${palette?.name || "Custom"} (edited)" />`)}
     ${field("Paper notes", `<input id="paper_notes" value="${palette?.paper_notes || ""}" />`)}
-    <div class="pen-editor" id="pen-editor">${pensHtml}</div>
+    <div class="pen-editor" id="pen-editor">${(palette?.pens || []).map(penBlock).join("")}</div>
     <div class="row">
       <button class="primary" id="save-pal">Save palette JSON</button>
       <button id="export-pal-local">Download current JSON</button>
@@ -413,53 +551,51 @@ function renderPalettes() {
   controls.querySelector("#add-pen").onclick = () => {
     const editor = controls.querySelector("#pen-editor");
     const idx = editor.querySelectorAll(".pen-block").length;
-    editor.insertAdjacentHTML("beforeend", `
-      <div class="pen-block" data-idx="${idx}">
-        <div class="grid-2">
-          ${field("id", `<input data-k="id" value="pen${idx + 1}" />`)}
-          ${field("name", `<input data-k="name" value="Pen ${idx + 1}" />`)}
-        </div>
-        <div class="grid-2">
-          ${field("color", `<input data-k="color_hex" type="color" value="#336699" />`)}
-          ${field("width mm", `<input data-k="width_mm" type="number" step="0.1" value="0.5" />`)}
-        </div>
-        <div class="grid-2">
-          ${field("opacity", `<input data-k="opacity" type="number" step="0.05" min="0" max="1" value="1" />`)}
-          ${field("nib", `<select data-k="nib_type"><option>fineliner</option><option>marker</option><option>brush</option><option>calligraphy</option><option>highlighter</option></select>`)}
-        </div>
-      </div>`);
-  };
-  controls.querySelector("#save-pal").onclick = async () => {
-    const pens = [...controls.querySelectorAll(".pen-block")].map((block) => {
-      const get = (k) => block.querySelector(`[data-k="${k}"]`).value;
-      return {
-        id: get("id"),
-        name: get("name"),
-        color_hex: get("color_hex"),
-        profile: {
-          width_mm: Number(get("width_mm")),
-          opacity: Number(get("opacity")),
-          nib_type: get("nib_type"),
+    editor.insertAdjacentHTML(
+      "beforeend",
+      penBlock(
+        {
+          id: `pen${idx + 1}`,
+          name: `Pen ${idx + 1}`,
+          color_hex: "#336699",
+          profile: { width_mm: 0.5, opacity: 1, nib_type: "fineliner" },
         },
-      };
-    });
-    const body = {
-      id: val("new_id"),
-      name: val("new_name"),
-      paper_notes: val("paper_notes"),
-      pens,
-    };
-    const saved = await api("/api/palettes/save", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    palettes = await api("/api/palettes");
-    selectedPaletteId = saved.id;
-    downloadJson(`${saved.id}.json`, saved);
-    statsEl.textContent = `Saved palette ${saved.id}`;
-    renderControls();
+        idx
+      )
+    );
   };
+  controls.querySelector("#save-pal").onclick = () =>
+    withBusy("#save-pal", async () => {
+      const pens = [...controls.querySelectorAll(".pen-block")].map((block) => {
+        const get = (k) => block.querySelector(`[data-k="${k}"]`).value;
+        return {
+          id: get("id"),
+          name: get("name"),
+          color_hex: get("color_hex"),
+          profile: {
+            width_mm: Number(get("width_mm")),
+            opacity: Number(get("opacity")),
+            nib_type: get("nib_type"),
+          },
+        };
+      });
+      const body = {
+        id: val("new_id"),
+        name: val("new_name"),
+        paper_notes: val("paper_notes"),
+        pens,
+      };
+      const saved = await api("/api/palettes/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      palettes = await api("/api/palettes");
+      selectedPaletteId = saved.id;
+      downloadJson(`${saved.id}.json`, saved);
+      statsEl.textContent = `Saved palette ${saved.id}`;
+      renderControls();
+    });
 }
 
 function renderTools() {
@@ -473,49 +609,67 @@ function renderTools() {
     <div class="row"><button id="load-job">Load job into lab</button></div>
     <div class="row"><button id="stub">AxiDraw stub on last/job</button></div>
   `;
-  controls.querySelector("#audio").onclick = async () => {
-    const file = controls.querySelector("#wav").files[0];
-    statsEl.textContent = "Audio render…";
-    let data;
-    if (file) {
-      const fd = new FormData();
-      fd.append("file", file);
-      data = await api("/api/audio/upload", { method: "POST", body: fd });
-    } else {
-      data = await api("/api/audio/demo", { method: "POST" });
-    }
-    loadResult(data);
-  };
-  controls.querySelector("#hw").onclick = async () => {
-    await api("/api/handwriting/samples", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        user_id: "demo",
-        glyphs: {
-          H: [[[0,0],[0,10]],[[0,5],[6,5]],[[6,0],[6,10]]],
-          E: [[[0,0],[0,10],[6,10]],[[0,5],[5,5]],[[0,0],[6,0]]],
-          L: [[[0,0],[0,10],[6,10]]],
-          O: [[[1,0],[5,0],[7,2],[7,8],[5,10],[1,10],[-1,8],[-1,2],[1,0]]],
-        },
-      }),
+  controls.querySelector("#audio").onclick = () =>
+    withBusy("#audio", async () => {
+      const file = controls.querySelector("#wav").files[0];
+      statsEl.textContent = "Audio render…";
+      let data;
+      if (file) {
+        const fd = new FormData();
+        fd.append("file", file);
+        data = await api("/api/audio/upload", { method: "POST", body: fd });
+      } else {
+        data = await api("/api/audio/demo", { method: "POST" });
+      }
+      loadResult(data);
     });
-    const data = await api("/api/handwriting/render?user_id=demo&text=HELLO", { method: "POST" });
-    loadResult(data);
-  };
-  controls.querySelector("#load-job").onclick = async () => {
-    const id = val("jobid") || lastJob?.id;
-    if (!id) return alert("No job id");
-    const data = await api(`/api/jobs/${id}`);
-    loadResult(data);
-  };
-  controls.querySelector("#stub").onclick = async () => {
-    const id = val("jobid") || lastJob?.id;
-    if (!id) return alert("Render or load a job first");
-    const data = await api(`/api/plot/stub?job_id=${id}`, { method: "POST" });
-    statsEl.textContent = `Stub ok · emu ${data.emulator_run.elapsed_s.toFixed(2)}s`;
-  };
+  controls.querySelector("#hw").onclick = () =>
+    withBusy("#hw", async () => {
+      await api("/api/handwriting/samples", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: "demo",
+          glyphs: {
+            H: [[[0, 0], [0, 10]], [[0, 5], [6, 5]], [[6, 0], [6, 10]]],
+            E: [[[0, 0], [0, 10], [6, 10]], [[0, 5], [5, 5]], [[0, 0], [6, 0]]],
+            L: [[[0, 0], [0, 10], [6, 10]]],
+            O: [[[1, 0], [5, 0], [7, 2], [7, 8], [5, 10], [1, 10], [-1, 8], [-1, 2], [1, 0]]],
+          },
+        }),
+      });
+      const data = await api("/api/handwriting/render?user_id=demo&text=HELLO", { method: "POST" });
+      loadResult(data);
+    });
+  controls.querySelector("#load-job").onclick = () =>
+    withBusy("#load-job", async () => {
+      const id = val("jobid") || lastJob?.id;
+      if (!id) {
+        statsEl.textContent = "No job id";
+        return;
+      }
+      const data = await api(`/api/jobs/${id}`);
+      loadResult(data);
+    });
+  controls.querySelector("#stub").onclick = () =>
+    withBusy("#stub", async () => {
+      const id = val("jobid") || lastJob?.id;
+      if (!id) {
+        statsEl.textContent = "Render or load a job first";
+        return;
+      }
+      const data = await api(`/api/plot/stub?job_id=${id}`, { method: "POST" });
+      statsEl.textContent = `Stub ok · emu ${data.emulator_run.elapsed_s.toFixed(2)}s`;
+    });
 }
+
+/* ---------------- inspector ---------------- */
+
+const EYE_SVG = `<svg width="15" height="15" viewBox="0 0 15 15" aria-hidden="true">
+  <path d="M1.2 7.5S3.6 3.4 7.5 3.4s6.3 4.1 6.3 4.1-2.4 4.1-6.3 4.1S1.2 7.5 1.2 7.5z" fill="none" stroke="currentColor" stroke-width="1.3"/>
+  <circle class="pupil" cx="7.5" cy="7.5" r="1.9" fill="currentColor"/>
+  <path class="strike" d="M2.5 12.5l10-10" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+</svg>`;
 
 function renderInspector() {
   if (inspTab === "layers") {
@@ -528,20 +682,24 @@ function renderInspector() {
       ${lastLayers.meta?.style ? `· style ${lastLayers.meta.style}` : ""}</p>
       ${lastLayers.passes.map((p) => `
         <div class="layer-row ${player.soloPassId === p.id ? "solo" : ""}" data-pass="${p.id}">
-          <input type="checkbox" class="vis" data-pass="${p.id}" checked />
+          <button type="button" class="vis" data-pass="${p.id}"
+            aria-pressed="${player.hiddenPassIds.has(p.id) ? "false" : "true"}"
+            aria-label="Toggle ${p.name}">${EYE_SVG}</button>
           <span class="swatch" style="background:${p.color_hex}; opacity:${p.opacity}"></span>
           <div>
             <div><strong>${p.name}</strong> <span class="muted">${p.kind}</span></div>
-            <div class="layer-meta">${p.pen_id} · ${p.color_hex} · ${p.width_mm}mm · ${p.nib_type}<br/>
-            polys ${p.polyline_count} · pts ${p.point_count}</div>
+            <div class="layer-meta">${p.pen_id} · ${p.color_hex} · ${p.width_mm}mm · ${p.nib_type} · polys ${p.polyline_count} · pts ${p.point_count}</div>
           </div>
-          <button type="button" data-solo="${p.id}">Solo</button>
+          <button type="button" class="solo-btn" data-solo="${p.id}">Solo</button>
         </div>
       `).join("")}
-      <p class="muted" style="margin-top:0.8rem">Toggle visibility to isolate colorization / layering behavior in the emulator.</p>
     `;
-    inspectorBody.querySelectorAll(".vis").forEach((cb) => {
-      cb.onchange = () => player.setPassVisible(cb.dataset.pass, cb.checked);
+    inspectorBody.querySelectorAll(".vis").forEach((btn) => {
+      btn.onclick = () => {
+        const visible = btn.getAttribute("aria-pressed") !== "true";
+        btn.setAttribute("aria-pressed", String(visible));
+        player.setPassVisible(btn.dataset.pass, visible);
+      };
     });
     inspectorBody.querySelectorAll("[data-solo]").forEach((btn) => {
       btn.onclick = () => {
@@ -557,7 +715,6 @@ function renderInspector() {
     inspectorBody.innerHTML = `<textarea class="json-view" readonly>${JSON.stringify(lastJob || { hint: "No job" }, null, 2)}</textarea>`;
     return;
   }
-  // json tab
   inspectorJson = {
     settings: lastSettings,
     layers: lastLayers,
@@ -578,12 +735,37 @@ async function renderControls() {
   return renderTools();
 }
 
+/* ---------------- export bar ---------------- */
+
+const moreBtn = document.getElementById("export-more");
+const exportMenu = document.getElementById("export-menu");
+
+function closeMenu() {
+  exportMenu.hidden = true;
+  moreBtn.setAttribute("aria-expanded", "false");
+}
+
+moreBtn.onclick = (e) => {
+  e.stopPropagation();
+  const open = exportMenu.hidden;
+  exportMenu.hidden = !open;
+  moreBtn.setAttribute("aria-expanded", String(open));
+};
+
+document.addEventListener("click", (e) => {
+  if (!exportMenu.hidden && !exportMenu.contains(e.target) && e.target !== moreBtn) closeMenu();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeMenu();
+});
+
 document.getElementById("export-pack").onclick = async () => {
   if (!lastJob?.id) return;
   const pack = await api(`/api/jobs/${lastJob.id}/export`);
   downloadJson(`botdraw-${lastJob.id}-pack.json`, pack);
 };
 document.getElementById("export-settings").onclick = () => {
+  closeMenu();
   const settings = lastSettings || {
     app: currentApp,
     style_id: selectedStyle,
@@ -593,18 +775,22 @@ document.getElementById("export-settings").onclick = () => {
   downloadJson(`botdraw-settings.json`, settings);
 };
 document.getElementById("export-layers").onclick = async () => {
+  closeMenu();
   if (lastLayers) return downloadJson(`botdraw-${lastJob?.id || "layers"}.json`, lastLayers);
   if (lastJob?.id) downloadJson(`botdraw-${lastJob.id}-layers.json`, await api(`/api/jobs/${lastJob.id}/layers`));
 };
 document.getElementById("export-motion").onclick = async () => {
+  closeMenu();
   if (!lastJob?.id) return;
   downloadJson(`botdraw-${lastJob.id}-motion.json`, await api(`/api/jobs/${lastJob.id}/motion`));
 };
 document.getElementById("export-palette").onclick = () => {
+  closeMenu();
   const pal = currentPalette();
   if (pal) downloadJson(`${pal.id}.json`, pal);
 };
 document.getElementById("copy-json").onclick = async () => {
+  closeMenu();
   const text = JSON.stringify(inspectorJson || lastSettings || {}, null, 2);
   await navigator.clipboard.writeText(text);
   statsEl.textContent = "Copied inspector JSON";
