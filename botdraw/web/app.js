@@ -351,7 +351,7 @@ function bindStyleGrid() {
   });
 }
 
-async function renderWithSettings({ appName, busyText = "Rendering…", extraFormData }) {
+async function renderWithSettings({ appName, busyText = "Rendering…", extraFormData, paramsExtra }) {
   syncStateFromForm();
   const file = controls.querySelector("#photo")?.files?.[0];
   statsEl.textContent = busyText;
@@ -369,24 +369,27 @@ async function renderWithSettings({ appName, busyText = "Rendering…", extraFor
     fd.append("density", String(state.density));
     fd.append("pen_up_speed_mm_s", String(state.pen_up_speed_mm_s));
     fd.append("pen_down_speed_mm_s", String(state.pen_down_speed_mm_s));
+    if (paramsExtra) fd.append("params_extra", JSON.stringify(paramsExtra));
     if (extraFormData) Object.entries(extraFormData).forEach(([k, v]) => fd.append(k, v));
     data = await api("/api/render/upload", { method: "POST", body: fd });
   } else {
+    const body = {
+      app: appName,
+      style_id: selectedStyle,
+      palette_id: selectedPaletteId,
+      paper: state.paper,
+      orientation: state.orientation,
+      quality: state.quality,
+      seed: state.seed,
+      density: state.density,
+      pen_up_speed_mm_s: state.pen_up_speed_mm_s,
+      pen_down_speed_mm_s: state.pen_down_speed_mm_s,
+    };
+    if (paramsExtra) body.params_extra = paramsExtra;
     data = await api("/api/render", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        app: appName,
-        style_id: selectedStyle,
-        palette_id: selectedPaletteId,
-        paper: state.paper,
-        orientation: state.orientation,
-        quality: state.quality,
-        seed: state.seed,
-        density: state.density,
-        pen_up_speed_mm_s: state.pen_up_speed_mm_s,
-        pen_down_speed_mm_s: state.pen_down_speed_mm_s,
-      }),
+      body: JSON.stringify(body),
     });
   }
   loadResult(data);
@@ -461,6 +464,43 @@ function renderFractal() {
   applyCommonDefaults();
   controls.querySelector("#go").onclick = () =>
     withBusy("#go", () => renderWithSettings({ appName: "fractalbot", busyText: "Rendering fractal…" }));
+}
+
+function designLibraryParams() {
+  const cols = Number(controls.querySelector("#ca-cols")?.value || 120);
+  const rows = Number(controls.querySelector("#ca-rows")?.value || 90);
+  const rule = Number(controls.querySelector("#ca-rule")?.value || 30);
+  return { cols, rows, rule };
+}
+
+function renderDesignLibrary() {
+  const list = styles.filter((s) => s.category === "design");
+  if (!list.find((s) => s.id === selectedStyle)) selectedStyle = list[0]?.id || "rule30";
+  controls.innerHTML = `
+    <h3>Design Library</h3>
+    <p class="muted">Math-derived and structured motifs for the plotter — pick a design, then vectorize.</p>
+    <h4>Math Derived</h4>
+    <p class="muted">Elementary cellular automata and related constructions.</p>
+    ${styleButtons(list)}
+    <h4>Automaton</h4>
+    <div class="grid-2">
+      ${field("Cols", `<input id="ca-cols" type="number" min="16" max="400" value="120" />`)}
+      ${field("Rows", `<input id="ca-rows" type="number" min="12" max="300" value="90" />`)}
+    </div>
+    ${field("Rule", `<input id="ca-rule" type="number" min="0" max="255" value="30" />`)}
+    ${fractalDevOpts()}
+    <div class="row"><button class="primary" id="go">Vectorize</button></div>
+  `;
+  bindStyleGrid();
+  applyCommonDefaults();
+  controls.querySelector("#go").onclick = () =>
+    withBusy("#go", () =>
+      renderWithSettings({
+        appName: "design",
+        busyText: "Vectorizing design…",
+        paramsExtra: designLibraryParams(),
+      })
+    );
 }
 
 function renderPortrait() {
@@ -781,6 +821,7 @@ async function renderControls() {
   if (!palettes.length) palettes = await api("/api/palettes");
   if (currentApp === "genartbot") return renderGenArt();
   if (currentApp === "fractalbot") return renderFractal();
+  if (currentApp === "design") return renderDesignLibrary();
   if (currentApp === "portraitbot") return renderPortrait();
   if (currentApp === "lettersbot") return renderLetters();
   if (currentApp === "rdlab") return renderRdlab();
