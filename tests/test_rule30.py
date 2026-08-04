@@ -1,8 +1,10 @@
-"""Rule 30 cellular automaton — Design Library (Math Derived)."""
+"""Design Library (Math Derived) — Rule 30 + Phyllotaxis."""
 
 from __future__ import annotations
 
-import numpy as np
+import math
+
+import pytest
 
 from botdraw.core.models import PaperSize, QualityPreset, StyleParams
 from botdraw.palettes import load_palette
@@ -59,3 +61,34 @@ def test_rule30_listed_under_design_category():
 
     ids = {s["id"] for s in list_styles(category="design")}
     assert "rule30" in ids
+    assert "phyllotaxis" in ids
+
+
+def test_phyllotaxis_points_and_render():
+    from botdraw.styles.design_library import GOLDEN_ANGLE_DEG, phyllotaxis_points
+
+    pts = phyllotaxis_points(900, angle_deg=GOLDEN_ANGLE_DEG, scale=1.0)
+    assert len(pts) == 900
+    assert pts[0] == (0.0, 0.0)
+    # Outer radius grows as √n
+    assert math.hypot(*pts[-1]) == pytest.approx(math.sqrt(899), rel=1e-9)
+
+    ensure_styles_loaded()
+    eng = get_style("phyllotaxis")
+    assert eng.category == "design"
+    palette = load_palette("default-6")
+    layered = eng.render(
+        palette=palette,
+        params=StyleParams(
+            seed=1,
+            quality=QualityPreset.BOOTH_BALANCED,
+            density=1.0,
+            extra={"n_points": 900, "angle_deg": 137.5},
+        ),
+        paper=PaperSize.A4,
+    )
+    assert layered.meta["style"] == "phyllotaxis"
+    assert layered.meta["subsection"] == "math_derived"
+    assert layered.meta["n_points"] == 900
+    assert layered.meta["angle_deg"] == 137.5
+    assert layered.meta["strokes"] == 900

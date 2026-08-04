@@ -1,6 +1,8 @@
-"""Design Library styles — Math Derived subsection (elementary CA, etc.)."""
+"""Design Library styles — Math Derived subsection (elementary CA, phyllotaxis, etc.)."""
 
 from __future__ import annotations
+
+import math
 
 import numpy as np
 
@@ -8,6 +10,9 @@ from botdraw.core.models import LayeredSVG, Orientation, PaperSize, Polyline, St
 from botdraw.core.svg import make_pass
 from botdraw.palettes import ink_pens
 from botdraw.styles import page_size, register
+
+# Golden angle (degrees) — most irrational rotation; Fibonacci spiral families
+GOLDEN_ANGLE_DEG = 137.5
 
 
 def evolve_cellular_automaton(
@@ -125,5 +130,93 @@ class _Rule30:
         )
 
 
-for _e in (_Rule30(),):
+def phyllotaxis_points(
+    n_points: int = 900,
+    *,
+    angle_deg: float = GOLDEN_ANGLE_DEG,
+    scale: float = 1.0,
+) -> list[tuple[float, float]]:
+    """Vogel sunflower model: r = c√i, θ = i·α. Returns unit-disk Cartesian points."""
+    n_points = max(1, int(n_points))
+    alpha = math.radians(float(angle_deg))
+    c = float(scale)
+    pts: list[tuple[float, float]] = []
+    for i in range(n_points):
+        r = c * math.sqrt(i)
+        th = i * alpha
+        pts.append((r * math.cos(th), r * math.sin(th)))
+    return pts
+
+
+class _Phyllotaxis:
+    id = "phyllotaxis"
+    name = "Phyllotaxis"
+    category = "design"
+    description = (
+        "Sunflower seed packing — Vogel model with golden angle 137.5°; "
+        "r = c√n, θ = n·137.5°; Fibonacci spiral families (default 900 points)"
+    )
+
+    def render(
+        self,
+        *,
+        palette,
+        params: StyleParams,
+        paper=PaperSize.A4,
+        orientation=Orientation.PORTRAIT,
+        image_path=None,
+        image_array=None,
+    ):
+        del image_path, image_array
+        extra = params.extra or {}
+        base_n = int(extra.get("n_points") or extra.get("points") or 900)
+        angle_deg = float(extra.get("angle_deg") or GOLDEN_ANGLE_DEG)
+        dens = max(0.5, float(params.density or 1.0))
+        n_points = max(50, int(round(base_n * dens)))
+
+        # Build in polar model space with c=1, then fit to page
+        raw = phyllotaxis_points(n_points, angle_deg=angle_deg, scale=1.0)
+        max_r = max((math.hypot(x, y) for x, y in raw), default=1.0) or 1.0
+
+        pw, ph = page_size(paper, orientation)
+        pen = ink_pens(palette)[0]
+        margin = 12.0
+        usable = min(pw, ph) - 2 * margin
+        page_scale = (usable * 0.5) / max_r
+        cx, cy = pw / 2, ph / 2
+
+        # Dot radius scales gently with density / count so 900 pts stay readable
+        dot_r = max(0.25, min(0.85, 7.5 / math.sqrt(n_points)))
+        circle_steps = 8
+        polys: list[Polyline] = []
+        for x, y in raw:
+            px = cx + x * page_scale
+            py = cy + y * page_scale
+            ring = [
+                (
+                    px + dot_r * math.cos(t),
+                    py + dot_r * math.sin(t),
+                )
+                for t in np.linspace(0, 2 * math.pi, circle_steps, endpoint=False)
+            ]
+            polys.append(Polyline(points=ring + [ring[0]], pen_id=pen.id, closed=True))
+
+        return LayeredSVG(
+            width_mm=pw,
+            height_mm=ph,
+            passes=[make_pass("phyllotaxis", "Phyllotaxis", pen.id, polys)],
+            seed=params.seed,
+            meta={
+                "style": self.id,
+                "library": "design",
+                "subsection": "math_derived",
+                "n_points": n_points,
+                "angle_deg": angle_deg,
+                "equation": "r = c√n ; θ = n × 137.5°",
+                "strokes": len(polys),
+            },
+        )
+
+
+for _e in (_Rule30(), _Phyllotaxis()):
     register(_e)

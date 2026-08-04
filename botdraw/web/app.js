@@ -467,10 +467,38 @@ function renderFractal() {
 }
 
 function designLibraryParams() {
-  const cols = Number(controls.querySelector("#ca-cols")?.value || 120);
-  const rows = Number(controls.querySelector("#ca-rows")?.value || 90);
-  const rule = Number(controls.querySelector("#ca-rule")?.value || 30);
-  return { cols, rows, rule };
+  if (selectedStyle === "phyllotaxis") {
+    return {
+      n_points: Number(controls.querySelector("#phy-points")?.value || 900),
+      angle_deg: Number(controls.querySelector("#phy-angle")?.value || 137.5),
+    };
+  }
+  return {
+    cols: Number(controls.querySelector("#ca-cols")?.value || 120),
+    rows: Number(controls.querySelector("#ca-rows")?.value || 90),
+    rule: Number(controls.querySelector("#ca-rule")?.value || 30),
+  };
+}
+
+function designLibraryKnobsHtml() {
+  if (selectedStyle === "phyllotaxis") {
+    return `
+      <h4>Sunflower</h4>
+      <p class="muted">r = c√n · θ = n × golden angle — Fibonacci spiral families.</p>
+      <div class="grid-2">
+        ${field("Points", `<input id="phy-points" type="number" min="50" max="4000" value="900" />`)}
+        ${field("Angle °", `<input id="phy-angle" type="number" min="1" max="179" step="0.1" value="137.5" />`)}
+      </div>
+    `;
+  }
+  return `
+    <h4>Automaton</h4>
+    <div class="grid-2">
+      ${field("Cols", `<input id="ca-cols" type="number" min="16" max="400" value="120" />`)}
+      ${field("Rows", `<input id="ca-rows" type="number" min="12" max="300" value="90" />`)}
+    </div>
+    ${field("Rule", `<input id="ca-rule" type="number" min="0" max="255" value="30" />`)}
+  `;
 }
 
 function renderDesignLibrary() {
@@ -480,14 +508,9 @@ function renderDesignLibrary() {
     <h3>Design Library</h3>
     <p class="muted">Math-derived and structured motifs for the plotter — pick a design, then vectorize.</p>
     <h4>Math Derived</h4>
-    <p class="muted">Elementary cellular automata and related constructions.</p>
+    <p class="muted">Cellular automata, phyllotaxis, and related constructions.</p>
     ${styleButtons(list)}
-    <h4>Automaton</h4>
-    <div class="grid-2">
-      ${field("Cols", `<input id="ca-cols" type="number" min="16" max="400" value="120" />`)}
-      ${field("Rows", `<input id="ca-rows" type="number" min="12" max="300" value="90" />`)}
-    </div>
-    ${field("Rule", `<input id="ca-rule" type="number" min="0" max="255" value="30" />`)}
+    ${designLibraryKnobsHtml()}
     ${fractalDevOpts()}
     <div class="row"><button class="primary" id="go">Vectorize</button></div>
   `;
