@@ -171,6 +171,7 @@ def render_job(
                 contour_simplify=extra.get("contour_simplify"),
                 hatch_size=extra.get("hatch_size"),
                 linedraw_jitter=extra.get("linedraw_jitter"),
+                ensemble=extra.get("ensemble"),
             )
             pv = assign_pens(pv, palette, pen_map=extra.get("pen_map"))
             ingest_id = pv.ingest_id

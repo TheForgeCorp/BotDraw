@@ -15,6 +15,7 @@ from botdraw.portrait.ornament import LINE_TYPES, StrokeOrnamentParams, decorate
 from botdraw.portrait.pens import apply_pen_overrides, assign_pens
 from botdraw.portrait.preview import portrait_vector_preview_dict, portrait_vector_raw_svg
 from botdraw.portrait.restyle import render_from_vector
+from botdraw.portrait.tone_variants import ENSEMBLE_RECIPES, ToneRecipe, apply_tone_recipe
 
 
 def preprocess_portrait_image(
@@ -57,10 +58,13 @@ def preprocess_portrait_image(
 
 __all__ = [
     "CropRect",
+    "ENSEMBLE_RECIPES",
     "LINE_TYPES",
     "PortraitVector",
     "StrokeOrnamentParams",
+    "ToneRecipe",
     "apply_pen_overrides",
+    "apply_tone_recipe",
     "assign_pens",
     "auto_frame_rgb",
     "decorate_layered",

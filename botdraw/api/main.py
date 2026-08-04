@@ -328,6 +328,7 @@ class PortraitIngestRequest(BaseModel):
     contour_simplify: Optional[int] = None
     hatch_size: Optional[int] = None
     linedraw_jitter: Optional[float] = None
+    ensemble: Optional[bool] = None
 
 
 def _portrait_ingest_response(pv, *, include_preview_png: bool = True) -> dict[str, Any]:
@@ -345,6 +346,7 @@ def _ingest_knobs_from_body(body: PortraitIngestRequest) -> dict[str, Any]:
         "contour_simplify": body.contour_simplify,
         "hatch_size": body.hatch_size,
         "linedraw_jitter": body.linedraw_jitter,
+        "ensemble": body.ensemble,
     }
 
 
@@ -403,6 +405,7 @@ async def api_portrait_ingest_upload(
     contour_simplify: Optional[int] = Form(None),
     hatch_size: Optional[int] = Form(None),
     linedraw_jitter: Optional[float] = Form(None),
+    ensemble: Optional[str] = Form(None),
     file: UploadFile = File(...),
 ):
     from uuid import uuid4
@@ -416,6 +419,9 @@ async def api_portrait_ingest_upload(
             crop_obj = json.loads(crop)
         except json.JSONDecodeError:
             crop_obj = None
+    ensemble_flag: bool | None = None
+    if ensemble is not None and str(ensemble).strip() != "":
+        ensemble_flag = str(ensemble).strip().lower() in ("1", "true", "yes", "on")
     tmp = artifact_dir(uuid4().hex[:8]) / (file.filename or "upload.png")
     raw = await file.read()
     tmp.write_bytes(raw)
@@ -437,6 +443,7 @@ async def api_portrait_ingest_upload(
         contour_simplify=contour_simplify,
         hatch_size=hatch_size,
         linedraw_jitter=linedraw_jitter,
+        ensemble=ensemble_flag,
     )
     data = _portrait_ingest_response(pv, include_preview_png=include_preview_png)
     data["cache_hit"] = hit

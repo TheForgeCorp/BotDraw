@@ -866,3 +866,176 @@ def linedraw_edges_and_hatch(
     edges_mm = polylines_to_mm(contours_px, img_w=w, img_h=h, page_w=page_w, page_h=page_h)
     hatch_mm = polylines_to_mm(hatch_px, img_w=w, img_h=h, page_w=page_w, page_h=page_h)
     return edges_mm, hatch_mm, edge_map
+
+
+def edge_polylines_from_lum(
+    lum: np.ndarray,
+    *,
+    contour_simplify: int = 2,
+    jitter: float = 0.04,
+    seed: int = 0,
+    max_paths: int = 2000,
+) -> tuple[list[list[tuple[float, float]]], np.ndarray]:
+    """Edges only in pixel space (ensemble variant pass)."""
+    lum_u8 = autocontrast_lum(np.asarray(lum, dtype=np.float32), cutoff=10.0).astype(np.float32)
+    return contours_from_lum(
+        lum_u8,
+        simplify=contour_simplify,
+        jitter=jitter,
+        seed=seed,
+        max_paths=max_paths,
+    )
+
+
+def polylines_to_ink_map(
+    polylines_px: list[list[tuple[float, float]]],
+    *,
+    height: int,
+    width: int,
+    stroke_radius: int = 1,
+) -> np.ndarray:
+    """Rasterize polylines into a float ink accumulator (pixel coords)."""
+    from PIL import ImageDraw
+
+    h, w = int(height), int(width)
+    canvas = Image.new("L", (w, h), 0)
+    draw = ImageDraw.Draw(canvas)
+    width_px = max(1, int(stroke_radius) * 2 + 1)
+    for pts in polylines_px:
+        if len(pts) < 2:
+            continue
+        xy = [(float(x), float(y)) for x, y in pts]
+        draw.line(xy, fill=255, width=width_px)
+    return (np.asarray(canvas, dtype=np.float32) / 255.0).astype(np.float32)
+
+
+def consensus_from_ink_maps(
+    ink_maps: Sequence[np.ndarray],
+    *,
+    core_votes: int = 2,
+    fill_votes: int = 1,
+) -> np.ndarray:
+    """
+    Vote across variant ink maps.
+
+    Pixels seen in ≥ core_votes variants form the core skeleton ink.
+    Fill candidates (≥ fill_votes) are kept when they bridge into the core
+    (geodesic grow) so complementary gap edges survive without free noise.
+    """
+    if not ink_maps:
+        return np.zeros((8, 8), dtype=bool)
+    stack = np.stack([(m > 0.15).astype(np.uint8) for m in ink_maps], axis=0)
+    votes = stack.sum(axis=0)
+    core = votes >= int(core_votes)
+    fill = votes >= int(fill_votes)
+    strong = votes >= max(int(core_votes), 2)
+    from numpy.lib.stride_tricks import sliding_window_view
+
+    grown = (core | strong).astype(bool)
+    fill_pool = fill.astype(bool)
+    for _ in range(24):
+        pad = np.pad(grown.astype(np.uint8), 1, mode="constant")
+        dil = sliding_window_view(pad, (3, 3)).max(axis=(2, 3)).astype(bool)
+        nxt = grown | (dil & fill_pool)
+        if int(nxt.sum()) == int(grown.sum()):
+            break
+        grown = nxt
+    return grown.astype(bool)
+
+
+def contours_from_edge_mask(
+    mask: np.ndarray,
+    *,
+    simplify: int = 2,
+    jitter: float = 0.04,
+    seed: int = 0,
+    max_paths: int = 2000,
+) -> list[list[tuple[float, float]]]:
+    """
+    Sixth-pass vectorize: skeleton + chain walk on a consensus edge mask.
+
+    Does not re-run photo edge detection — traces the voted ink map only.
+    """
+    h0, w0 = mask.shape
+    strength = max(1, int(simplify))
+    sc = 2 if strength >= 3 else 1
+    w_s = max(8, w0 // sc)
+    h_s = max(8, int(round(h0 * (w_s / w0))))
+    mask_s0 = np.asarray(
+        Image.fromarray((np.asarray(mask, dtype=bool).astype(np.uint8) * 255), mode="L").resize(
+            (w_s, h_s), Image.Resampling.NEAREST
+        ),
+        dtype=np.uint8,
+    ) > 127
+
+    th_max = 420
+    th_sc = max(1, int(math.ceil(max(w_s, h_s) / th_max)))
+    if th_sc > 1:
+        tw, th = max(8, w_s // th_sc), max(8, h_s // th_sc)
+        mask_thin = np.asarray(
+            Image.fromarray((mask_s0.astype(np.uint8) * 255), mode="L").resize(
+                (tw, th), Image.Resampling.NEAREST
+            ),
+            dtype=np.uint8,
+        ) > 127
+    else:
+        mask_thin = mask_s0
+
+    skel_s = _zhang_suen_thin(mask_thin, max_iter=14 if strength <= 2 else 10)
+    skel_s = _spur_prune(skel_s, min_spur=5 if strength <= 1 else 4)
+    if th_sc > 1:
+        skel = np.asarray(
+            Image.fromarray((skel_s.astype(np.uint8) * 255), mode="L").resize(
+                (w_s, h_s), Image.Resampling.NEAREST
+            ),
+            dtype=np.uint8,
+        ) > 127
+    else:
+        skel = skel_s
+
+    # Residual ink not covered by skeleton (gap fillers)
+    from numpy.lib.stride_tricks import sliding_window_view as _swv
+
+    skel_pad = np.pad(skel.astype(np.uint8), 1, mode="constant")
+    skel_dil = _swv(skel_pad, (3, 3)).max(axis=(2, 3)).astype(bool)
+    trace_mask = skel | (mask_s0 & ~skel_dil)
+
+    min_len = 14 if strength <= 1 else (12 if strength == 2 else 8)
+    contours = _trace_edge_chains(trace_mask, min_len=min_len)
+
+    # Long dual-axis strokes from consensus mask (structure)
+    dots1 = _getdots(mask_s0)
+    c1 = _connectdots(dots1)
+    pil = Image.fromarray(mask_s0.astype(np.uint8) * 255, mode="L")
+    pil2 = pil.rotate(-90, expand=True).transpose(Image.FLIP_LEFT_RIGHT)
+    mask2 = np.asarray(pil2, dtype=np.uint8) > 127
+    dots2 = _getdots(mask2)
+    c2 = _connectdots(dots2)
+    c2_mapped: list[list[tuple[int, int]]] = [[(p[1], p[0]) for p in c] for c in c2]
+    sil_min = max(28, min_len * 2)
+    for c in c1 + c2_mapped:
+        if len(c) >= sil_min:
+            contours.append([(float(x), float(y)) for x, y in c])
+
+    contours = _merge_bidirectional(contours, dist_thresh=10.0 if strength <= 1 else 12.0)
+    contours = _merge_bidirectional(contours, dist_thresh=6.0 if strength <= 1 else 8.0)
+
+    step = 2 if strength <= 2 else 3
+    contours = _subsample(contours, step=step)
+    scaled: list[list[tuple[float, float]]] = [[(x * sc, y * sc) for x, y in c] for c in contours]
+    tol = 1.2 if strength <= 1 else (1.55 if strength == 2 else 2.0)
+    scaled = _dp_simplify_px(scaled, tolerance=tol * float(sc))
+
+    def plen(pts):
+        t = 0.0
+        for i in range(1, len(pts)):
+            t += math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1])
+        return t
+
+    min_px = 20.0 if strength <= 1 else (16.0 if strength == 2 else 10.0)
+    scaled = [c for c in scaled if plen(c) >= min_px]
+    scaled.sort(key=plen, reverse=True)
+    scaled = scaled[:max_paths]
+    amount = 2.0 * float(jitter)
+    scaled = _apply_jitter(scaled, amount_px=amount, seed=seed)
+    return scaled[:max_paths]

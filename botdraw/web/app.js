@@ -32,6 +32,7 @@ let portraitShowRegions = true;
 let portraitShowCrop = true;
 let portraitShowHatch = true;
 let portraitHatchEnabled = true;
+let portraitEnsemble = null; // null = auto (studio-hq photo on); bool overrides
 let portraitIngestTimer = null;
 let portraitPenMap = null;
 const PORTRAIT_LINE_TYPES = [
@@ -801,9 +802,12 @@ function renderPortrait() {
     <div class="row" style="margin-top:0.35rem">
       <label><input type="checkbox" id="auto-frame" ${portraitAutoFrame ? "checked" : ""}/> Auto frame subject</label>
       <label><input type="checkbox" id="hatch-shading" ${portraitHatchEnabled ? "checked" : ""}/> Hatch shading</label>
+      <label title="5 tone variants + consensus pass (studio-hq photo; booth stays single-pass)"><input type="checkbox" id="ensemble-5plus1" ${
+        portraitEnsemble === true || (portraitEnsemble == null && state.quality === "studio-hq" && portraitImageMode === "photo") ? "checked" : ""
+      }/> Ensemble (5+1)</label>
       <button type="button" id="reset-frame">Reset frame</button>
     </div>
-    <p class="muted" style="margin-top:0.25rem">Ingest: teal contours · orange hatch · magenta regions. Quality preset drives detail.</p>
+    <p class="muted" style="margin-top:0.25rem">Ingest: teal contours · orange hatch · magenta regions. Quality preset drives detail. Ensemble auto-on for studio-hq photo.</p>
     <h4>Image type</h4>
     <div class="image-mode-grid" id="image-mode-grid">
       ${modes.map(([id, title, sub]) =>
@@ -909,6 +913,30 @@ function renderPortrait() {
           console.error(err);
         });
       }, 300);
+    };
+  }
+  const ensCb = root.querySelector("#ensemble-5plus1");
+  if (ensCb) {
+    ensCb.onchange = () => {
+      portraitEnsemble = !!ensCb.checked;
+      portraitForceReingest = true;
+      if (portraitIngestTimer) clearTimeout(portraitIngestTimer);
+      portraitIngestTimer = setTimeout(() => {
+        runPortraitIngest({ forceReingest: true }).catch((err) => {
+          if (portraitStatsEl) portraitStatsEl.textContent = portraitNetworkErrorMessage(err);
+          console.error(err);
+        });
+      }, 300);
+    };
+  }
+  const qualityEl = root.querySelector("#quality");
+  if (qualityEl) {
+    qualityEl.onchange = () => {
+      state.quality = qualityEl.value;
+      // Refresh ensemble checkbox default when quality changes and user hasn't forced
+      if (portraitEnsemble == null && ensCb) {
+        ensCb.checked = state.quality === "studio-hq" && portraitImageMode === "photo";
+      }
     };
   }
   root.querySelector("#reset-frame").onclick = () => {
@@ -1018,6 +1046,8 @@ async function runPortraitIngest(opts = {}) {
   const cropJson = portraitCrop ? JSON.stringify(portraitCrop) : null;
   // hatch_size 0 = off; omit otherwise so quality defaults apply
   const knobs = portraitHatchEnabled ? {} : { hatch_size: 0 };
+  if (portraitEnsemble === true) knobs.ensemble = true;
+  if (portraitEnsemble === false) knobs.ensemble = false;
   if (portraitFile) {
     const uploadFile = await downscalePortraitForUpload(portraitFile, 1280);
     const fd = new FormData();
@@ -1029,6 +1059,8 @@ async function runPortraitIngest(opts = {}) {
     if (cropJson) fd.append("crop", cropJson);
     fd.append("include_preview_png", "true");
     if (!portraitHatchEnabled) fd.append("hatch_size", "0");
+    if (portraitEnsemble === true) fd.append("ensemble", "true");
+    if (portraitEnsemble === false) fd.append("ensemble", "false");
     fd.append("file", uploadFile, uploadFile.name || "portrait.jpg");
     data = await api("/api/portrait/ingest/upload", { method: "POST", body: fd });
   } else {
@@ -1062,6 +1094,7 @@ async function runPortraitIngest(opts = {}) {
       (timing.total != null ? ` · trace ${timing.total}s` : "") +
       (data.cache_hit ? " · cache" : "") +
       (portraitHatchEnabled ? "" : " · hatch off") +
+      (meta.ensemble?.enabled ? " · ensemble 5+1" : "") +
       ` · id ${portraitIngestId || "?"}`;
   }
   const applyBtn = root.querySelector("#portrait-apply");
@@ -1073,6 +1106,8 @@ function collectPortraitExtra(root, { reuse = false, forceReingest = false } = {
   portraitPaperId = root.querySelector("#paper-color")?.value || portraitPaperId;
   portraitLineType = root.querySelector("#line-type")?.value || portraitLineType;
   if (root.querySelector("#hatch-shading")) portraitHatchEnabled = !!root.querySelector("#hatch-shading").checked;
+  const ensEl = root.querySelector("#ensemble-5plus1");
+  if (ensEl) portraitEnsemble = !!ensEl.checked;
   const extra = {
     image_mode: portraitImageMode,
     paper_id: portraitPaperId,
@@ -1086,6 +1121,8 @@ function collectPortraitExtra(root, { reuse = false, forceReingest = false } = {
     auto_frame: portraitAutoFrame,
   };
   if (!portraitHatchEnabled) extra.hatch_size = 0;
+  if (portraitEnsemble === true) extra.ensemble = true;
+  if (portraitEnsemble === false) extra.ensemble = false;
   if (portraitCrop) extra.crop = portraitCrop;
   if (portraitPenMap) extra.pen_map = portraitPenMap;
   if (reuse && portraitIngestId && !forceReingest && !portraitForceReingest) {

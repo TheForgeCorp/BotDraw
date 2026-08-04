@@ -528,6 +528,20 @@ def _preprocess_array(
     return out
 
 
+def _resolve_ensemble(
+    ensemble: bool | None,
+    *,
+    quality: QualityPreset,
+    mode: str,
+) -> bool:
+    """Booth never ensembles; studio-hq photo auto-on; explicit flag otherwise."""
+    if quality in (QualityPreset.BOOTH_FAST, QualityPreset.BOOTH_BALANCED):
+        return False
+    if ensemble is None:
+        return (mode or "photo").lower() == "photo"
+    return bool(ensemble)
+
+
 def ingest_portrait(
     image_path: str | Path | None = None,
     *,
@@ -544,9 +558,20 @@ def ingest_portrait(
     contour_simplify: int | None = None,
     hatch_size: int | None = None,
     linedraw_jitter: float | None = None,
+    ensemble: bool | None = None,
 ) -> PortraitVector:
     """Load/crop/preprocess image and build PortraitVector (tone + edges + regions)."""
-    from botdraw.portrait.linedraw_edges import linedraw_edges_and_hatch
+    from botdraw.portrait.linedraw_edges import (
+        autocontrast_lum,
+        consensus_from_ink_maps,
+        contours_from_edge_mask,
+        edge_polylines_from_lum,
+        hatch_from_lum,
+        linedraw_edges_and_hatch,
+        polylines_to_ink_map,
+        polylines_to_mm,
+    )
+    from botdraw.portrait.tone_variants import ENSEMBLE_RECIPES, ToneRecipe, apply_tone_recipe
 
     t0 = time.perf_counter()
     quality_enum = quality if isinstance(quality, QualityPreset) else QualityPreset(quality)
@@ -555,6 +580,7 @@ def ingest_portrait(
     max_side = int(limits["image_max"])
     max_paths = int(limits["max_paths"])
     page_w, page_h = PAPER_MM[paper_enum]
+    use_ensemble = _resolve_ensemble(ensemble, quality=quality_enum, mode=mode or "photo")
 
     post_n = default_posterize_levels(quality_enum) if posterize_levels is None else int(posterize_levels)
     speckle = default_filter_speckle(quality_enum) if filter_speckle is None else int(filter_speckle)
@@ -599,9 +625,23 @@ def ingest_portrait(
     if scale < 1:
         img = img.resize((max(1, int(w0 * scale)), max(1, int(h0 * scale))), Image.Resampling.LANCZOS)
 
-    rgb = np.asarray(img, dtype=np.float32)
-    rgb = _preprocess_array(rgb, mode, posterize_levels=post_n, contrast=float(contrast))
+    rgb_cropped = np.asarray(img, dtype=np.float32)
+
+    ensemble_meta: dict[str, Any] = {"enabled": False}
+    t_variants = 0.0
+    if use_ensemble:
+        # Mode transforms only; each recipe owns contrast/hue/sat/shadow
+        rgb_mode = _preprocess_array(rgb_cropped, mode, posterize_levels=0, contrast=1.0)
+        recipes: list[ToneRecipe] = list(ENSEMBLE_RECIPES)
+        if abs(float(contrast) - 1.12) > 1e-3:
+            recipes[0] = ToneRecipe(id="base", contrast=float(contrast))
+        rgb = _posterize_rgb(apply_tone_recipe(rgb_mode, recipes[0]), post_n)
+    else:
+        rgb_mode = None
+        recipes = []
+        rgb = _preprocess_array(rgb_cropped, mode, posterize_levels=post_n, contrast=float(contrast))
     t_pre = time.perf_counter()
+    t_variants = t_pre
 
     lum = luminance(rgb)
     ink_target = np.clip(1.0 - lum / 255.0, 0.0, 1.0).astype(np.float32)
@@ -614,17 +654,68 @@ def ingest_portrait(
         max_paths,
         800 if quality_enum == QualityPreset.BOOTH_FAST else (2000 if quality_enum == QualityPreset.BOOTH_BALANCED else 3500),
     )
-    edge_polys, hatch_polys, edges = linedraw_edges_and_hatch(
-        lum.astype(np.float32),
-        page_w=page_w,
-        page_h=page_h,
-        contour_simplify=csimp,
-        hatch_size=hsize,
-        jitter=jitter,
-        seed=0,
-        max_edge_paths=edge_budget,
-        max_hatch_paths=hatch_budget,
-    )
+
+    if use_ensemble:
+        assert rgb_mode is not None
+        h_px, w_px = rgb.shape[:2]
+        ink_maps: list[np.ndarray] = []
+        recipe_ids: list[str] = []
+        variant_edge_counts: list[int] = []
+        for i, recipe in enumerate(recipes):
+            var_rgb = _posterize_rgb(apply_tone_recipe(rgb_mode, recipe), post_n)
+            var_lum = luminance(var_rgb).astype(np.float32)
+            var_budget = max(80, edge_budget // 2)
+            edges_px, _emap = edge_polylines_from_lum(
+                var_lum,
+                contour_simplify=csimp,
+                jitter=0.0,
+                seed=i * 17,
+                max_paths=var_budget,
+            )
+            ink_maps.append(polylines_to_ink_map(edges_px, height=h_px, width=w_px, stroke_radius=1))
+            recipe_ids.append(recipe.id)
+            variant_edge_counts.append(len(edges_px))
+        t_variants = time.perf_counter()
+
+        consensus = consensus_from_ink_maps(ink_maps, core_votes=2, fill_votes=1)
+        edges_px6 = contours_from_edge_mask(
+            consensus,
+            simplify=csimp,
+            jitter=jitter,
+            seed=99,
+            max_paths=edge_budget,
+        )
+        edge_polys = polylines_to_mm(edges_px6, img_w=w_px, img_h=h_px, page_w=page_w, page_h=page_h)
+        lum_u8 = autocontrast_lum(lum.astype(np.float32), cutoff=10.0).astype(np.float32)
+        hatch_px = hatch_from_lum(
+            lum_u8,
+            hatch_size=hsize,
+            jitter=jitter,
+            seed=1,
+            max_paths=hatch_budget,
+        )
+        hatch_polys = polylines_to_mm(hatch_px, img_w=w_px, img_h=h_px, page_w=page_w, page_h=page_h)
+        edges = consensus.astype(np.float32) * 255.0
+        ensemble_meta = {
+            "enabled": True,
+            "recipes": recipe_ids,
+            "variant_edge_counts": variant_edge_counts,
+            "core_votes": 2,
+            "fill_votes": 1,
+            "consensus_ink_px": int(consensus.sum()),
+        }
+    else:
+        edge_polys, hatch_polys, edges = linedraw_edges_and_hatch(
+            lum.astype(np.float32),
+            page_w=page_w,
+            page_h=page_h,
+            contour_simplify=csimp,
+            hatch_size=hsize,
+            jitter=jitter,
+            seed=0,
+            max_edge_paths=edge_budget,
+            max_hatch_paths=hatch_budget,
+        )
     t_edges = time.perf_counter()
 
     region_budget = min(
@@ -659,6 +750,15 @@ def ingest_portrait(
 
     h, w = rgb.shape[:2]
     ingest_id = uuid4().hex[:12]
+    timing: dict[str, float] = {
+        "preprocess": round(t_pre - t0, 4),
+        "edges": round(t_edges - t_pre, 4),
+        "trace": round(t_trace - t_edges, 4),
+        "total": round(t_trace - t0, 4),
+    }
+    if use_ensemble:
+        timing["ensemble_variants"] = round(t_variants - t_pre, 4)
+        timing["ensemble_consensus"] = round(t_edges - t_variants, 4)
     return PortraitVector(
         width_px=w,
         height_px=h,
@@ -677,12 +777,7 @@ def ingest_portrait(
         quality=quality_enum.value,
         ingest_id=ingest_id,
         meta={
-            "timing_s": {
-                "preprocess": round(t_pre - t0, 4),
-                "edges": round(t_edges - t_pre, 4),
-                "trace": round(t_trace - t_edges, 4),
-                "total": round(t_trace - t0, 4),
-            },
+            "timing_s": timing,
             "edge_count": len(edge_polys),
             "hatch_count": len(hatch_polys),
             "region_count": len(regions),
@@ -695,6 +790,7 @@ def ingest_portrait(
             "contour_simplify": csimp,
             "hatch_size": hsize,
             "linedraw_jitter": jitter,
-            "edge_extractor": "linedraw",
+            "edge_extractor": "linedraw_ensemble" if use_ensemble else "linedraw",
+            "ensemble": ensemble_meta,
         },
     )
