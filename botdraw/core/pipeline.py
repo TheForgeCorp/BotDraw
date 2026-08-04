@@ -35,6 +35,7 @@ def layers_summary(layered: LayeredSVG, palette: PaletteSet) -> dict:
                 "kind": p.kind,
                 "pen_id": p.pen_id,
                 "pen_name": pen.name,
+                "board_id": pen.resolved_board_id(),
                 "color_hex": pen.color_hex,
                 "width_mm": pen.profile.width_mm,
                 "opacity": opacity,

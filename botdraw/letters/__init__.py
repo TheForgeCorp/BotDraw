@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import unicodedata
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
-from botdraw.core.models import LayeredSVG, PAPER_MM, PaperSize, Polyline
+from botdraw.core.models import LayeredSVG, PAPER_MM, PaperSize, PassLayer, Polyline
 from botdraw.core.overlays import OverlayPassComposer
 from botdraw.core.svg import make_pass
 from botdraw.letters.fonts import glyph_for, load_font
@@ -225,6 +227,168 @@ def _pick_highlight_spans(spans: list[dict], highlight_words: list[str] | None) 
     return pool[mid : mid + 1]
 
 
+@dataclass
+class Margins:
+    left: float = 18.0
+    top: float = 18.0
+    right: float = 18.0
+    bottom: float = 18.0
+
+
+@dataclass
+class LetterLayerSpec:
+    """One text pass on the letter (own body, font, pen, language, offset)."""
+
+    id: str = "layer-0"
+    name: str = "Ink"
+    body: str = ""
+    font_name: str = "simplex"
+    size_mm: float = 4.5
+    pen_id: str = "ink"
+    language: str = "en"
+    translate_from_en: bool = False
+    offset_x_mm: float = 0.0
+    offset_y_mm: float = 0.0
+    kind: str = "ink"  # ink | highlight | accent
+    tracking: float = 0.15
+    humanize: float = 0.08
+    line_height: float | None = None
+    highlight_words: list[str] = field(default_factory=list)
+
+
+def render_letter_layers(
+    layers: list[LetterLayerSpec],
+    *,
+    palette_id: str = "wedding-highlight",
+    paper: PaperSize = PaperSize.A5,
+    orientation: str = "portrait",
+    margins: Margins | None = None,
+    seed: int = 7,
+    guest_quote: str | None = None,
+) -> LayeredSVG:
+    """Compose multiple text-pass layers into one LayeredSVG."""
+    margins = margins or Margins()
+    palette = load_palette(palette_id)
+    pw, ph = PAPER_MM[paper]
+    if orientation.lower() == "landscape":
+        pw, ph = ph, pw
+
+    max_width = max(10.0, pw - margins.left - margins.right)
+    passes: list[PassLayer] = []
+    missing_scripts: set[str] = set()
+    translate_pending = False
+    layer_meta: list[dict[str, Any]] = []
+
+    for idx, layer in enumerate(layers):
+        text = (layer.body or "").strip()
+        if idx == 0 and guest_quote and guest_quote not in text:
+            text = f'{text}\n\n"{guest_quote}"' if text else f'"{guest_quote}"'
+        lang = (layer.language or "en").lower()
+        if lang not in {"en", "english"} and layer.translate_from_en:
+            # Stub: do not translate yet; flag for UI/settings.
+            translate_pending = True
+        try:
+            pen = palette.pen_by_id(layer.pen_id)
+        except KeyError:
+            pen = palette.pens[0]
+
+        x = margins.left + layer.offset_x_mm
+        y = margins.top + 4.0 + layer.offset_y_mm
+        polys, spans, layout_meta = layout_text(
+            text,
+            x=x,
+            y=y,
+            pen_id=pen.id,
+            seed=seed + idx * 17,
+            max_width=max_width,
+            size_mm=layer.size_mm,
+            line_height=layer.line_height,
+            tracking=layer.tracking,
+            humanize=layer.humanize,
+            font_name=layer.font_name or "simplex",
+        )
+        missing_scripts.update(layout_meta.get("missing_scripts") or [])
+
+        kind = layer.kind or "ink"
+        if kind == "highlight" or pen.profile.nib_type.value == "highlighter":
+            # Highlighter: band over word spans (offset usually 0).
+            words = layer.highlight_words or None
+            chosen = _pick_highlight_spans(spans, words) if spans else []
+            if chosen:
+                composer = OverlayPassComposer()
+                # Build a temp layered to reuse highlight helper, then extract pass.
+                tmp = LayeredSVG(width_mm=pw, height_mm=ph, passes=[], seed=seed)
+                width = pen.profile.width_mm or 3.2
+                tmp = composer.highlight_spans(
+                    tmp, chosen, pen_id=pen.id, pad_mm=0.4, stroke_width_mm=width
+                )
+                if tmp.passes:
+                    hl = tmp.passes[-1]
+                    hl.id = layer.id or f"layer-{idx}"
+                    hl.name = layer.name or "Highlight"
+                    hl.kind = "highlight"
+                    passes.append(hl)
+            else:
+                # Fallback: draw text strokes with highlighter pen
+                passes.append(
+                    make_pass(
+                        layer.id or f"layer-{idx}",
+                        layer.name or f"Layer {idx + 1}",
+                        pen.id,
+                        polys,
+                        kind="highlight",
+                        opacity_override=pen.profile.opacity,
+                    )
+                )
+        else:
+            passes.append(
+                make_pass(
+                    layer.id or f"layer-{idx}",
+                    layer.name or f"Layer {idx + 1}",
+                    pen.id,
+                    polys,
+                    kind=kind,
+                )
+            )
+
+        layer_meta.append(
+            {
+                "id": layer.id,
+                "name": layer.name,
+                "font_name": layer.font_name,
+                "size_mm": layer.size_mm,
+                "pen_id": pen.id,
+                "board_id": pen.resolved_board_id(),
+                "language": lang,
+                "translate_from_en": layer.translate_from_en,
+                "offset_x_mm": layer.offset_x_mm,
+                "offset_y_mm": layer.offset_y_mm,
+                "kind": kind,
+            }
+        )
+
+    rtl = any((L.language or "").lower() in {"ur", "urdu"} for L in layers)
+    return LayeredSVG(
+        width_mm=pw,
+        height_mm=ph,
+        passes=passes,
+        seed=seed,
+        meta={
+            "margins": {
+                "left": margins.left,
+                "top": margins.top,
+                "right": margins.right,
+                "bottom": margins.bottom,
+            },
+            "layers": layer_meta,
+            "missing_scripts": sorted(missing_scripts),
+            "translate_pending": translate_pending,
+            "rtl": rtl,
+            "urdu_fallback": "naskh-or-block" if rtl else None,
+        },
+    )
+
+
 def render_letter(
     body: str,
     *,
@@ -241,59 +405,85 @@ def render_letter(
     font_name: str = "simplex",
     orientation: str = "portrait",
     margin_mm: float = 18.0,
+    margins: Margins | None = None,
+    pen_id: str | None = None,
 ) -> LayeredSVG:
+    """Backward-compatible single-layer render."""
     palette = load_palette(palette_id)
     ink = next((p for p in palette.pens if p.profile.nib_type.value != "highlighter"), palette.pens[0])
     high = next((p for p in palette.pens if p.profile.nib_type.value == "highlighter"), None)
-    pw, ph = PAPER_MM[paper]
-    if orientation.lower() == "landscape":
-        pw, ph = ph, pw
-    text = body.strip()
-    if guest_quote:
-        text = f'{text}\n\n"{guest_quote}"'
-    rtl = language.lower() in {"ur", "urdu"}
-    polys, spans, layout_meta = layout_text(
-        text,
-        x=margin_mm,
-        y=margin_mm + 4,
-        pen_id=ink.id,
+    m = margins or Margins(left=margin_mm, top=margin_mm, right=margin_mm, bottom=margin_mm)
+    layers = [
+        LetterLayerSpec(
+            id="letter-ink",
+            name="Letter ink",
+            body=body,
+            font_name=font_name,
+            size_mm=size_mm,
+            pen_id=pen_id or ink.id,
+            language=language,
+            tracking=tracking,
+            humanize=humanize,
+            line_height=line_height,
+            kind="ink",
+        )
+    ]
+    layered = render_letter_layers(
+        layers,
+        palette_id=palette_id,
+        paper=paper,
+        orientation=orientation,
+        margins=m,
         seed=seed,
-        max_width=pw - margin_mm * 2,
-        size_mm=size_mm,
-        line_height=line_height,
-        tracking=tracking,
-        humanize=humanize,
-        font_name=font_name,
+        guest_quote=guest_quote,
     )
-    layered = LayeredSVG(
-        width_mm=pw,
-        height_mm=ph,
-        passes=[make_pass("letter-ink", "Letter ink", ink.id, polys)],
-        seed=seed,
-        meta={
-            "language": language,
-            "rtl": rtl,
-            "urdu_fallback": "naskh-or-block" if rtl else None,
-            **layout_meta,
-        },
-    )
+    # Legacy: optional highlight pass when highlight_words provided (non-empty) or None (default mid).
     if high and highlight_words is not None:
-        # Explicit list (possibly empty): only highlight on non-empty keyword matches / default when None
         if highlight_words:
+            # Re-layout spans for highlight from first ink pass body
+            text = body.strip()
+            if guest_quote:
+                text = f'{text}\n\n"{guest_quote}"'
+            _, spans, _ = layout_text(
+                text,
+                x=m.left,
+                y=m.top + 4,
+                pen_id=ink.id,
+                seed=seed,
+                max_width=max(10.0, layered.width_mm - m.left - m.right),
+                size_mm=size_mm,
+                tracking=tracking,
+                humanize=0,
+                font_name=font_name,
+            )
             chosen = _pick_highlight_spans(spans, highlight_words)
             if chosen:
-                width = getattr(high.profile, "width_mm", 3.2) or 3.2
                 composer = OverlayPassComposer()
                 layered = composer.highlight_spans(
-                    layered, chosen, pen_id=high.id, pad_mm=0.4, stroke_width_mm=width
+                    layered, chosen, pen_id=high.id, pad_mm=0.4, stroke_width_mm=high.profile.width_mm or 3.2
                 )
-    elif high and highlight_words is None and spans:
-        chosen = _pick_highlight_spans(spans, None)
-        width = getattr(high.profile, "width_mm", 3.2) or 3.2
-        composer = OverlayPassComposer()
-        layered = composer.highlight_spans(
-            layered, chosen, pen_id=high.id, pad_mm=0.4, stroke_width_mm=width
+    elif high and highlight_words is None:
+        text = body.strip()
+        if guest_quote:
+            text = f'{text}\n\n"{guest_quote}"'
+        _, spans, _ = layout_text(
+            text,
+            x=m.left,
+            y=m.top + 4,
+            pen_id=ink.id,
+            seed=seed,
+            max_width=max(10.0, layered.width_mm - m.left - m.right),
+            size_mm=size_mm,
+            tracking=tracking,
+            humanize=0,
+            font_name=font_name,
         )
+        chosen = _pick_highlight_spans(spans, None)
+        if chosen:
+            composer = OverlayPassComposer()
+            layered = composer.highlight_spans(
+                layered, chosen, pen_id=high.id, pad_mm=0.4, stroke_width_mm=high.profile.width_mm or 3.2
+            )
     return layered
 
 

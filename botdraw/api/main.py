@@ -17,7 +17,8 @@ from botdraw.core.jobs import list_jobs, load_job
 from botdraw.core.models import PaperSize, QualityPreset
 from botdraw.core.pipeline import render_job
 from botdraw.handwriting import load_samples, render_with_clone, save_samples
-from botdraw.letters import render_letter
+from botdraw.letters import LetterLayerSpec, Margins, render_letter, render_letter_layers
+from botdraw.letters.fonts import list_fonts
 from botdraw.llm import draft_wedding_letter, is_loaded, try_local_ollama, unload
 from botdraw.palettes import calibrate_pen, create_palette, list_palette_ids, load_palette
 from botdraw.plotter.axidraw import AxiDrawDriverStub
@@ -60,6 +61,31 @@ class PaletteSaveRequest(BaseModel):
     pens: list[dict[str, Any]]
 
 
+class MarginsModel(BaseModel):
+    left: float = 18.0
+    top: float = 18.0
+    right: float = 18.0
+    bottom: float = 18.0
+
+
+class LetterLayerModel(BaseModel):
+    id: str = "layer-0"
+    name: str = "Ink"
+    body: str = ""
+    font_name: str = "simplex"
+    size_mm: float = 4.5
+    pen_id: str = "ink"
+    language: str = "en"
+    translate_from_en: bool = False
+    offset_x_mm: float = 0.0
+    offset_y_mm: float = 0.0
+    kind: str = "ink"
+    tracking: float = 0.15
+    humanize: float = 0.08
+    line_height: Optional[float] = None
+    highlight_words: list[str] = []
+
+
 class LetterRequest(BaseModel):
     names: str = "A & B"
     language: str = "en"
@@ -72,6 +98,7 @@ class LetterRequest(BaseModel):
     palette_id: str = "wedding-highlight"
     seed: int = 7
     paper: str = "A5"
+    letter_type: str = "personal"
     # Dev Lab default: skip Ollama. Booth / AI draft sets use_llm=true.
     use_llm: bool = False
     # If set, skip drafting and vectorize this body only (fast path).
@@ -83,6 +110,9 @@ class LetterRequest(BaseModel):
     tracking: float = 0.15
     humanize: float = 0.08
     orientation: str = "portrait"
+    font_name: str = "simplex"
+    margins: Optional[MarginsModel] = None
+    layers: Optional[list[LetterLayerModel]] = None
 
 
 class HandwritingSample(BaseModel):
@@ -199,15 +229,27 @@ async def api_render_upload(
     return {"job": job.model_dump(), "emulator": payload, "layers": layers}
 
 
+@app.get("/api/letters/fonts")
+def api_letter_fonts():
+    return {"fonts": list_fonts()}
+
+
 @app.post("/api/letters/draft")
 def api_letter_draft(body: LetterRequest):
     import time
 
     t0 = time.perf_counter()
-    if body.body and body.body.strip():
+    layer_models = body.layers or []
+    primary_body = None
+    if layer_models:
+        primary_body = (layer_models[0].body or "").strip() or None
+    if primary_body is None and body.body and body.body.strip():
+        primary_body = body.body.strip()
+
+    if primary_body:
         draft = {
             "source": "provided",
-            "body": body.body.strip(),
+            "body": primary_body,
             "motif": None,
         }
     elif body.use_llm:
@@ -220,9 +262,8 @@ def api_letter_draft(body: LetterRequest):
             facts=body.facts,
             guest_quote=body.guest_quote,
         )
-        # Keep Ollama warm across requests (unload only via explicit health/ops).
     else:
-        unload()  # ensure leftover provider does not slow the fast path
+        unload()
         draft = draft_wedding_letter(
             names=body.names,
             language=body.language,
@@ -234,26 +275,65 @@ def api_letter_draft(body: LetterRequest):
     t_draft = time.perf_counter() - t0
 
     t1 = time.perf_counter()
-    # Only append guest_quote in layout if not already embedded in a provided body.
-    quote_for_layout = None if (body.body and body.body.strip()) else body.guest_quote
-    if body.highlight:
-        hl_words = body.highlight_words if body.highlight_words is not None else ["forever", "heart", "love"]
+    quote_for_layout = None if primary_body else body.guest_quote
+    margins = body.margins or MarginsModel()
+    m = Margins(left=margins.left, top=margins.top, right=margins.right, bottom=margins.bottom)
+
+    if layer_models:
+        specs: list[LetterLayerSpec] = []
+        for i, lm in enumerate(layer_models):
+            btxt = (lm.body or "").strip()
+            if i == 0 and not btxt:
+                btxt = draft["body"]
+            specs.append(
+                LetterLayerSpec(
+                    id=lm.id or f"layer-{i}",
+                    name=lm.name or f"Layer {i + 1}",
+                    body=btxt,
+                    font_name=lm.font_name or body.font_name,
+                    size_mm=lm.size_mm,
+                    pen_id=lm.pen_id,
+                    language=lm.language or body.language,
+                    translate_from_en=lm.translate_from_en,
+                    offset_x_mm=lm.offset_x_mm,
+                    offset_y_mm=lm.offset_y_mm,
+                    kind=lm.kind,
+                    tracking=lm.tracking,
+                    humanize=lm.humanize,
+                    line_height=lm.line_height,
+                    highlight_words=list(lm.highlight_words or []),
+                )
+            )
+        layered = render_letter_layers(
+            specs,
+            palette_id=body.palette_id,
+            paper=PaperSize(body.paper),
+            orientation=body.orientation,
+            margins=m,
+            seed=body.seed,
+            guest_quote=quote_for_layout,
+        )
     else:
-        hl_words = []
-    layered = render_letter(
-        draft["body"],
-        palette_id=body.palette_id,
-        paper=PaperSize(body.paper),
-        language=body.language,
-        guest_quote=quote_for_layout,
-        highlight_words=hl_words,
-        seed=body.seed,
-        size_mm=body.size_mm,
-        line_height=body.line_height,
-        tracking=body.tracking,
-        humanize=body.humanize,
-        orientation=body.orientation,
-    )
+        if body.highlight:
+            hl_words = body.highlight_words if body.highlight_words is not None else ["forever", "heart", "love"]
+        else:
+            hl_words = []
+        layered = render_letter(
+            draft["body"],
+            palette_id=body.palette_id,
+            paper=PaperSize(body.paper),
+            language=body.language,
+            guest_quote=quote_for_layout,
+            highlight_words=hl_words,
+            seed=body.seed,
+            size_mm=body.size_mm,
+            line_height=body.line_height,
+            tracking=body.tracking,
+            humanize=body.humanize,
+            orientation=body.orientation,
+            margins=m,
+            font_name=body.font_name,
+        )
     from botdraw.core.optimize import optimize_layered
     from botdraw.core.motion_plan import compile_motion_plan
     from botdraw.core.jobs import artifact_dir, save_job
@@ -269,13 +349,16 @@ def api_letter_draft(body: LetterRequest):
     plan = compile_motion_plan(layered, palette)
     layers = layers_summary(layered, palette)
     t_vector = time.perf_counter() - t1
+    translate_pending = bool(layered.meta.get("translate_pending"))
     settings = {
         "app": "lettersbot",
         "style_id": "letter",
+        "letter_type": body.letter_type,
         "palette_id": body.palette_id,
         "seed": body.seed,
         "paper": body.paper,
         "orientation": body.orientation,
+        "margins": margins.model_dump(),
         "language": body.language,
         "era": body.era,
         "mood": body.mood,
@@ -285,10 +368,18 @@ def api_letter_draft(body: LetterRequest):
         "size_mm": body.size_mm,
         "tracking": body.tracking,
         "humanize": body.humanize,
+        "font_name": body.font_name,
         "use_llm": body.use_llm,
         "optimize": body.optimize,
         "draft_source": draft.get("source"),
         "missing_scripts": layered.meta.get("missing_scripts", []),
+        "translate_pending": translate_pending,
+        "translate_note": (
+            "AI translation not processed yet — English source kept; enable when translator ships."
+            if translate_pending
+            else None
+        ),
+        "letter_layers": layered.meta.get("layers", []),
         "timing_s": {"draft": round(t_draft, 3), "vectorize": round(t_vector, 3)},
     }
     job = JobRecord(app="lettersbot", style_id="letter", status=JobStatus.READY, seed=body.seed, palette_id=body.palette_id)

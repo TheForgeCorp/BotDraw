@@ -91,12 +91,20 @@
 
       <section class="letters-center panel">
         <div class="center-head">
-          <h2>Layers</h2>
-          <p class="muted">Pen by pass</p>
+          <div>
+            <h2>Layers</h2>
+            <p class="muted">Text passes · pen · offset</p>
+          </div>
+          <div class="layer-actions">
+            <button type="button" id="letter-layer-add" title="Add layer">+</button>
+            <button type="button" id="letter-layer-remove" title="Remove layer">−</button>
+          </div>
         </div>
         <div class="layer-tabs" id="letter-layer-tabs"></div>
-        <div class="layer-specs" id="letter-layer-specs">
-          <p class="muted">Vectorize to inspect pens.</p>
+        <div class="layer-specs" id="letter-layer-specs"></div>
+        <div class="layer-sample-wrap">
+          <div class="layer-sample-label">Live sample</div>
+          <canvas id="layer-sample" width="640" height="220"></canvas>
         </div>
       </section>
 
@@ -117,13 +125,13 @@
               <option value="landscape">Landscape</option>
             </select>
           </label>
-          <label>Margin
-            <select id="letters-margin">
-              <option value="12">12 mm</option>
-              <option value="18" selected>18 mm</option>
-              <option value="24">24 mm</option>
-            </select>
-          </label>
+        </div>
+        <div class="margin-controls">
+          <span class="margin-label">Margins mm</span>
+          <label>L <input id="margin-left" type="number" min="0" step="1" value="18" /></label>
+          <label>T <input id="margin-top" type="number" min="0" step="1" value="18" /></label>
+          <label>R <input id="margin-right" type="number" min="0" step="1" value="18" /></label>
+          <label>B <input id="margin-bottom" type="number" min="0" step="1" value="18" /></label>
         </div>
         <div class="paper-frame" id="paper-frame">
           <canvas id="letters-emu" width="740" height="1050"></canvas>

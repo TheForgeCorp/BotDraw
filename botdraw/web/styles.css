@@ -387,6 +387,15 @@ body[data-app="lettersbot"] .tabs button.active {
   padding: 0.95rem;
   max-height: calc(100vh - 8.5rem);
   overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+.center-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.5rem;
 }
 .center-head h2 {
   margin: 0;
@@ -395,7 +404,83 @@ body[data-app="lettersbot"] .tabs button.active {
   letter-spacing: -0.02em;
   color: var(--l-ink);
 }
-.center-head .muted { margin: 0.15rem 0 0.85rem; }
+.center-head .muted { margin: 0.15rem 0 0; }
+.layer-actions { display: flex; gap: 0.25rem; }
+.layer-actions button {
+  width: 28px; height: 28px;
+  border: 1px solid var(--l-line);
+  background: #fff;
+  border-radius: 4px;
+  font: inherit;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--l-ink);
+}
+.layer-actions button:hover { background: var(--l-soft); }
+.layer-editor label { display: block; font-size: 0.6875rem; margin: 0.45rem 0 0.15rem; color: var(--l-muted); font-weight: 500; }
+.layer-editor input, .layer-editor select, .layer-editor textarea {
+  width: 100%; border: 1px solid var(--l-line); border-radius: 4px;
+  padding: 0.35rem 0.45rem; background: #fff; font: inherit; font-size: 0.75rem; color: var(--l-text);
+}
+.layer-editor textarea { min-height: 72px; font-family: var(--font-mono-tech); resize: vertical; }
+.pen-card {
+  display: grid; grid-template-columns: 16px 1fr; gap: 0.55rem; align-items: start;
+  margin-top: 0.45rem; padding: 0.55rem; border: 1px solid var(--l-line); border-radius: 4px; background: var(--l-soft);
+}
+.pen-card .swatch { width: 16px; height: 16px; border-radius: 2px; border: 1px solid var(--l-line-strong); }
+.pen-card .meta, .layer-editor .meta { font-family: var(--font-mono-tech); font-size: 0.6875rem; color: var(--l-muted); }
+.translate-note { margin: 0.35rem 0 0; color: var(--l-muted); font-size: 0.6875rem; }
+.layer-sample-wrap {
+  margin-top: auto;
+  border-top: 1px solid var(--l-line);
+  padding-top: 0.55rem;
+}
+.layer-sample-label {
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--l-faint);
+  margin-bottom: 0.35rem;
+}
+#layer-sample {
+  width: 100%;
+  height: 140px;
+  background: #fff;
+  border: 1px solid var(--l-line);
+  border-radius: 4px;
+  display: block;
+}
+.margin-controls {
+  display: grid;
+  grid-template-columns: auto repeat(4, 1fr);
+  gap: 0.35rem;
+  align-items: end;
+}
+.margin-controls .margin-label {
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: var(--l-muted);
+  align-self: center;
+}
+.margin-controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  font-size: 0.6875rem;
+  color: var(--l-muted);
+  font-weight: 500;
+}
+.margin-controls input {
+  width: 100%;
+  border: 1px solid var(--l-line);
+  border-radius: 4px;
+  padding: 0.3rem 0.35rem;
+  font: inherit;
+  font-size: 0.75rem;
+  font-family: var(--font-mono-tech);
+}
 .layer-tabs {
   display: flex; gap: 0; flex-wrap: wrap;
   margin-bottom: 0.85rem;
@@ -510,7 +595,7 @@ body[data-app="lettersbot"] .tabs button.active {
 .print-limit {
   pointer-events: none;
   position: absolute;
-  inset: calc(1rem + 10px);
+  top: 22px; right: 22px; bottom: 22px; left: 22px;
   border: 1px dashed rgba(0, 0, 0, 0.12);
   border-radius: 0;
 }

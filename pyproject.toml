@@ -39,5 +39,6 @@ botdraw = [
   "palettes/presets/*.json",
   "letters/corpus/*.json",
   "letters/fonts/*.json",
+  "letters/fonts/**/*.json",
   "web/*",
 ]

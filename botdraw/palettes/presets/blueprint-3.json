@@ -6,18 +6,21 @@
     {
       "id": "cyan",
       "name": "Blueprint Cyan",
+      "board_id": "BD-INK-CYAN",
       "color_hex": "#3aa7c9",
       "profile": { "width_mm": 0.35, "nib_type": "fineliner", "opacity": 1.0 }
     },
     {
       "id": "ink",
       "name": "Deep Indigo",
+      "board_id": "BD-INK-INDIGO",
       "color_hex": "#0b1f3a",
       "profile": { "width_mm": 0.5, "nib_type": "fineliner", "opacity": 1.0 }
     },
     {
       "id": "accent",
       "name": "White-ish Light",
+      "board_id": "BD-INK-LTBLUE",
       "color_hex": "#8ecae6",
       "profile": { "width_mm": 0.3, "nib_type": "fineliner", "opacity": 1.0 }
     }
