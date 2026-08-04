@@ -6,14 +6,15 @@ import json
 
 from botdraw.core.jobs import artifact_dir, save_job
 from botdraw.core.models import (
-    PAPER_MM,
     JobRecord,
     JobStatus,
     LayeredSVG,
+    Orientation,
     PaperSize,
     PaletteSet,
     QualityPreset,
     StyleParams,
+    paper_dims,
 )
 from botdraw.core.motion_plan import DEFAULT_PEN_DOWN_MM_S, DEFAULT_PEN_UP_MM_S, compile_motion_plan
 from botdraw.core.optimize import optimize_layered
@@ -59,6 +60,7 @@ def render_job(
     style_id: str,
     palette_id: str = "default-6",
     paper: PaperSize = PaperSize.A4,
+    orientation: Orientation = Orientation.PORTRAIT,
     quality: QualityPreset = QualityPreset.BOOTH_BALANCED,
     seed: int = 42,
     density: float = 1.0,
@@ -69,12 +71,14 @@ def render_job(
 ) -> tuple[JobRecord, dict, dict]:
     ensure_styles_loaded()
     paper_enum = paper if isinstance(paper, PaperSize) else PaperSize(paper)
+    orientation_enum = orientation if isinstance(orientation, Orientation) else Orientation(orientation)
     quality_enum = quality if isinstance(quality, QualityPreset) else QualityPreset(quality)
     settings = {
         "app": app,
         "style_id": style_id,
         "palette_id": palette_id,
         "paper": paper_enum.value,
+        "orientation": orientation_enum.value,
         "quality": quality_enum.value,
         "seed": seed,
         "density": density,
@@ -82,7 +86,7 @@ def render_job(
         "pen_down_speed_mm_s": pen_down_speed_mm_s,
         "image_path": image_path,
         "params_extra": params_extra or {},
-        "paper_mm": list(PAPER_MM[paper_enum]),
+        "paper_mm": list(paper_dims(paper_enum, orientation_enum)),
     }
     job = JobRecord(
         app=app,
@@ -91,6 +95,7 @@ def render_job(
         quality=quality_enum,
         palette_id=palette_id,
         paper=paper_enum,
+        orientation=orientation_enum,
         params={
             "density": density,
             "pen_up_speed_mm_s": pen_up_speed_mm_s,
@@ -112,6 +117,7 @@ def render_job(
                 extra=params_extra or {},
             ),
             paper=paper_enum,
+            orientation=orientation_enum,
             image_path=image_path,
         )
         layered = optimize_layered(layered)

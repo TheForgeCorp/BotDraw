@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
-from botdraw.core.models import LayeredSVG, PAPER_MM, PaperSize, Polyline, StyleParams
+from botdraw.core.models import LayeredSVG, Orientation, PaperSize, Polyline, StyleParams, paper_dims
 from botdraw.core.svg import make_pass
 from botdraw.palettes import ink_pens, load_palette
 
@@ -44,11 +44,12 @@ def audio_to_layered(
     *,
     palette_id: str = "default-6",
     paper: PaperSize = PaperSize.A4,
+    orientation: Orientation = Orientation.PORTRAIT,
     seed: int = 11,
 ) -> LayeredSVG:
     palette = load_palette(palette_id)
     pens = ink_pens(palette)
-    pw, ph = PAPER_MM[paper]
+    pw, ph = paper_dims(paper, orientation)
     margin = 15
     usable_w = pw - 2 * margin
     usable_h = ph - 2 * margin

@@ -31,6 +31,11 @@ class PaperSize(str, Enum):
     CARD = "Card"
 
 
+class Orientation(str, Enum):
+    PORTRAIT = "portrait"
+    LANDSCAPE = "landscape"
+
+
 PAPER_MM: dict[PaperSize, tuple[float, float]] = {
     PaperSize.A4: (210.0, 297.0),
     PaperSize.LETTER: (215.9, 279.4),
@@ -38,6 +43,16 @@ PAPER_MM: dict[PaperSize, tuple[float, float]] = {
     PaperSize.A5: (148.0, 210.0),
     PaperSize.CARD: (127.0, 178.0),
 }
+
+
+def paper_dims(
+    paper: PaperSize, orientation: Orientation = Orientation.PORTRAIT
+) -> tuple[float, float]:
+    """Paper (width, height) in mm for the given orientation."""
+    w, h = PAPER_MM[paper]
+    if orientation == Orientation.LANDSCAPE:
+        return h, w
+    return w, h
 
 
 class LineProfile(BaseModel):
@@ -119,6 +134,7 @@ class JobRecord(BaseModel):
     quality: QualityPreset = QualityPreset.BOOTH_BALANCED
     palette_id: str = "default-6"
     paper: PaperSize = PaperSize.A4
+    orientation: Orientation = Orientation.PORTRAIT
     params: dict[str, Any] = Field(default_factory=dict)
     svg_path: str | None = None
     motion_path: str | None = None
