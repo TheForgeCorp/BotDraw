@@ -48,23 +48,36 @@ def strokes_from_tone_grid(
     seed: int = 1,
     max_paths: int = 4000,
     mesh: dict[str, Any] | None = None,
+    face: np.ndarray | None = None,
 ) -> list[list[tuple[float, float]]]:
     """Emit shade strokes via mesh interface walks (rebuilds links if needed)."""
     if mesh is None:
         codes = np.asarray(tone_codes, dtype=np.uint8)
-        h_s, w_s = codes.shape
         # Reconstruct H links from codes alone (restyle / cache without full mesh)
-        link_h = np.zeros((h_s, max(0, w_s - 1)), dtype=bool)
-        for y in range(h_s):
-            for x in range(w_s - 1):
-                a, b = int(codes[y, x]), int(codes[y, x + 1])
-                if 1 <= a <= 4 and 1 <= b <= 4 and abs(a - b) <= 1:
-                    link_h[y, x] = True
+        c = codes.astype(np.int16)
+        in_band = (c >= 1) & (c <= 4)
+        link_h = in_band[:, :-1] & in_band[:, 1:] & (np.abs(c[:, :-1] - c[:, 1:]) <= 1)
+        mesh_face = None
+        if face is not None:
+            f = np.asarray(face)
+            if f.shape != codes.shape:
+                from PIL import Image
+
+                f = (
+                    np.asarray(
+                        Image.fromarray((f > 0).astype(np.uint8) * 255, mode="L").resize(
+                            (codes.shape[1], codes.shape[0]), Image.Resampling.NEAREST
+                        ),
+                        dtype=np.uint8,
+                    )
+                    > 127
+                )
+            mesh_face = f.astype(np.uint8)
         mesh = {
             "tone_codes": codes,
             "tone_cell_px": float(cell_px),
             "link_h": link_h,
-            "mesh_face": None,
+            "mesh_face": mesh_face,
             "img_shape": (img_h, img_w),
         }
     return strokes_from_mesh_walks(

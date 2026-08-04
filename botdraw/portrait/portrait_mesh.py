@@ -46,7 +46,7 @@ def build_portrait_mesh(
     Build mesh arrays + interface adjacency.
 
     Returns dict compatible with tone_grid fields plus mesh_edge / mesh_face /
-    link_h / link_v (bool arrays for shade joins).
+    link_h (bool array for shade joins) and edge_degree (for edge prune).
     """
     sc = max(4, int(cell_px))
     h0, w0 = lum.shape
@@ -117,107 +117,63 @@ def build_portrait_mesh(
             dtype=np.float32,
         ) / 255.0
 
-    edge_strong = mesh_edge >= 0.28
-    tone_grid = np.zeros((h_s, w_s), dtype=np.float32)
-    tone_codes = np.zeros((h_s, w_s), dtype=np.uint8)
+    # Cell-size-aware structure gate: a physical edge stroke ~4px wide gives
+    # occupancy ≈ 4/cell. Fixed thresholds flood fine meshes (5px → quarter of
+    # the grid went code 5), so scale by cell size instead.
+    edge_gate = float(min(0.85, 3.9 / sc))
+    edge_strong = mesh_edge >= edge_gate
+
     max_code = int(np.clip(max_code, 1, 5))
+    ink = ink_s.astype(np.float32)
 
-    for y in range(h_s):
-        for x in range(w_s):
-            if not allow[y, x]:
-                continue
-            ink = float(ink_s[y, x])
-            # Outside face: stricter skip (walls)
-            if not face_s[y, x] and ink < 0.28:
-                continue
-            # Narrow structure cells only (glasses/hairline) — avoid cheek halo
-            if edge_strong[y, x] and ink >= 0.40 and mesh_edge[y, x] >= 0.42:
-                tone_grid[y, x] = ink
-                tone_codes[y, x] = 5
-                continue
-            tone_grid[y, x] = ink
-            if face_s[y, x]:
-                if ink < 0.14:
-                    code = 0
-                elif ink < 0.28:
-                    code = 1
-                elif ink < 0.40:
-                    code = 2
-                elif ink < 0.55:
-                    code = 3
-                elif ink < 0.72:
-                    code = 4
-                else:
-                    code = 4 if max_code >= 4 else 3
-            else:
-                if ink < 0.18:
-                    code = 0
-                elif ink < 0.30:
-                    code = 1
-                elif ink < 0.45:
-                    code = 2
-                elif ink < 0.58:
-                    code = 3
-                elif ink < 0.72:
-                    code = 4
-                else:
-                    code = 5
-            tone_codes[y, x] = min(code, max_code) if code < 5 else 5
-            if max_code < 4 and tone_codes[y, x] == 4:
-                tone_codes[y, x] = 3
+    # Vectorized code binning (face uses relative bins for dark-bg selfies)
+    face_bins = np.array([0.14, 0.28, 0.40, 0.55, 0.72], dtype=np.float32)
+    out_bins = np.array([0.18, 0.30, 0.45, 0.58, 0.72], dtype=np.float32)
+    codes_face = np.digitize(ink, face_bins).astype(np.uint8)  # 0..5
+    codes_out = np.digitize(ink, out_bins).astype(np.uint8)
+    # Deep face shade stays drawable
+    codes_face[codes_face == 5] = 4 if max_code >= 4 else 3
+    tone_codes = np.where(face_s, codes_face, codes_out).astype(np.uint8)
 
-    # Kill tiny outside-face shade islands (1–2 cells)
-    shade_mask = (tone_codes >= 1) & (tone_codes <= 4)
-    outside_shade = shade_mask & (~face_s)
+    # Skips: disallowed cells, thin outside ink (walls)
+    skip = (~allow) | ((~face_s) & (ink < 0.28))
+    tone_codes[skip] = 0
+    # Structure cells: leave to edges
+    structure = edge_strong & (ink >= 0.40) & (~skip)
+    tone_codes[structure] = 5
+    # Clamp shade codes to max_code (code 5 untouched)
+    shade = (tone_codes >= 1) & (tone_codes <= 4)
+    tone_codes[shade & (tone_codes > max_code)] = max_code
+
+    tone_grid = np.where(tone_codes > 0, ink, 0.0).astype(np.float32)
+
+    # Kill small outside-face shade islands (checkerboard shirt noise)
+    outside_shade = (tone_codes >= 1) & (tone_codes <= 4) & (~face_s)
     if np.any(outside_shade):
         labeled, nlab = ndimage.label(outside_shade)
-        for lab in range(1, nlab + 1):
-            comp = labeled == lab
-            if int(comp.sum()) <= 2:
-                tone_codes[comp] = 0
-                tone_grid[comp] = 0.0
+        if nlab:
+            sizes = ndimage.sum(outside_shade, labeled, index=np.arange(1, nlab + 1))
+            small = np.isin(labeled, np.nonzero(sizes <= 4)[0] + 1)
+            tone_codes[small] = 0
+            tone_grid[small] = 0.0
 
-    # Shade interface links: same row (H) or compatible neighbor codes
-    link_h = np.zeros((h_s, max(0, w_s - 1)), dtype=bool)
-    link_v = np.zeros((max(0, h_s - 1), w_s), dtype=bool)
-    for y in range(h_s):
-        for x in range(w_s - 1):
-            a, b = int(tone_codes[y, x]), int(tone_codes[y, x + 1])
-            if a < 1 or a > 4 or b < 1 or b > 4:
-                continue
-            if face_s[y, x] != face_s[y, x + 1]:
-                continue
-            # Compatible density (allow ±1)
-            if abs(a - b) <= 1:
-                link_h[y, x] = True
-    for y in range(h_s - 1):
-        for x in range(w_s):
-            a, b = int(tone_codes[y, x]), int(tone_codes[y + 1, x])
-            if a < 1 or a > 4 or b < 1 or b > 4:
-                continue
-            if face_s[y, x] != face_s[y + 1, x]:
-                continue
-            # Vertical links only for denser codes (cross-band rare)
-            if a >= 3 and b >= 3 and abs(a - b) <= 1:
-                link_v[y, x] = True
+    # Shade interface links (H): both codes 1–4, same face side, density ±1
+    c = tone_codes.astype(np.int16)
+    in_band = (c >= 1) & (c <= 4)
+    link_h = (
+        in_band[:, :-1]
+        & in_band[:, 1:]
+        & (face_s[:, :-1] == face_s[:, 1:])
+        & (np.abs(c[:, :-1] - c[:, 1:]) <= 1)
+    )
 
-    # Edge interface degree (for prune): neighbors both above edge thresh
-    edge_link_h = np.zeros((h_s, max(0, w_s - 1)), dtype=bool)
-    edge_link_v = np.zeros((max(0, h_s - 1), w_s), dtype=bool)
+    # Edge interface degree (for prune): neighbors above thresh + similar gradient
     eth = 0.18
-    for y in range(h_s):
-        for x in range(w_s - 1):
-            if mesh_edge[y, x] >= eth and mesh_edge[y, x + 1] >= eth:
-                # Similar gradient → continuous structure
-                dot = float(grad_x[y, x] * grad_x[y, x + 1] + grad_y[y, x] * grad_y[y, x + 1])
-                if dot >= 0.15:
-                    edge_link_h[y, x] = True
-    for y in range(h_s - 1):
-        for x in range(w_s):
-            if mesh_edge[y, x] >= eth and mesh_edge[y + 1, x] >= eth:
-                dot = float(grad_x[y, x] * grad_x[y + 1, x] + grad_y[y, x] * grad_y[y + 1, x])
-                if dot >= 0.15:
-                    edge_link_v[y, x] = True
+    e_ok = mesh_edge >= eth
+    dot_h = grad_x[:, :-1] * grad_x[:, 1:] + grad_y[:, :-1] * grad_y[:, 1:]
+    edge_link_h = e_ok[:, :-1] & e_ok[:, 1:] & (dot_h >= 0.15)
+    dot_v = grad_x[:-1, :] * grad_x[1:, :] + grad_y[:-1, :] * grad_y[1:, :]
+    edge_link_v = e_ok[:-1, :] & e_ok[1:, :] & (dot_v >= 0.15)
 
     edge_degree = np.zeros((h_s, w_s), dtype=np.uint8)
     if w_s > 1:
@@ -243,9 +199,9 @@ def build_portrait_mesh(
         "mesh_grad_x": grad_x,
         "mesh_grad_y": grad_y,
         "link_h": link_h,
-        "link_v": link_v,
         "edge_degree": edge_degree,
         "mesh_cell_px": float(sc),
+        "edge_gate": edge_gate,
     }
 
 
@@ -276,6 +232,10 @@ def _walk_horizontal_runs(
     return runs
 
 
+# Physical hatch pitch by code (mm between lines) — independent of cell size
+_PITCH_MM = {1: 1.7, 2: 1.15, 3: 0.8, 4: 0.55}
+
+
 def strokes_from_mesh_walks(
     mesh: dict[str, Any],
     *,
@@ -287,16 +247,26 @@ def strokes_from_mesh_walks(
     jitter: float = 0.03,
     seed: int = 1,
     max_paths: int = 4000,
+    pitch_mm: dict[int, float] | None = None,
 ) -> list[list[tuple[float, float]]]:
     """
     Shade strokes by walking H interfaces (continuous hatch bands).
 
-    Codes 1–3: parallel hatch only. Code 4: scribble along the run (scribble style)
-    or denser parallel hatch (hatch style). Code 5: skip.
+    Line pitch is fixed in mm per code, so a finer mesh does NOT get denser
+    ink: coarse cells emit multiple lines per row, fine cells skip rows.
+    Codes 1–3: parallel hatch. Code 4: scribble (scribble style) or dense
+    parallel (hatch style). Code 5: skip.
     """
     codes = np.asarray(mesh["tone_codes"], dtype=np.uint8)
     link_h = np.asarray(mesh["link_h"], dtype=bool)
     hs = float(mesh["tone_cell_px"])
+    cell_mm = float(mesh.get("tone_cell_mm") or 0.0)
+    if cell_mm <= 0:
+        # Derive from page mapping when caller didn't persist it
+        cell_mm = hs * (float(page_w) / max(img_w, 1) + float(page_h) / max(img_h, 1)) * 0.5
+    pitches = dict(_PITCH_MM)
+    if pitch_mm:
+        pitches.update(pitch_mm)
     h_s, w_s = codes.shape
     table = _make_perlin_table(seed)
     out_px: list[list[tuple[float, float]]] = []
@@ -315,35 +285,42 @@ def strokes_from_mesh_walks(
 
     runs.sort(key=run_score, reverse=True)
 
+    def line_offsets(cmax: int, y: int) -> list[float]:
+        """Cell-height offsets for this row honoring physical pitch."""
+        pitch = float(pitches.get(cmax, 1.0))
+        per_row = cell_mm / max(pitch, 1e-3)
+        if per_row >= 1.0:
+            n = min(3, max(1, int(round(per_row))))
+            return [(i + 0.5) / n for i in range(n)]
+        # Pitch exceeds cell: emit on every k-th mesh row only
+        period = max(1, int(round(pitch / max(cell_mm, 1e-3))))
+        return [0.5] if (y % period) == 0 else []
+
     for y, x0, x1, cmax in runs:
         if len(out_px) >= max_paths:
             break
         length = x1 - x0 + 1
         if length < 1:
             continue
-        # Skip tiny outside runs
-        if length == 1 and (face is None or not face[y, x0]):
+        # Outside face: require longer runs (kills scattered shirt blocks)
+        if face is not None and not face[y, x0] and length < 3:
+            continue
+        if face is None and length == 1:
             continue
 
         x_left = x0 * hs
         x_right = (x1 + 1) * hs
         y_base = y * hs
 
-        # Line count / offsets by code (no per-cell X stamps)
-        if cmax == 1:
-            offsets = [0.45]
-        elif cmax == 2:
-            offsets = [0.38]
-        elif cmax == 3:
-            offsets = [0.28, 0.62]
-        else:  # 4
-            offsets = [0.22, 0.50, 0.78] if style == "hatch" else [0.35, 0.65]
-
         if style == "scribble" and cmax >= 3:
+            if not line_offsets(cmax, y):
+                continue
             ink = 0.35 + 0.12 * (cmax - 3)
             amp = hs * (0.12 + 0.28 * ink)
             n_pts = max(4, length * 2)
-            for oi, off in enumerate(offsets[:2]):
+            n_seg = 2 if cmax >= 4 else 1
+            for oi in range(n_seg):
+                off = 0.35 + 0.3 * oi
                 pts: list[tuple[float, float]] = []
                 for k in range(n_pts + 1):
                     t = k / n_pts
@@ -358,16 +335,13 @@ def strokes_from_mesh_walks(
                         break
             continue
 
+        offsets = line_offsets(cmax, y)
         for oi, off in enumerate(offsets):
             y_line = y_base + off * hs
-            # Light stagger on odd runs for hand-drawn feel
+            # Light stagger on odd rows for hand-drawn feel
             if (y + oi) % 2:
-                y_line += hs * 0.04
+                y_line += hs * 0.06
             pts = [(x_left, y_line), (x_right, y_line)]
-            # Code 3: one light diagonal accent on longer face runs only
-            if cmax >= 3 and length >= 3 and style == "hatch" and oi == 0 and (y % 3 == 0):
-                mid = (x_left + x_right) * 0.5
-                out_px.append([(mid - hs * 0.4, y_base), (mid + hs * 0.4, y_base + hs)])
             amount = hs * jitter * 0.15
             jpts = []
             for j, (px, py) in enumerate(pts):
@@ -378,6 +352,18 @@ def strokes_from_mesh_walks(
                 out_px.append(jpts)
             if len(out_px) >= max_paths:
                 break
+        # Code 4 in hatch style: one diagonal accent per few rows for texture
+        if (
+            style == "hatch"
+            and cmax >= 4
+            and offsets
+            and length >= 2
+            and (y % 2 == 0)
+            and len(out_px) < max_paths
+        ):
+            mid = (x_left + x_right) * 0.5
+            half = min(hs * 1.2, (x_right - x_left) * 0.25)
+            out_px.append([(mid - half, y_base), (mid + half, y_base + hs)])
 
     return polylines_to_mm(
         out_px[:max_paths],

@@ -76,6 +76,13 @@ def _tone_grid_polys(
         # Infer from grid vs image size
         gh, gw = codes.shape
         cell_px = max(4.0, float(pv.width_px) / max(gw, 1))
+    # Rebuild face ROI so cached restyles keep face-priority run ordering
+    try:
+        from botdraw.portrait.linedraw_edges import face_roi_mask
+
+        face = face_roi_mask(np.asarray(pv.lum, dtype=np.float32))
+    except Exception:
+        face = None
     strokes = strokes_from_tone_grid(
         codes,
         cell_px=cell_px,
@@ -87,6 +94,7 @@ def _tone_grid_polys(
         jitter=float((pv.meta or {}).get("linedraw_jitter") or 0.03),
         seed=seed,
         max_paths=limit,
+        face=face,
     )
     hatch_pen = _pen_for(pv, palette, "hatch") if "hatch" in pv.pen_map else _pen_for(pv, palette, "edge")
     rgb = np.asarray(pv.rgb, dtype=np.float32)
