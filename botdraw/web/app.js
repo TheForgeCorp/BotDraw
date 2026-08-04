@@ -27,13 +27,8 @@ let portraitShowEdges = true;
 let portraitShowRegions = true;
 let portraitShowCrop = true;
 let portraitShowHatch = true;
-let portraitPosterizeLevels = 6;
-let portraitFilterSpeckle = 8;
-let portraitMinPathPoints = 6;
-let portraitContrast = 1.12;
-let portraitContourSimplify = 2;
-let portraitHatchSize = 16;
-let portraitLinedrawJitter = 0.12;
+let portraitHatchEnabled = true;
+let portraitIngestTimer = null;
 const PORTRAIT_LINE_TYPES = [
   "solid", "dashed", "dotted", "dash_dot", "zigzag", "triangle", "wave", "square_wave",
   "half_circle", "scallop_alt", "beads", "double", "railroad", "stitch", "hatch_tick",
@@ -673,8 +668,10 @@ function renderPortrait() {
     </div>
     <div class="row" style="margin-top:0.35rem">
       <label><input type="checkbox" id="auto-frame" ${portraitAutoFrame ? "checked" : ""}/> Auto frame subject</label>
+      <label><input type="checkbox" id="hatch-shading" ${portraitHatchEnabled ? "checked" : ""}/> Hatch shading</label>
       <button type="button" id="reset-frame">Reset frame</button>
     </div>
+    <p class="muted" style="margin-top:0.25rem">Ingest: teal contours · orange hatch · magenta regions. Quality preset drives detail.</p>
     <h4>Image type</h4>
     <div class="image-mode-grid" id="image-mode-grid">
       ${modes.map(([id, title, sub]) =>
@@ -683,24 +680,6 @@ function renderPortrait() {
         </button>`
       ).join("")}
     </div>
-    <h4>Ingest (linedraw + cleanup)</h4>
-    <div class="grid-2">
-      ${field("Posterize levels", `<input id="posterize-levels" type="range" min="0" max="16" step="1" value="${portraitPosterizeLevels}" /><span id="posterize-levels-val">${portraitPosterizeLevels}</span>`)}
-      ${field("Filter speckle", `<input id="filter-speckle" type="range" min="0" max="40" step="1" value="${portraitFilterSpeckle}" /><span id="filter-speckle-val">${portraitFilterSpeckle}</span>`)}
-    </div>
-    <div class="grid-2">
-      ${field("Min path points", `<input id="min-path-points" type="range" min="0" max="30" step="1" value="${portraitMinPathPoints}" /><span id="min-path-points-val">${portraitMinPathPoints}</span>`)}
-      ${field("Contrast", `<input id="ingest-contrast" type="range" min="0.8" max="1.6" step="0.02" value="${portraitContrast}" /><span id="ingest-contrast-val">${Number(portraitContrast).toFixed(2)}</span>`)}
-    </div>
-    <div class="grid-2">
-      ${field("Contour simplify", `<input id="contour-simplify" type="range" min="1" max="4" step="1" value="${portraitContourSimplify}" /><span id="contour-simplify-val">${portraitContourSimplify}</span>`)}
-      ${field("Hatch size (0=off)", `<input id="hatch-size" type="range" min="0" max="48" step="2" value="${portraitHatchSize}" /><span id="hatch-size-val">${portraitHatchSize}</span>`)}
-    </div>
-    <div class="grid-2">
-      ${field("Linedraw jitter", `<input id="linedraw-jitter" type="range" min="0" max="0.5" step="0.02" value="${portraitLinedrawJitter}" /><span id="linedraw-jitter-val">${Number(portraitLinedrawJitter).toFixed(2)}</span>`)}
-      <span></span>
-    </div>
-    <p class="muted" style="margin-top:0.2rem">Teal=contours · orange=hatch · magenta=regions. Hatch size 0 disables tone hatch.</p>
     <h4>Portrait style</h4>
     ${styleButtons(list)}
     <h4>Paper</h4>
@@ -752,27 +731,6 @@ function renderPortrait() {
   bindRange("pattern-amp", "pattern-amp-val");
   bindRange("dash-mm", "dash-mm-val");
   bindRange("gap-mm", "gap-mm-val");
-  const bindIntRange = (id, labelId, setter) => {
-    const el = root.querySelector(`#${id}`);
-    const lab = root.querySelector(`#${labelId}`);
-    if (!el || !lab) return;
-    const isFloat = id === "ingest-contrast" || id === "linedraw-jitter";
-    const sync = () => {
-      const v = Number(el.value);
-      if (isFloat) lab.textContent = v.toFixed(2);
-      else lab.textContent = String(Math.round(v));
-      setter(isFloat ? v : Math.round(v));
-    };
-    el.oninput = sync;
-    sync();
-  };
-  bindIntRange("posterize-levels", "posterize-levels-val", (v) => { portraitPosterizeLevels = v; });
-  bindIntRange("filter-speckle", "filter-speckle-val", (v) => { portraitFilterSpeckle = v; });
-  bindIntRange("min-path-points", "min-path-points-val", (v) => { portraitMinPathPoints = v; });
-  bindIntRange("ingest-contrast", "ingest-contrast-val", (v) => { portraitContrast = v; });
-  bindIntRange("contour-simplify", "contour-simplify-val", (v) => { portraitContourSimplify = v; });
-  bindIntRange("hatch-size", "hatch-size-val", (v) => { portraitHatchSize = v; });
-  bindIntRange("linedraw-jitter", "linedraw-jitter-val", (v) => { portraitLinedrawJitter = v; });
 
   root.querySelectorAll("[data-style]").forEach((btn) => {
     btn.onclick = () => {
@@ -799,6 +757,19 @@ function renderPortrait() {
   root.querySelector("#auto-frame").onchange = (e) => {
     portraitAutoFrame = !!e.target.checked;
   };
+  const hatchCb = root.querySelector("#hatch-shading");
+  if (hatchCb) {
+    hatchCb.onchange = () => {
+      portraitHatchEnabled = !!hatchCb.checked;
+      if (portraitIngestTimer) clearTimeout(portraitIngestTimer);
+      portraitIngestTimer = setTimeout(() => {
+        runPortraitIngest({ forceReingest: true }).catch((err) => {
+          if (portraitStatsEl) portraitStatsEl.textContent = portraitNetworkErrorMessage(err);
+          console.error(err);
+        });
+      }, 300);
+    };
+  }
   root.querySelector("#reset-frame").onclick = () => {
     portraitCrop = null;
     portraitAutoFrame = true;
@@ -899,26 +870,13 @@ async function runPortraitIngest(opts = {}) {
   state.quality = root.querySelector("#quality")?.value || state.quality;
   portraitPaperId = root.querySelector("#paper-color")?.value || portraitPaperId;
   portraitAutoFrame = !!root.querySelector("#auto-frame")?.checked;
-  if (root.querySelector("#posterize-levels")) portraitPosterizeLevels = Number(root.querySelector("#posterize-levels").value);
-  if (root.querySelector("#filter-speckle")) portraitFilterSpeckle = Number(root.querySelector("#filter-speckle").value);
-  if (root.querySelector("#min-path-points")) portraitMinPathPoints = Number(root.querySelector("#min-path-points").value);
-  if (root.querySelector("#ingest-contrast")) portraitContrast = Number(root.querySelector("#ingest-contrast").value);
-  if (root.querySelector("#contour-simplify")) portraitContourSimplify = Number(root.querySelector("#contour-simplify").value);
-  if (root.querySelector("#hatch-size")) portraitHatchSize = Number(root.querySelector("#hatch-size").value);
-  if (root.querySelector("#linedraw-jitter")) portraitLinedrawJitter = Number(root.querySelector("#linedraw-jitter").value);
+  if (root.querySelector("#hatch-shading")) portraitHatchEnabled = !!root.querySelector("#hatch-shading").checked;
   if (portraitStatsEl) portraitStatsEl.textContent = "Ingesting (no style)…";
   const t0 = performance.now();
   let data;
   const cropJson = portraitCrop ? JSON.stringify(portraitCrop) : null;
-  const knobs = {
-    posterize_levels: portraitPosterizeLevels,
-    filter_speckle: portraitFilterSpeckle,
-    min_path_points: portraitMinPathPoints,
-    contrast: portraitContrast,
-    contour_simplify: portraitContourSimplify,
-    hatch_size: portraitHatchSize,
-    linedraw_jitter: portraitLinedrawJitter,
-  };
+  // hatch_size 0 = off; omit otherwise so quality defaults apply
+  const knobs = portraitHatchEnabled ? {} : { hatch_size: 0 };
   if (portraitFile) {
     const uploadFile = await downscalePortraitForUpload(portraitFile, 1280);
     const fd = new FormData();
@@ -929,13 +887,7 @@ async function runPortraitIngest(opts = {}) {
     if (opts.forceReingest || portraitForceReingest) fd.append("force_reingest", "true");
     if (cropJson) fd.append("crop", cropJson);
     fd.append("include_preview_png", "true");
-    fd.append("posterize_levels", String(knobs.posterize_levels));
-    fd.append("filter_speckle", String(knobs.filter_speckle));
-    fd.append("min_path_points", String(knobs.min_path_points));
-    fd.append("contrast", String(knobs.contrast));
-    fd.append("contour_simplify", String(knobs.contour_simplify));
-    fd.append("hatch_size", String(knobs.hatch_size));
-    fd.append("linedraw_jitter", String(knobs.linedraw_jitter));
+    if (!portraitHatchEnabled) fd.append("hatch_size", "0");
     fd.append("file", uploadFile, uploadFile.name || "portrait.jpg");
     data = await api("/api/portrait/ingest/upload", { method: "POST", body: fd });
   } else {
@@ -968,11 +920,9 @@ async function runPortraitIngest(opts = {}) {
       `Ingest ready · edges ${data.edge_count} · hatch ${data.hatch_count ?? 0} · regions ${data.region_count} · wall ${wall}s` +
       (timing.total != null ? ` · trace ${timing.total}s` : "") +
       (data.cache_hit ? " · cache" : "") +
-      ` · post ${meta.posterize_levels ?? knobs.posterize_levels}` +
-      ` · hatch ${meta.hatch_size ?? knobs.hatch_size}` +
+      (portraitHatchEnabled ? "" : " · hatch off") +
       ` · id ${portraitIngestId || "?"}`;
   }
-  // Enable Apply after ingest
   const applyBtn = root.querySelector("#portrait-apply");
   if (applyBtn) applyBtn.disabled = !portraitIngestId;
   return data;
@@ -981,13 +931,7 @@ async function runPortraitIngest(opts = {}) {
 function collectPortraitExtra(root, { reuse = false, forceReingest = false } = {}) {
   portraitPaperId = root.querySelector("#paper-color")?.value || portraitPaperId;
   portraitLineType = root.querySelector("#line-type")?.value || portraitLineType;
-  if (root.querySelector("#posterize-levels")) portraitPosterizeLevels = Number(root.querySelector("#posterize-levels").value);
-  if (root.querySelector("#filter-speckle")) portraitFilterSpeckle = Number(root.querySelector("#filter-speckle").value);
-  if (root.querySelector("#min-path-points")) portraitMinPathPoints = Number(root.querySelector("#min-path-points").value);
-  if (root.querySelector("#ingest-contrast")) portraitContrast = Number(root.querySelector("#ingest-contrast").value);
-  if (root.querySelector("#contour-simplify")) portraitContourSimplify = Number(root.querySelector("#contour-simplify").value);
-  if (root.querySelector("#hatch-size")) portraitHatchSize = Number(root.querySelector("#hatch-size").value);
-  if (root.querySelector("#linedraw-jitter")) portraitLinedrawJitter = Number(root.querySelector("#linedraw-jitter").value);
+  if (root.querySelector("#hatch-shading")) portraitHatchEnabled = !!root.querySelector("#hatch-shading").checked;
   const extra = {
     image_mode: portraitImageMode,
     paper_id: portraitPaperId,
@@ -999,14 +943,8 @@ function collectPortraitExtra(root, { reuse = false, forceReingest = false } = {
     gap_mm: Number(root.querySelector("#gap-mm")?.value || 1.2),
     ornament_target: "all",
     auto_frame: portraitAutoFrame,
-    posterize_levels: portraitPosterizeLevels,
-    filter_speckle: portraitFilterSpeckle,
-    min_path_points: portraitMinPathPoints,
-    contrast: portraitContrast,
-    contour_simplify: portraitContourSimplify,
-    hatch_size: portraitHatchSize,
-    linedraw_jitter: portraitLinedrawJitter,
   };
+  if (!portraitHatchEnabled) extra.hatch_size = 0;
   if (portraitCrop) extra.crop = portraitCrop;
   if (portraitPenMap) extra.pen_map = portraitPenMap;
   if (reuse && portraitIngestId && !forceReingest && !portraitForceReingest) {

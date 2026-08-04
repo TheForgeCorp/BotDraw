@@ -6,6 +6,7 @@ Clean reimplementation inspired by Lingdong Huang's linedraw
 Copyright (c) 2017 Lingdong Huang — algorithm attribution retained.
 
 No OpenCV dependency: Sobel magnitude + hysteresis-lite via numpy/Pillow.
+Portrait-aware: midtone hatch skips flat dark backgrounds.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from typing import Sequence
 
 import numpy as np
 from PIL import Image, ImageFilter, ImageOps
+from shapely.geometry import LineString
 
 from botdraw.styles.image_utils import map_to_page
 
@@ -28,7 +30,6 @@ _PERLIN_SIZE = 4095
 
 
 def _make_perlin_table(seed: int) -> list[float]:
-    # LCG
     m = 4294967296.0
     a = 1664525.0
     c = 1013904223.0
@@ -99,29 +100,23 @@ def autocontrast_lum(lum: np.ndarray, cutoff: float = 10.0) -> np.ndarray:
 
 
 def edge_bitmap(lum: np.ndarray, *, low: float = 80.0, high: float = 160.0) -> np.ndarray:
-    """
-    Sobel magnitude + dual-threshold (Canny-lite). Returns bool HxW mask.
-    """
+    """Sobel magnitude + dual-threshold (Canny-lite). Returns bool HxW mask."""
     g = Image.fromarray(np.clip(lum, 0, 255).astype(np.uint8), mode="L")
     g = g.filter(ImageFilter.GaussianBlur(radius=1.0))
     arr = np.asarray(g, dtype=np.float32)
-    # Sobel
     kx = np.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=np.float32)
     ky = np.array([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=np.float32)
     from numpy.lib.stride_tricks import sliding_window_view
 
-    # pad then convolve via windows
     pad = np.pad(arr, 1, mode="edge")
     windows = sliding_window_view(pad, (3, 3))
     gx = np.tensordot(windows, kx, axes=([2, 3], [0, 1]))
     gy = np.tensordot(windows, ky, axes=([2, 3], [0, 1]))
     mag = np.hypot(gx, gy)
-    # normalize to ~0..255
     mmax = float(mag.max()) or 1.0
     mag_n = mag * (255.0 / mmax)
     strong = mag_n >= high
     weak = (mag_n >= low) & (~strong)
-    # Keep weak if adjacent to strong
     strong_pad = np.pad(strong, 1, mode="constant")
     keep_weak = np.zeros_like(weak)
     for dy in (-1, 0, 1):
@@ -133,7 +128,6 @@ def edge_bitmap(lum: np.ndarray, *, low: float = 80.0, high: float = 160.0) -> n
 
 
 def _getdots(mask: np.ndarray) -> list[list[tuple[int, int]]]:
-    """Per-row list of (x_start, run_length) for on-pixels (linedraw getdots)."""
     h, w = mask.shape
     dots: list[list[tuple[int, int]]] = []
     for y in range(h):
@@ -146,14 +140,12 @@ def _getdots(mask: np.ndarray) -> list[list[tuple[int, int]]]:
             x0 = x
             while x < w and mask[y, x]:
                 x += 1
-            # store as (start_x, run_len-1) matching linedraw's (x, v) where v grows
             row.append((x0, x - x0 - 1))
         dots.append(row)
     return dots
 
 
 def _connectdots(dots: list[list[tuple[int, int]]]) -> list[list[tuple[int, int]]]:
-    """Connect edge runs across consecutive rows (linedraw connectdots)."""
     contours: list[list[tuple[int, int]]] = []
     for y, row in enumerate(dots):
         for x, _v in row:
@@ -178,7 +170,6 @@ def _connectdots(dots: list[list[tuple[int, int]]]) -> list[list[tuple[int, int]
                         break
                 if not found:
                     contours.append([(x, y)])
-        # prune stale short tails
         contours = [c for c in contours if not (c and c[-1][1] < y - 1 and len(c) < 4)]
     return contours
 
@@ -222,6 +213,27 @@ def _subsample(contours: list[list[tuple[float, float]]], step: int) -> list[lis
     return out
 
 
+def _dp_simplify_px(
+    contours: list[list[tuple[float, float]]],
+    tolerance: float,
+) -> list[list[tuple[float, float]]]:
+    if tolerance <= 0:
+        return contours
+    out: list[list[tuple[float, float]]] = []
+    for c in contours:
+        if len(c) < 3:
+            if len(c) >= 2:
+                out.append(c)
+            continue
+        try:
+            simple = list(LineString(c).simplify(float(tolerance), preserve_topology=False).coords)
+            if len(simple) >= 2:
+                out.append([(float(a), float(b)) for a, b in simple])
+        except Exception:
+            out.append(c)
+    return out
+
+
 def _apply_jitter(
     contours: list[list[tuple[float, float]]],
     *,
@@ -246,18 +258,23 @@ def contours_from_lum(
     lum: np.ndarray,
     *,
     simplify: int = 2,
-    jitter: float = 0.15,
+    jitter: float = 0.04,
     seed: int = 0,
     max_paths: int = 2000,
 ) -> tuple[list[list[tuple[float, float]]], np.ndarray]:
     """
     Dual-axis linedraw contours in pixel space.
 
-    Returns (polylines_px, edge_magnitude_map 0..255).
+    `simplify` controls post-trace strength (1=finest). Working resolution stays
+    high except for aggressive simplify (>=3) used by booth-fast.
     """
-    # Work at reduced resolution like linedraw (resolution/simplify)
     h0, w0 = lum.shape
-    sc = max(1, int(simplify))
+    strength = max(1, int(simplify))
+    # Only downsample for aggressive simplify; otherwise trace near full res
+    if strength >= 3:
+        sc = 2
+    else:
+        sc = 1
     w_s = max(8, w0 // sc)
     h_s = max(8, int(round(h0 * (w_s / w0))))
     small = np.asarray(
@@ -268,7 +285,6 @@ def contours_from_lum(
     )
     small_u8 = autocontrast_lum(small, cutoff=10.0)
     mask = edge_bitmap(small_u8.astype(np.float32))
-    # Edge map at full res for storage (scaled sobel preview)
     edge_full = np.asarray(
         Image.fromarray((mask.astype(np.uint8) * 255), mode="L").resize(
             (w0, h0), Image.Resampling.NEAREST
@@ -276,19 +292,14 @@ def contours_from_lum(
         dtype=np.float32,
     )
 
-    # Horizontal pass
     dots1 = _getdots(mask)
     c1 = _connectdots(dots1)
-    # Vertical pass: linedraw rotate(-90)+FLIP_LEFT_RIGHT then remap (y,x)
     pil = Image.fromarray(mask.astype(np.uint8) * 255, mode="L")
     pil2 = pil.rotate(-90, expand=True).transpose(Image.FLIP_LEFT_RIGHT)
     mask2 = np.asarray(pil2, dtype=np.uint8) > 127
     dots2 = _getdots(mask2)
     c2 = _connectdots(dots2)
-    # Remap rotated coords back
-    c2_mapped: list[list[tuple[int, int]]] = []
-    for c in c2:
-        c2_mapped.append([(p[1], p[0]) for p in c])
+    c2_mapped: list[list[tuple[int, int]]] = [[(p[1], p[0]) for p in c] for c in c2]
 
     contours: list[list[tuple[float, float]]] = []
     for c in c1 + c2_mapped:
@@ -296,17 +307,24 @@ def contours_from_lum(
             contours.append([(float(x), float(y)) for x, y in c])
 
     contours = _merge_near_endpoints(contours, dist_thresh=8.0)
-    # Subsample every 8 pixels in small space (linedraw), then scale by sc
-    contours = _subsample(contours, step=8)
-    scaled: list[list[tuple[float, float]]] = []
-    for c in contours:
-        scaled.append([(x * sc, y * sc) for x, y in c])
+    # Finer subsample than classic linedraw's every-8
+    step = max(2, 8 // max(1, 4 - strength + 1))
+    if strength == 1:
+        step = 2
+    elif strength == 2:
+        step = 3
+    else:
+        step = 4
+    contours = _subsample(contours, step=step)
+    scaled: list[list[tuple[float, float]]] = [[(x * sc, y * sc) for x, y in c] for c in contours]
 
-    # Jitter in px (linedraw used ~10px at full-ish res; scale by jitter 0..1)
-    amount = 10.0 * float(jitter)
+    # Douglas-Peucker in px (tolerance grows slightly with strength)
+    tol = 0.85 if strength <= 1 else (1.2 if strength == 2 else 1.8)
+    scaled = _dp_simplify_px(scaled, tolerance=tol * float(sc))
+
+    amount = 6.0 * float(jitter)  # milder than classic ~10px
     scaled = _apply_jitter(scaled, amount_px=amount, seed=seed)
 
-    # Budget by length
     def plen(pts: Sequence[tuple[float, float]]) -> float:
         t = 0.0
         for i in range(1, len(pts)):
@@ -317,15 +335,40 @@ def contours_from_lum(
     return scaled[:max_paths], edge_full
 
 
+def _midtone_hatch_mask(small: np.ndarray) -> np.ndarray:
+    """
+    True where hatch is allowed: midtones with local structure.
+
+    Skips flat near-black (dark walls) and near-white highlights that classic
+    linedraw would either over-hatch or leave empty incorrectly on dark-bg photos.
+    """
+    arr = small.astype(np.float32)
+    lo = float(np.percentile(arr, 18))
+    hi = float(np.percentile(arr, 88))
+    # Absolute clamps after autocontrast
+    lo = max(35.0, min(lo, 90.0))
+    hi = min(210.0, max(hi, 140.0))
+    tone = (arr >= lo) & (arr <= hi)
+
+    # Local variance: reject flat regions (uniform wall)
+    pad = np.pad(arr, 1, mode="edge")
+    from numpy.lib.stride_tricks import sliding_window_view
+
+    win = sliding_window_view(pad, (3, 3))
+    local_std = win.reshape(win.shape[0], win.shape[1], -1).std(axis=2)
+    structured = local_std >= 4.5
+    return tone & structured
+
+
 def hatch_from_lum(
     lum: np.ndarray,
     *,
     hatch_size: int = 16,
-    jitter: float = 0.15,
+    jitter: float = 0.04,
     seed: int = 1,
     max_paths: int = 4000,
 ) -> list[list[tuple[float, float]]]:
-    """Tone-banded hatch strokes in pixel space. hatch_size<=0 → empty."""
+    """Portrait midtone hatch. hatch_size<=0 → empty. Skips flat dark background."""
     sc = int(hatch_size)
     if sc <= 0:
         return []
@@ -339,19 +382,25 @@ def hatch_from_lum(
         dtype=np.uint8,
     )
     small = autocontrast_lum(small.astype(np.float32), cutoff=10.0)
+    allow = _midtone_hatch_mask(small)
+
     lg1: list[list[tuple[float, float]]] = []
     lg2: list[list[tuple[float, float]]] = []
     hs = float(sc)
+    # Density relative to midtone band (darker midtones → denser)
+    vals = small.astype(np.float32)
     for y0 in range(h_s):
         for x0 in range(w_s):
-            v = int(small[y0, x0])
+            if not allow[y0, x0]:
+                continue
+            v = float(vals[y0, x0])
             x = x0 * hs
             y = y0 * hs
-            if v > 144:
-                continue
-            if v > 64:
+            # Map midtone range to density tiers (not absolute near-black)
+            if v > 160:
+                # light midtone — sparse
                 lg1.append([(x, y + hs / 4), (x + hs, y + hs / 4)])
-            elif v > 16:
+            elif v > 100:
                 lg1.append([(x, y + hs / 4), (x + hs, y + hs / 4)])
                 lg2.append([(x + hs, y), (x, y + hs)])
             else:
@@ -379,13 +428,13 @@ def hatch_from_lum(
 
     lines = join_collinear(lg1) + join_collinear(lg2)
     table = _make_perlin_table(seed)
-    amount = float(sc) * float(jitter)
+    amount = float(sc) * float(jitter) * 0.5
     out: list[list[tuple[float, float]]] = []
     for i, line in enumerate(lines):
         pts: list[tuple[float, float]] = []
         for j, (x, y) in enumerate(line):
             jx = amount * (_perlin_noise(table, i * 0.5, j * 0.1, 1.0) - 0.5) * 2.0
-            jy = amount * (_perlin_noise(table, i * 0.5, j * 0.1, 2.0) - 0.5) * 2.0 - j
+            jy = amount * (_perlin_noise(table, i * 0.5, j * 0.1, 2.0) - 0.5) * 2.0
             pts.append((x + jx, y + jy))
         if len(pts) >= 2:
             out.append(pts)
@@ -415,16 +464,13 @@ def linedraw_edges_and_hatch(
     page_h: float,
     contour_simplify: int = 2,
     hatch_size: int = 16,
-    jitter: float = 0.15,
+    jitter: float = 0.04,
     seed: int = 0,
     max_edge_paths: int = 2000,
     max_hatch_paths: int = 4000,
 ) -> tuple[list[list[tuple[float, float]]], list[list[tuple[float, float]]], np.ndarray]:
-    """
-    Full linedraw-style pass → (edge_mm, hatch_mm, edge_map).
-    """
+    """Full linedraw-style pass → (edge_mm, hatch_mm, edge_map)."""
     h, w = lum.shape
-    # Use autocontrasted lum for both
     lum_u8 = autocontrast_lum(lum, cutoff=10.0).astype(np.float32)
     contours_px, edge_map = contours_from_lum(
         lum_u8,

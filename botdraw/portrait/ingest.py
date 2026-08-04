@@ -565,10 +565,11 @@ def ingest_portrait(
     else:
         csimp = max(1, int(contour_simplify))
     if hatch_size is None:
-        hsize = 24 if quality_enum == QualityPreset.BOOTH_FAST else (16 if quality_enum == QualityPreset.BOOTH_BALANCED else 12)
+        # Larger cells = fewer cleaner strokes; quality drives density
+        hsize = 24 if quality_enum == QualityPreset.BOOTH_FAST else (18 if quality_enum == QualityPreset.BOOTH_BALANCED else 14)
     else:
         hsize = int(hatch_size)
-    jitter = 0.12 if linedraw_jitter is None else float(linedraw_jitter)
+    jitter = 0.04 if linedraw_jitter is None else float(linedraw_jitter)
 
     # Load full-res for framing
     if image_array is not None:
