@@ -1,9 +1,16 @@
 """
-Anthropic vision review for portrait ingest/output.
+Vision review for portrait ingest/output (Anthropic / OpenAI / Gemini).
 
-Claude is a reviewer + controller, not a stroke engine:
+The vision model is a reviewer + controller, not a stroke engine:
 - ``review_photo`` → PortraitScene JSON → ingest knobs
 - ``critique_render`` → PortraitCritique JSON → one re-restyle / re-ingest
+
+Providers (env ``BOTDRAW_VISION_PROVIDER`` or per-call):
+- ``anthropic`` — ANTHROPIC_API_KEY
+- ``openai`` — OPENAI_API_KEY
+- ``gemini`` — GEMINI_API_KEY or GOOGLE_API_KEY
+- ``manual`` — load a JSON scene from BOTDRAW_VISION_SCENE_JSON (Claude
+  subscription / chat reviews pasted to disk while API keys are pending)
 
 Fail closed: missing key/package/API errors return None and callers keep
 the current neural/classic path. Action/fix keys are a closed dictionary
@@ -16,11 +23,15 @@ import io
 import json
 import os
 import re
+from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
 from PIL import Image
 from pydantic import BaseModel, Field, ValidationError
+
+ProviderName = Literal["anthropic", "openai", "gemini", "manual"]
+PROVIDERS: tuple[ProviderName, ...] = ("anthropic", "openai", "gemini", "manual")
 
 
 # ---------------------------------------------------------------------------
@@ -148,14 +159,81 @@ class PortraitCritique(BaseModel):
     summary: str = ""
 
 
-def claude_available() -> bool:
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        return False
+def default_provider() -> ProviderName:
+    raw = (os.environ.get("BOTDRAW_VISION_PROVIDER") or "anthropic").strip().lower()
+    if raw in PROVIDERS:
+        return raw  # type: ignore[return-value]
+    return "anthropic"
+
+
+def provider_status() -> dict[str, dict[str, Any]]:
+    """Which vision providers can run in this environment."""
+    out: dict[str, dict[str, Any]] = {}
+    # anthropic
     try:
         import anthropic  # noqa: F401
+
+        anth_pkg = True
     except ImportError:
-        return False
-    return True
+        anth_pkg = False
+    out["anthropic"] = {
+        "key": bool(os.environ.get("ANTHROPIC_API_KEY")),
+        "package": anth_pkg,
+        "ready": bool(os.environ.get("ANTHROPIC_API_KEY")) and anth_pkg,
+        "model": os.environ.get("BOTDRAW_CLAUDE_MODEL", "claude-sonnet-4-20250514"),
+    }
+    # openai
+    try:
+        import openai  # noqa: F401
+
+        oai_pkg = True
+    except ImportError:
+        oai_pkg = False
+    out["openai"] = {
+        "key": bool(os.environ.get("OPENAI_API_KEY")),
+        "package": oai_pkg,
+        "ready": bool(os.environ.get("OPENAI_API_KEY")) and oai_pkg,
+        "model": os.environ.get("BOTDRAW_OPENAI_MODEL", "gpt-4.1"),
+    }
+    # gemini
+    try:
+        from google import genai  # noqa: F401
+
+        gem_pkg = True
+    except ImportError:
+        try:
+            import google.generativeai  # noqa: F401
+
+            gem_pkg = True
+        except ImportError:
+            gem_pkg = False
+    gem_key = bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"))
+    out["gemini"] = {
+        "key": gem_key,
+        "package": gem_pkg,
+        "ready": gem_key and gem_pkg,
+        "model": os.environ.get("BOTDRAW_GEMINI_MODEL", "gemini-2.0-flash"),
+    }
+    # manual / subscription JSON
+    scene_path = os.environ.get("BOTDRAW_VISION_SCENE_JSON") or ""
+    out["manual"] = {
+        "key": True,
+        "package": True,
+        "ready": bool(scene_path and Path(scene_path).exists()),
+        "model": "subscription-json",
+        "scene_json": scene_path or None,
+    }
+    return out
+
+
+def vision_available(provider: ProviderName | None = None) -> bool:
+    p = provider or default_provider()
+    return bool(provider_status().get(p, {}).get("ready"))
+
+
+def claude_available() -> bool:
+    """Backward-compatible alias: Anthropic API ready."""
+    return vision_available("anthropic")
 
 
 def _rgb_to_jpeg_b64(rgb: np.ndarray, *, max_side: int = 1280) -> str:
@@ -166,45 +244,53 @@ def _rgb_to_jpeg_b64(rgb: np.ndarray, *, max_side: int = 1280) -> str:
     return base64.standard_b64encode(buf.getvalue()).decode("ascii")
 
 
+def _rgb_to_jpeg_bytes(rgb: np.ndarray, *, max_side: int = 1280) -> bytes:
+    img = Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8))
+    img.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=85)
+    return buf.getvalue()
+
+
 def _extract_json(text: str) -> dict[str, Any]:
     text = text.strip()
     if text.startswith("```"):
         text = re.sub(r"^```(?:json)?\s*", "", text)
         text = re.sub(r"\s*```$", "", text)
+    # Recover JSON object if model wrapped it in prose
+    if not text.startswith("{"):
+        m = re.search(r"\{[\s\S]*\}", text)
+        if m:
+            text = m.group(0)
     return json.loads(text)
 
 
-def _call_claude_vision(
+def _call_anthropic_vision(
     *,
     system: str,
     prompt: str,
     image_b64: str,
     media_type: str = "image/jpeg",
     model: str | None = None,
+    images: list[tuple[str, str]] | None = None,
 ) -> str:
     import anthropic
 
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    content: list[dict[str, Any]] = []
+    for b64, mt in images or [(image_b64, media_type)]:
+        content.append(
+            {
+                "type": "image",
+                "source": {"type": "base64", "media_type": mt, "data": b64},
+            }
+        )
+    content.append({"type": "text", "text": prompt})
     msg = client.messages.create(
         model=model or os.environ.get("BOTDRAW_CLAUDE_MODEL", "claude-sonnet-4-20250514"),
         max_tokens=1024,
         system=system,
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": media_type,
-                            "data": image_b64,
-                        },
-                    },
-                    {"type": "text", "text": prompt},
-                ],
-            }
-        ],
+        messages=[{"role": "user", "content": content}],
     )
     parts = []
     for block in msg.content:
@@ -213,23 +299,199 @@ def _call_claude_vision(
     return "\n".join(parts)
 
 
+def _call_openai_vision(
+    *,
+    system: str,
+    prompt: str,
+    image_b64: str,
+    media_type: str = "image/jpeg",
+    model: str | None = None,
+    images: list[tuple[str, str]] | None = None,
+) -> str:
+    from openai import OpenAI
+
+    client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+    for b64, mt in images or [(image_b64, media_type)]:
+        content.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:{mt};base64,{b64}"},
+            }
+        )
+    resp = client.chat.completions.create(
+        model=model or os.environ.get("BOTDRAW_OPENAI_MODEL", "gpt-4.1"),
+        max_tokens=1024,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": content},
+        ],
+    )
+    return resp.choices[0].message.content or ""
+
+
+def _call_gemini_vision(
+    *,
+    system: str,
+    prompt: str,
+    image_b64: str,
+    media_type: str = "image/jpeg",
+    model: str | None = None,
+    images: list[tuple[str, str]] | None = None,
+) -> str:
+    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY / GOOGLE_API_KEY missing")
+    model_name = model or os.environ.get("BOTDRAW_GEMINI_MODEL", "gemini-2.0-flash")
+    # Prefer new google-genai SDK; fall back to google-generativeai
+    try:
+        from google import genai
+        from google.genai import types
+
+        client = genai.Client(api_key=api_key)
+        parts: list[Any] = [types.Part.from_text(text=f"{system}\n\n{prompt}")]
+        for b64, mt in images or [(image_b64, media_type)]:
+            parts.append(
+                types.Part.from_bytes(data=base64.standard_b64decode(b64), mime_type=mt)
+            )
+        resp = client.models.generate_content(model=model_name, contents=parts)
+        return getattr(resp, "text", None) or str(resp)
+    except ImportError:
+        import google.generativeai as genai
+
+        genai.configure(api_key=api_key)
+        model_obj = genai.GenerativeModel(model_name, system_instruction=system)
+        parts = [prompt]
+        for b64, mt in images or [(image_b64, media_type)]:
+            parts.append({"mime_type": mt, "data": base64.standard_b64decode(b64)})
+        resp = model_obj.generate_content(parts)
+        return resp.text or ""
+
+
+def _call_vision(
+    *,
+    system: str,
+    prompt: str,
+    image_b64: str,
+    media_type: str = "image/jpeg",
+    model: str | None = None,
+    provider: ProviderName | None = None,
+    images: list[tuple[str, str]] | None = None,
+) -> str:
+    """Dispatch to the configured vision provider."""
+    p = provider or default_provider()
+    if p == "anthropic":
+        return _call_anthropic_vision(
+            system=system,
+            prompt=prompt,
+            image_b64=image_b64,
+            media_type=media_type,
+            model=model,
+            images=images,
+        )
+    if p == "openai":
+        return _call_openai_vision(
+            system=system,
+            prompt=prompt,
+            image_b64=image_b64,
+            media_type=media_type,
+            model=model,
+            images=images,
+        )
+    if p == "gemini":
+        return _call_gemini_vision(
+            system=system,
+            prompt=prompt,
+            image_b64=image_b64,
+            media_type=media_type,
+            model=model,
+            images=images,
+        )
+    if p == "manual":
+        path = os.environ.get("BOTDRAW_VISION_SCENE_JSON")
+        if not path or not Path(path).exists():
+            raise RuntimeError("BOTDRAW_VISION_SCENE_JSON not set or missing")
+        return Path(path).read_text(encoding="utf-8")
+    raise RuntimeError(f"Unknown vision provider: {p}")
+
+
+# Backward-compatible name used by tests / stubs
+_call_claude_vision = _call_vision
+
+
+# Normalize chat-authored clutter labels onto the closed ingest set
+_CLUTTER_ALIASES = {
+    "window_blinds": "blinds",
+    "blind": "blinds",
+    "blinds": "blinds",
+    "wire_crate": "wire_crate",
+    "crate": "wire_crate",
+    "busy_bg": "busy_bg",
+    "busy_background": "busy_bg",
+    "text": "text",
+}
+
+
+def load_scene_json(path: str | Path) -> PortraitScene:
+    """Load a chat/subscription-authored scene JSON from disk."""
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    # Allow richer manual schemas; keep only PortraitScene fields
+    if isinstance(data.get("clutter"), list):
+        clutter: list[str] = []
+        for c in data["clutter"]:
+            raw = str(c.get("id") or c.get("name") or c) if isinstance(c, dict) else str(c)
+            clutter.append(_CLUTTER_ALIASES.get(raw.lower().strip(), raw))
+        data = {**data, "clutter": clutter}
+    if isinstance(data.get("subjects"), list):
+        subjects = []
+        for s in data["subjects"]:
+            if isinstance(s, dict):
+                subjects.append(
+                    {
+                        "kind": s.get("kind") or "person",
+                        "importance": float(s.get("importance", 1.0)),
+                    }
+                )
+        data = {**data, "subjects": subjects}
+    # Drop unknown top-level keys before validate (framing, restyle_hints, …)
+    keep = {
+        "orientation_deg",
+        "subjects",
+        "clutter",
+        "lighting",
+        "crop_hint",
+        "ingest",
+        "summary",
+    }
+    data = {k: v for k, v in data.items() if k in keep}
+    return PortraitScene.model_validate(data)
+
+
 def review_photo(
     rgb: np.ndarray,
     *,
-    client_call=_call_claude_vision,
+    client_call=_call_vision,
+    provider: ProviderName | None = None,
 ) -> PortraitScene | None:
     """Pre-ingest scene review. Returns None when unavailable or on error."""
-    if not claude_available() and client_call is _call_claude_vision:
+    p = provider or default_provider()
+    if client_call is _call_vision and not vision_available(p):
         return None
     try:
-        raw = client_call(
-            system=SCENE_SYSTEM,
-            prompt="Analyze this portrait photo for pen-plotter ingest. JSON only.",
-            image_b64=_rgb_to_jpeg_b64(rgb),
-        )
-        data = _extract_json(raw)
-        scene = PortraitScene.model_validate(data)
-        # Drop unknown fixes later; clamp clutter to strings
+        if p == "manual" and client_call is _call_vision:
+            path = os.environ.get("BOTDRAW_VISION_SCENE_JSON")
+            if not path:
+                return None
+            scene = load_scene_json(path)
+        else:
+            raw = client_call(
+                system=SCENE_SYSTEM,
+                prompt="Analyze this portrait photo for pen-plotter ingest. JSON only.",
+                image_b64=_rgb_to_jpeg_b64(rgb),
+                provider=p,
+            )
+            data = _extract_json(raw)
+            scene = PortraitScene.model_validate(data)
         scene.clutter = [str(c) for c in scene.clutter][:12]
         return scene
     except (ValidationError, json.JSONDecodeError, Exception):
@@ -241,36 +503,36 @@ def critique_render(
     preview_png: bytes,
     *,
     style_id: str,
-    client_call=_call_claude_vision,
+    client_call=_call_vision,
+    provider: ProviderName | None = None,
 ) -> PortraitCritique | None:
     """Post-render critique. Returns None when unavailable or on error."""
-    if not claude_available() and client_call is _call_claude_vision:
+    p = provider or default_provider()
+    if client_call is _call_vision and not vision_available(p):
+        return None
+    if p == "manual":
+        # Manual mode is scene-only for now
         return None
     try:
         src_b64 = _rgb_to_jpeg_b64(source_rgb)
         prev_b64 = base64.standard_b64encode(preview_png).decode("ascii")
-        # Two-image call: encode source + preview in one user message via a
-        # thin wrapper — client_call takes one image; for the default path we
-        # use a dedicated multi-image helper.
         raw = _critique_two_images(
             source_b64=src_b64,
             preview_b64=prev_b64,
             style_id=style_id,
             client_call=client_call,
+            provider=p,
         )
         data = _extract_json(raw)
         critique = PortraitCritique.model_validate(data)
-        # Filter to closed dictionaries
         kept = []
         for issue in critique.issues:
             if issue.fix in ALLOWED_FIXES:
                 kept.append(issue)
         critique.issues = kept[:12]
-        # Strip unknown action keys by re-validating through model
         acts = critique.actions.model_dump()
         acts = {k: v for k, v in acts.items() if k in ALLOWED_ACTION_KEYS}
         critique.actions = CritiqueActions.model_validate(acts)
-        # Map fix hints into actions when model left actions sparse
         critique.actions = _enrich_actions_from_fixes(critique)
         return critique
     except (ValidationError, json.JSONDecodeError, Exception):
@@ -283,8 +545,13 @@ def _critique_two_images(
     preview_b64: str,
     style_id: str,
     client_call,
+    provider: ProviderName | None = None,
 ) -> str:
-    if client_call is not _call_claude_vision:
+    prompt = (
+        f"Image 1 = source photo. Image 2 = plotter preview "
+        f"(style={style_id}). Critique likeness. JSON only."
+    )
+    if client_call is not _call_vision:
         # Tests inject a single-image stub; pass preview only with style context.
         return client_call(
             system=CRITIQUE_SYSTEM,
@@ -292,49 +559,41 @@ def _critique_two_images(
             image_b64=preview_b64,
             media_type="image/png",
         )
-    import anthropic
-
-    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-    msg = client.messages.create(
-        model=os.environ.get("BOTDRAW_CLAUDE_MODEL", "claude-sonnet-4-20250514"),
-        max_tokens=1024,
+    return client_call(
         system=CRITIQUE_SYSTEM,
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": "image/jpeg",
-                            "data": source_b64,
-                        },
-                    },
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": "image/png",
-                            "data": preview_b64,
-                        },
-                    },
-                    {
-                        "type": "text",
-                        "text": (
-                            f"Image 1 = source photo. Image 2 = plotter preview "
-                            f"(style={style_id}). Critique likeness. JSON only."
-                        ),
-                    },
-                ],
-            }
-        ],
+        prompt=prompt,
+        image_b64=source_b64,
+        media_type="image/jpeg",
+        provider=provider,
+        images=[(source_b64, "image/jpeg"), (preview_b64, "image/png")],
     )
-    parts = []
-    for block in msg.content:
-        if getattr(block, "type", None) == "text":
-            parts.append(block.text)
-    return "\n".join(parts)
+
+
+def compare_providers_scene(
+    rgb: np.ndarray,
+    *,
+    providers: list[ProviderName] | None = None,
+) -> dict[str, Any]:
+    """
+    Run scene review on every ready provider (plus any explicitly listed).
+    Returns {provider: scene_dict | {"error": ...}}.
+    """
+    want = providers or list(PROVIDERS)
+    status = provider_status()
+    results: dict[str, Any] = {}
+    for p in want:
+        if p == "manual" and not status["manual"]["ready"]:
+            results[p] = {"error": "set BOTDRAW_VISION_SCENE_JSON to a scene file"}
+            continue
+        if p != "manual" and not status.get(p, {}).get("ready"):
+            results[p] = {"error": "not ready (key or package missing)", "status": status.get(p)}
+            continue
+        scene = review_photo(rgb, provider=p)
+        if scene is None:
+            results[p] = {"error": "review failed or invalid JSON"}
+        else:
+            results[p] = scene.model_dump()
+    return results
 
 
 def _enrich_actions_from_fixes(critique: PortraitCritique) -> CritiqueActions:

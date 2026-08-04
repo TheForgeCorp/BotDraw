@@ -26,7 +26,11 @@ dependencies = [
 [project.optional-dependencies]
 optimize = ["vpype>=1.14.0"]
 neural = ["onnxruntime>=1.20.0"]
-vision = ["anthropic>=0.40.0"]
+vision = [
+  "anthropic>=0.40.0",
+  "openai>=1.40.0",
+  "google-genai>=1.0.0",
+]
 dev = ["pytest>=8.0.0", "ruff>=0.5.0"]
 
 [project.scripts]

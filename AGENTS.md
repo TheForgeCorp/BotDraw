@@ -36,17 +36,28 @@ the classic pipeline automatically.
 - CI has no weights, so tests must not require them; integration tests are
   `skipif`-gated on `neural_available()`.
 
-## Anthropic vision review (optional studio loop)
+## Vision review (optional studio loop)
 
-Claude reviews the photo (scene knobs) and optionally critiques one render.
+A vision model reviews the photo (scene knobs) and optionally critiques one render.
 It does **not** generate strokes — U2-Net / mesh / restyle stay the drawing path.
 
-- Install: `pip install -e ".[vision]"` (anthropic SDK).
-- Secret: `ANTHROPIC_API_KEY` in the environment (never downloaded by ingest).
-- Optional model override: `BOTDRAW_CLAUDE_MODEL` (default `claude-sonnet-4-20250514`).
+Providers (`BOTDRAW_VISION_PROVIDER`, default `anthropic`):
+
+| Provider | Env key | Notes |
+|---|---|---|
+| `anthropic` | `ANTHROPIC_API_KEY` | Claude API |
+| `openai` | `OPENAI_API_KEY` | GPT vision |
+| `gemini` | `GEMINI_API_KEY` or `GOOGLE_API_KEY` | Gemini vision |
+| `manual` | `BOTDRAW_VISION_SCENE_JSON` | Chat/subscription-authored scene JSON on disk (no API key) |
+
+- Install: `pip install -e ".[vision]"` (anthropic + openai + google-genai SDKs).
+- Model overrides: `BOTDRAW_CLAUDE_MODEL`, `BOTDRAW_OPENAI_MODEL`, `BOTDRAW_GEMINI_MODEL`.
+- CLI: `botdraw vision status` · `botdraw vision compare photo.jpg --out compare.json`
 - Module: `botdraw/portrait/claude_review.py` — `review_photo`, `critique_render`,
-  closed `fix`/`actions` dictionaries mapped onto real knobs.
+  `compare_providers_scene`, closed `fix`/`actions` dictionaries mapped onto real knobs.
 - Dev Panel: “AI review (Studio)” checkbox → `ai_review=true` on ingest/render.
 - Booth default: off. Fail closed when key/package/API missing.
+- While API keys are pending, use Claude (subscription/chat) scenes via `manual` +
+  a JSON file; bake off OpenAI/Gemini with `vision compare` once keys are set.
 - Scene JSON is saved next to ingest artifacts as `ai_scene.json` when present.
-- Unit tests mock the Claude client; CI never calls the live API.
+- Unit tests mock the vision client; CI never calls live APIs.

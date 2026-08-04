@@ -20,6 +20,8 @@ palette_app = typer.Typer(help="Palette set tools")
 app.add_typer(palette_app, name="palette")
 models_app = typer.Typer(help="Neural model weight management")
 app.add_typer(models_app, name="models")
+vision_app = typer.Typer(help="Vision review providers (Anthropic / OpenAI / Gemini / manual)")
+app.add_typer(vision_app, name="vision")
 
 
 @models_app.command("status")
@@ -41,6 +43,64 @@ def models_fetch(
 
     for name, result in fetch_models(force=force).items():
         typer.echo(f"  {name}: {result}")
+
+
+@vision_app.command("status")
+def vision_status() -> None:
+    """Show which vision review providers are ready (key + package)."""
+    from botdraw.portrait.claude_review import default_provider, provider_status
+
+    status = provider_status()
+    print(f"default provider: [bold]{default_provider()}[/bold]")
+    for name, info in status.items():
+        ready = "ready" if info.get("ready") else "not ready"
+        color = "green" if info.get("ready") else "yellow"
+        print(
+            f"  [{color}]{name}[/{color}]: {ready} "
+            f"(key={info.get('key')} package={info.get('package')} "
+            f"model={info.get('model')})"
+        )
+        if name == "manual" and info.get("scene_json"):
+            print(f"    scene_json={info['scene_json']}")
+
+
+@vision_app.command("compare")
+def vision_compare(
+    image: Path = typer.Argument(..., help="Portrait photo to review"),
+    out: Optional[Path] = typer.Option(None, help="Write JSON comparison to this path"),
+    providers: Optional[str] = typer.Option(
+        None,
+        help="Comma-separated providers (default: all ready + status for the rest)",
+    ),
+) -> None:
+    """
+    Bake off scene reviews across providers on one photo.
+
+    Providers without a key/package report an error entry (fail closed).
+    Use BOTDRAW_VISION_PROVIDER=manual + BOTDRAW_VISION_SCENE_JSON for
+    Claude subscription / chat-authored scenes while API keys are pending.
+    """
+    import numpy as np
+    from PIL import Image
+
+    from botdraw.portrait.claude_review import PROVIDERS, compare_providers_scene
+
+    if not image.exists():
+        raise typer.BadParameter(f"image not found: {image}")
+    rgb = np.asarray(Image.open(image).convert("RGB"), dtype=np.float32)
+    want = None
+    if providers:
+        want = [p.strip() for p in providers.split(",") if p.strip()]
+        bad = [p for p in want if p not in PROVIDERS]
+        if bad:
+            raise typer.BadParameter(f"unknown providers: {bad}; choose from {list(PROVIDERS)}")
+    results = compare_providers_scene(rgb, providers=want)  # type: ignore[arg-type]
+    text = json.dumps(results, indent=2)
+    print(text)
+    if out is not None:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(text + "\n", encoding="utf-8")
+        print(f"[green]wrote {out}[/green]")
 
 
 @app.command("styles")

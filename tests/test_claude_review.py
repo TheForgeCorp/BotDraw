@@ -75,6 +75,83 @@ def test_claude_available_false_without_key(monkeypatch):
     assert not cr.claude_available()
 
 
+def test_provider_status_and_default(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("BOTDRAW_VISION_SCENE_JSON", raising=False)
+    monkeypatch.setenv("BOTDRAW_VISION_PROVIDER", "gemini")
+    assert cr.default_provider() == "gemini"
+    status = cr.provider_status()
+    assert set(status) >= {"anthropic", "openai", "gemini", "manual"}
+    assert status["manual"]["ready"] is False
+    assert status["anthropic"]["ready"] is False
+
+
+def test_load_scene_json_normalizes_rich_manual(tmp_path):
+    path = tmp_path / "scene.json"
+    path.write_text(
+        json.dumps(
+            {
+                "orientation_deg": 0,
+                "framing": "ignore_me",
+                "subjects": [
+                    {"kind": "person", "importance": 1.0, "notes": "extra"},
+                    {"kind": "pet", "importance": 0.95, "notes": "puppy"},
+                ],
+                "clutter": [
+                    {"id": "window_blinds", "severity": 0.9},
+                    {"id": "wire_crate", "severity": 0.85},
+                ],
+                "lighting": "backlit_window",
+                "crop_hint": {"x": 0.02, "y": 0.02, "w": 0.96, "h": 0.96},
+                "ingest": {
+                    "line_source": "neural",
+                    "suppress_background": True,
+                    "protect_subjects": ["person", "pet"],
+                    "max_tone_code": 4,
+                },
+                "restyle_hints": {"preferred_styles": ["portrait_linework"]},
+                "summary": "man + puppy",
+            }
+        ),
+        encoding="utf-8",
+    )
+    scene = cr.load_scene_json(path)
+    assert scene.summary == "man + puppy"
+    assert "blinds" in scene.clutter
+    assert "wire_crate" in scene.clutter
+    assert any(s.kind == "pet" for s in scene.subjects)
+    knobs = cr.scene_to_ingest_knobs(scene)
+    assert knobs["suppress_background"] is True
+    assert knobs["line_source"] == "neural"
+
+
+def test_manual_provider_review(monkeypatch, tmp_path):
+    path = tmp_path / "manual.json"
+    path.write_text(SCENE_JSON, encoding="utf-8")
+    monkeypatch.setenv("BOTDRAW_VISION_PROVIDER", "manual")
+    monkeypatch.setenv("BOTDRAW_VISION_SCENE_JSON", str(path))
+    scene = cr.review_photo(_rgb(), provider="manual")
+    assert scene is not None
+    assert scene.orientation_deg == 90
+    assert "pet" in {s.kind for s in scene.subjects}
+
+
+def test_compare_providers_reports_not_ready(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("BOTDRAW_VISION_SCENE_JSON", raising=False)
+    results = cr.compare_providers_scene(_rgb(), providers=["anthropic", "openai", "gemini", "manual"])
+    assert "error" in results["anthropic"]
+    assert "error" in results["openai"]
+    assert "error" in results["gemini"]
+    assert "error" in results["manual"]
+
+
 def test_review_photo_parses_scene_via_stub():
     def stub(**kwargs):
         return SCENE_JSON
