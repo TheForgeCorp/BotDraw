@@ -1596,8 +1596,8 @@ function applyCommonDefaults() {
 
 function styleButtons(list) {
   return `<div class="style-grid">${list.map((s) =>
-    `<button type="button" data-style="${s.id}" class="${s.id === selectedStyle ? "selected" : ""}">
-      <strong>${s.name}</strong><div class="muted">${s.id}</div>
+    `<button type="button" data-style="${s.id}" class="${s.id === selectedStyle ? "selected" : ""}" title="${s.id}">
+      <strong>${s.name}</strong>
     </button>`
   ).join("")}</div>`;
 }

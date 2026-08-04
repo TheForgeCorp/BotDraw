@@ -106,8 +106,27 @@ button { cursor: pointer; }
     height: auto;
     min-height: 0;
   }
-  .rail { max-height: 42vh; border-right: 0; border-bottom: 1px solid var(--line); }
-  .stage { min-height: 58vh; }
+  .rail {
+    max-height: 34vh;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .rail-inspector { max-height: 28%; }
+  .stage {
+    min-height: 62vh;
+    padding-bottom: 0.5rem;
+  }
+  .stage-toolbar {
+    position: sticky;
+    bottom: 0;
+    background: rgba(245, 245, 247, 0.92);
+    backdrop-filter: blur(10px);
+    padding: 0.4rem 0;
+    z-index: 5;
+  }
+  #emu, #letters-emu, #portrait-emu, #portrait-src, #portrait-ingest {
+    max-height: min(54vh, 640px);
+  }
 }
 
 .panel {
@@ -305,6 +324,13 @@ button { cursor: pointer; }
   padding: 0.25rem 0.4rem;
   font-size: 0.625rem;
   line-height: 1.2;
+}
+.style-grid button strong {
+  display: block;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .style-grid button.selected {
   outline: 2px solid var(--ink);

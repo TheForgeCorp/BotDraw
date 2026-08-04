@@ -20,7 +20,7 @@ class EmulatorPlayer {
     this.zoom = 1;
     this.panX = 0;
     this.panY = 0;
-    this.paperColor = "#f7f1e8";
+    this.paperColor = "#ffffff";
     this.loupeOn = false;
     this.loupeFactor = 4;
     this.loupeRadiusCss = 72;
@@ -83,7 +83,7 @@ class EmulatorPlayer {
   }
 
   setPaperColor(hex) {
-    this.paperColor = hex || "#f7f1e8";
+    this.paperColor = hex || "#ffffff";
     this.drawFrame();
   }
 
@@ -353,7 +353,7 @@ class EmulatorPlayer {
     ctx.save();
     ctx.setTransform(this._dpr, 0, 0, this._dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = this.paperColor || "#f7f1e8";
+    ctx.fillStyle = this.paperColor || "#ffffff";
     ctx.fillRect(0, 0, w, h);
     if (!this.plan) {
       ctx.restore();
@@ -456,7 +456,7 @@ class EmulatorPlayer {
     ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
     ctx.clip();
     // Fill paper in loupe
-    ctx.fillStyle = this.paperColor || "#f7f1e8";
+    ctx.fillStyle = this.paperColor || "#ffffff";
     ctx.fillRect(p.x - r, p.y - r, r * 2, r * 2);
     ctx.save();
     // Map: zoom extra around pointer in CSS space

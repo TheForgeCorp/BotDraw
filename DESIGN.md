@@ -93,6 +93,25 @@ Portrait stage segments: **Source | Ingest | Vector** (one large view; default V
 ## Paper stage
 
 - Desk fill `#f5f5f7`
-- Sheet: true paper aspect, stock color fill, contact shadow
+- Idle sheet fill `#ffffff`; after render uses Paper Library `paper_color_hex` (cream stocks are product color, not theme chrome)
+- True paper aspect, contact shadow
 - Shared HiDPI `EmulatorPlayer` (zoom, pan, loupe)
 - Write-optimized canvas context (`willReadFrequently: false`)
+
+## Responsive
+
+- Desktop: `300px` rail + flex stage, full viewport height
+- `≤900px`: rail stacks above stage (~34vh); stage toolbar sticky at bottom for zoom/play/export
+
+## States
+
+| State | Behavior |
+|-------|----------|
+| Empty | White sheet on desk; stats “Ready”; Export actions disabled |
+| Loading | Stats line shows busy copy (Ingesting… / Vectorizing…) |
+| Ready | Sheet shows ink; Export… enabled for current app |
+| Error | Stats line shows message; controls remain usable |
+
+## Finish review (apple-devlab-shell-5528)
+
+Disposition: **pass with notes** (2026-08-04). Material fixes landed: style-grid name-only labels, idle white sheet, sticky mobile toolbar. Seeded demo ink on every tab left as follow-up.
