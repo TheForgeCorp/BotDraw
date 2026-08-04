@@ -5,235 +5,212 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>BotDraw Dev Lab</title>
   <link rel="stylesheet" href="/static/styles.css" />
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,600&display=swap" rel="stylesheet" />
 </head>
 <body data-app="genartbot">
-  <div class="bg"></div>
-  <header class="top">
+  <!--
+    THESIS: Paper on a desk with linework drawing — not a button dashboard.
+    OWN-WORLD: Apple-Operate; system gray desk #f5f5f7, white sheet, near-black ink, hairline chrome, SF/system UI.
+    STORY: Operator picks an app, tunes compact controls, watches ink draw on a real paper sheet, exports for the plotter.
+    FIRST VIEWPORT: Top segmented tabs; left ~300px rail; right large desk with elevated paper + thin toolbar.
+    FORM: Apple-canvas Operate (Final Cut / Preview / Photos craft bar); seed apple-devlab-shell-5528; user-pinned.
+    FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md
+  -->
+  <header class="top" id="top">
     <div class="brand">
       <span class="mark">BotDraw</span>
-      <span class="tag">dev lab · vectorization / color layers / JSON export</span>
+      <span class="tag">Dev Lab</span>
     </div>
-    <nav class="tabs" id="tabs">
-      <button data-app="genartbot" class="active">GenArt</button>
-      <button data-app="portraitbot">Portrait</button>
-      <button data-app="lettersbot">Letters</button>
-      <button data-app="rdlab">R&amp;D</button>
-      <button data-app="papers">Paper</button>
-      <button data-app="palettes">Pen Library</button>
-      <button data-app="lines">Line Library</button>
-      <button data-app="tools">Tools</button>
+    <nav class="tabs" id="tabs" aria-label="Apps">
+      <button type="button" data-app="genartbot" class="active">GenArt</button>
+      <button type="button" data-app="portraitbot">Portrait</button>
+      <button type="button" data-app="lettersbot">Letters</button>
+      <button type="button" data-app="rdlab">R&amp;D</button>
+      <button type="button" data-app="papers">Paper</button>
+      <button type="button" data-app="palettes">Pens</button>
+      <button type="button" data-app="lines">Lines</button>
+      <button type="button" data-app="tools">Tools</button>
     </nav>
   </header>
 
-  <main class="layout lab" id="lab-shell">
-    <section class="panel controls" id="controls"></section>
+  <main class="devlab" id="devlab-shell">
+    <aside class="rail panel" id="rail">
+      <div class="rail-pane" id="controls" data-rail="lab"></div>
+      <div class="rail-pane" id="portrait-content" data-rail="portrait" hidden></div>
+      <div class="rail-pane letters-rail" id="letters-rail" data-rail="letters" hidden>
+        <nav class="type-rail" id="letter-types" aria-label="Letter types">
+          <button type="button" data-type="professional">Professional</button>
+          <button type="button" data-type="marketing">Marketing</button>
+          <button type="button" data-type="envelopes">Envelopes</button>
+          <button type="button" data-type="personal" class="active">Personal</button>
+          <button type="button" data-type="invitations">Invitations</button>
+          <button type="button" data-type="postcards">Postcards</button>
+        </nav>
+        <div class="letter-content" id="letter-content"></div>
+      </div>
+      <div class="rail-inspector" id="rail-inspector" data-rail-inspector hidden>
+        <div class="seg insp-tabs" id="insp-tabs">
+          <button type="button" data-insp="layers" class="active">Layers</button>
+          <button type="button" data-insp="json">JSON</button>
+          <button type="button" data-insp="job">Job</button>
+        </div>
+        <div id="inspector-body" class="inspector-body">
+          <p class="muted">Render a job to inspect layers, pens, and stats.</p>
+        </div>
+      </div>
+    </aside>
 
-    <section class="panel stage">
+    <section class="stage" id="stage">
       <div class="stage-head">
-        <h2 id="stage-title">Emulator</h2>
-        <div class="stats" id="stats">Ready</div>
-      </div>
-      <div class="lab-compare" id="lab-compare" hidden>
-        <div class="portrait-pane">
-          <div class="pane-label">Source</div>
-          <canvas id="lab-src" width="360" height="480"></canvas>
+        <div class="seg stage-seg" id="stage-seg" hidden>
+          <button type="button" data-seg="source">Source</button>
+          <button type="button" data-seg="ingest">Ingest</button>
+          <button type="button" data-seg="vector" class="active">Vector</button>
         </div>
-        <div class="portrait-pane">
-          <div class="pane-label">Ingest</div>
-          <canvas id="lab-ingest" width="360" height="480"></canvas>
-        </div>
-        <div class="portrait-pane lab-vector-pane">
-          <div class="pane-label">Vector</div>
-        </div>
+        <div class="stats" id="stats" aria-live="polite">Ready</div>
       </div>
-      <div class="paper-frame lab-emu-frame" id="lab-emu-frame">
-        <canvas id="emu" width="900" height="1200"></canvas>
-      </div>
-      <div class="letters-zoom lab-zoom" id="lab-zoom">
-        <button type="button" id="lab-zoom-out" title="Zoom out">−</button>
-        <button type="button" id="lab-zoom-fit" title="Fit">Fit</button>
-        <button type="button" id="lab-zoom-in" title="Zoom in">+</button>
-        <button type="button" id="lab-loupe" title="Loupe (L)">Loupe</button>
-        <span class="zoom-label" id="lab-zoom-label">1.00×</span>
-      </div>
-      <div class="transport">
-        <button id="play">Play</button>
-        <button id="pause">Pause</button>
-        <button id="skip">Skip end</button>
-        <label>Speed <input id="speed" type="range" min="1" max="60" value="16" /></label>
-        <label class="chk"><input id="ghost" type="checkbox" checked /> pen-up ghost</label>
-        <a id="download-svg" class="link" href="#" hidden>SVG</a>
-      </div>
-      <div class="export-bar">
-        <button id="export-pack" disabled>Export pack JSON</button>
-        <button id="export-settings" disabled>Settings JSON</button>
-        <button id="export-layers" disabled>Layers JSON</button>
-        <button id="export-motion" disabled>Motion JSON</button>
-        <button id="export-palette" disabled>Palette JSON</button>
-        <button id="copy-json" disabled>Copy inspector JSON</button>
-      </div>
-    </section>
 
-    <section class="panel inspector">
-      <div class="insp-tabs">
-        <button data-insp="layers" class="active">Layers</button>
-        <button data-insp="json">JSON</button>
-        <button data-insp="job">Job</button>
-      </div>
-      <div id="inspector-body" class="inspector-body">
-        <p class="muted">Render a job to inspect color layers, pens, and vectorization stats.</p>
-      </div>
-    </section>
-  </main>
+      <div class="paper-desk" id="paper-desk">
+        <!-- GenArt / R&D / libraries -->
+        <div class="sheet-wrap" id="lab-sheet" data-stage="lab">
+          <div class="paper-sheet" id="lab-emu-frame">
+            <canvas id="emu" width="900" height="1200"></canvas>
+          </div>
+        </div>
 
-  <main class="letters-lab" id="letters-shell" hidden>
-    <header class="letters-top">
-      <div class="letters-identity">
-        <span class="letters-mark">Letters</span>
-        <span class="letters-sub">Dev panel</span>
-      </div>
-      <div class="letters-stats" id="letters-stats" aria-live="polite">Ready</div>
-    </header>
+        <!-- Letters -->
+        <div class="sheet-wrap" id="letters-sheet" data-stage="letters" hidden>
+          <div class="sheet-meta">
+            <label>Size
+              <select id="letters-paper">
+                <option value="A5" selected>A5</option>
+                <option value="A4">A4</option>
+                <option value="Letter">Letter</option>
+                <option value="A3">A3</option>
+                <option value="Card">Card</option>
+              </select>
+            </label>
+            <label>Orientation
+              <select id="letters-orientation">
+                <option value="portrait" selected>Portrait</option>
+                <option value="landscape">Landscape</option>
+              </select>
+            </label>
+            <span class="margin-label">Margins</span>
+            <label>L <input id="margin-left" type="number" min="0" step="1" value="18" /></label>
+            <label>T <input id="margin-top" type="number" min="0" step="1" value="18" /></label>
+            <label>R <input id="margin-right" type="number" min="0" step="1" value="18" /></label>
+            <label>B <input id="margin-bottom" type="number" min="0" step="1" value="18" /></label>
+          </div>
+          <div class="paper-sheet" id="paper-frame">
+            <canvas id="letters-emu" width="740" height="1050"></canvas>
+            <div class="print-limit" id="print-limit" aria-hidden="true"></div>
+          </div>
+        </div>
 
-    <div class="letters-grid">
-      <aside class="letters-left panel">
-        <div class="letters-left-split">
-          <nav class="type-rail" id="letter-types" aria-label="Letter types">
-            <button type="button" data-type="professional">Professional</button>
-            <button type="button" data-type="marketing">Marketing</button>
-            <button type="button" data-type="envelopes">Envelopes</button>
-            <button type="button" data-type="personal" class="active">Personal</button>
-            <button type="button" data-type="invitations">Invitations</button>
-            <button type="button" data-type="postcards">Postcards</button>
-          </nav>
-          <div class="letter-content" id="letter-content"></div>
-        </div>
-      </aside>
-
-      <section class="letters-right panel">
-        <div class="paper-controls">
-          <label>Size
-            <select id="letters-paper">
-              <option value="A5" selected>A5</option>
-              <option value="A4">A4</option>
-              <option value="Letter">Letter</option>
-              <option value="A3">A3</option>
-              <option value="Card">Card</option>
-            </select>
-          </label>
-          <label>Orientation
-            <select id="letters-orientation">
-              <option value="portrait" selected>Portrait</option>
-              <option value="landscape">Landscape</option>
-            </select>
-          </label>
-        </div>
-        <div class="margin-controls">
-          <span class="margin-label">Margins mm</span>
-          <label>L <input id="margin-left" type="number" min="0" step="1" value="18" /></label>
-          <label>T <input id="margin-top" type="number" min="0" step="1" value="18" /></label>
-          <label>R <input id="margin-right" type="number" min="0" step="1" value="18" /></label>
-          <label>B <input id="margin-bottom" type="number" min="0" step="1" value="18" /></label>
-        </div>
-        <div class="paper-frame" id="paper-frame">
-          <canvas id="letters-emu" width="740" height="1050"></canvas>
-          <div class="print-limit" id="print-limit" aria-hidden="true"></div>
-        </div>
-        <div class="letters-zoom">
-          <button type="button" id="letters-zoom-out" title="Zoom out">−</button>
-          <button type="button" id="letters-zoom-fit" title="Fit">Fit</button>
-          <button type="button" id="letters-zoom-in" title="Zoom in">+</button>
-          <button type="button" id="letters-loupe" title="Loupe (L)">Loupe</button>
-          <span class="zoom-label" id="letters-zoom-label">1.00×</span>
-        </div>
-        <div class="letters-transport">
-          <button type="button" id="letters-play">Play</button>
-          <button type="button" id="letters-pause">Pause</button>
-          <button type="button" id="letters-skip">End</button>
-          <label class="speed-label">Speed <input id="letters-speed" type="range" min="1" max="60" value="16" /></label>
-        </div>
-        <div class="letters-download">
-          <button type="button" class="primary" id="letters-dl-svg" disabled>Download SVG</button>
-          <button type="button" id="letters-dl-motion" disabled>Motion JSON</button>
-          <button type="button" id="letters-dl-pack" disabled>Pack</button>
-        </div>
-      </section>
-    </div>
-  </main>
-
-  <main class="letters-lab portrait-lab" id="portrait-shell" hidden>
-    <header class="letters-top">
-      <div class="letters-identity">
-        <span class="letters-mark">Portrait</span>
-        <span class="letters-sub">Dev panel</span>
-      </div>
-      <div class="letters-stats" id="portrait-stats" aria-live="polite">Ready</div>
-    </header>
-
-    <div class="letters-grid portrait-grid">
-      <aside class="letters-left panel portrait-left">
-        <div class="letter-content" id="portrait-content"></div>
-      </aside>
-
-      <section class="letters-right panel portrait-right">
-        <div class="portrait-compare">
-          <div class="portrait-pane">
-            <div class="pane-label">Source</div>
+        <!-- Portrait segments -->
+        <div class="sheet-wrap" id="portrait-sheet" data-stage="portrait" hidden>
+          <div class="paper-sheet portrait-src-sheet" id="portrait-src-sheet" data-seg-view="source" hidden>
             <canvas id="portrait-src" width="480" height="640"></canvas>
           </div>
-          <div class="portrait-pane">
-            <div class="pane-label">Ingest <span class="pane-hint">(raw vectorization)</span></div>
-            <div class="paper-frame portrait-frame" id="portrait-ingest-frame">
-              <canvas id="portrait-ingest" width="480" height="640"></canvas>
-            </div>
-            <div class="ingest-toggles" id="ingest-toggles">
-              <label><input type="checkbox" id="toggle-edges" checked /> Edges</label>
-              <label><input type="checkbox" id="toggle-hatch" checked /> Hatch</label>
-              <label><input type="checkbox" id="toggle-regions" checked /> Regions</label>
-              <label><input type="checkbox" id="toggle-crop" checked /> Crop</label>
-              <label>Underlay
-                <select id="ingest-underlay" title="Scan intermediate or tone-grid heatmap">
-                  <option value="scan">Scan</option>
-                  <option value="tone">Tone grid</option>
-                  <option value="photo">Photo</option>
-                  <option value="none">None</option>
-                </select>
-              </label>
-              <a id="portrait-dl-ingest-svg" href="#" hidden>Raw SVG</a>
-            </div>
-            <p class="muted pane-hint" id="scan-mode-hint" style="margin:0.25rem 0 0;font-size:0.78rem"></p>
+          <div class="paper-sheet portrait-ingest-sheet" id="portrait-ingest-frame" data-seg-view="ingest" hidden>
+            <canvas id="portrait-ingest" width="480" height="640"></canvas>
           </div>
-          <div class="portrait-pane">
-            <div class="pane-label">Vector <span class="pane-hint">(styled)</span></div>
-            <div class="paper-frame portrait-frame" id="portrait-frame">
-              <canvas id="portrait-emu" width="480" height="640"></canvas>
-            </div>
+          <div class="paper-sheet" id="portrait-frame" data-seg-view="vector">
+            <canvas id="portrait-emu" width="480" height="640"></canvas>
+          </div>
+          <div class="ingest-toggles" id="ingest-toggles" hidden>
+            <label><input type="checkbox" id="toggle-edges" checked /> Edges</label>
+            <label><input type="checkbox" id="toggle-hatch" checked /> Hatch</label>
+            <label><input type="checkbox" id="toggle-regions" checked /> Regions</label>
+            <label><input type="checkbox" id="toggle-crop" checked /> Crop</label>
+            <label>Underlay
+              <select id="ingest-underlay">
+                <option value="scan">Scan</option>
+                <option value="tone">Tone grid</option>
+                <option value="photo">Photo</option>
+                <option value="none">None</option>
+              </select>
+            </label>
+            <a id="portrait-dl-ingest-svg" href="#" hidden>Raw SVG</a>
+            <p class="muted" id="scan-mode-hint"></p>
           </div>
         </div>
-        <div class="letters-transport">
-          <button type="button" id="portrait-play">Play</button>
-          <button type="button" id="portrait-pause">Pause</button>
-          <button type="button" id="portrait-skip">End</button>
-          <label class="speed-label">Speed <input id="portrait-speed" type="range" min="1" max="60" value="16" /></label>
+
+        <!-- Hidden lab compare canvases (still used by GenArt ingest) -->
+        <div id="lab-compare" hidden>
+          <canvas id="lab-src" width="360" height="480"></canvas>
+          <canvas id="lab-ingest" width="360" height="480"></canvas>
+          <div class="lab-vector-pane"></div>
         </div>
-        <div class="letters-zoom">
-          <button type="button" id="portrait-zoom-out" title="Zoom out">−</button>
-          <button type="button" id="portrait-zoom-fit" title="Fit">Fit</button>
-          <button type="button" id="portrait-zoom-in" title="Zoom in">+</button>
-          <button type="button" id="portrait-loupe" title="Loupe (L)">Loupe</button>
-          <span class="zoom-label" id="portrait-zoom-label">1.00×</span>
+      </div>
+
+      <div class="stage-toolbar">
+        <div class="seg zoom-bar" id="zoom-bar">
+          <button type="button" id="zoom-out" title="Zoom out">−</button>
+          <button type="button" id="zoom-fit" title="Fit">Fit</button>
+          <button type="button" id="zoom-in" title="Zoom in">+</button>
+          <button type="button" id="loupe" title="Loupe (L)">Loupe</button>
+          <span class="zoom-label" id="zoom-label">1.00×</span>
         </div>
-        <div class="letters-download">
-          <button type="button" class="primary" id="portrait-dl-svg" disabled>Download SVG</button>
-          <button type="button" id="portrait-dl-motion" disabled>Motion JSON</button>
-          <button type="button" id="portrait-dl-pack" disabled>Pack</button>
+        <div class="transport" id="transport">
+          <button type="button" class="btn" id="play">Play</button>
+          <button type="button" class="btn" id="pause">Pause</button>
+          <button type="button" class="btn" id="skip">End</button>
+          <label class="speed-label">Speed <input id="speed" type="range" min="1" max="60" value="16" /></label>
+          <label class="chk"><input id="ghost" type="checkbox" checked /> Ghost</label>
         </div>
-      </section>
-    </div>
+        <div class="export-menu">
+          <details id="export-details">
+            <summary class="btn">Export…</summary>
+            <div class="export-panel">
+              <button type="button" class="btn" id="export-pack" disabled>Pack JSON</button>
+              <button type="button" class="btn" id="export-settings" disabled>Settings</button>
+              <button type="button" class="btn" id="export-layers" disabled>Layers</button>
+              <button type="button" class="btn" id="export-motion" disabled>Motion</button>
+              <button type="button" class="btn" id="export-palette" disabled>Palette</button>
+              <button type="button" class="btn" id="copy-json" disabled>Copy JSON</button>
+              <a id="download-svg" class="btn link" href="#" hidden>SVG</a>
+              <button type="button" class="btn btn-primary" id="letters-dl-svg" disabled>SVG</button>
+              <button type="button" class="btn" id="letters-dl-motion" disabled>Motion</button>
+              <button type="button" class="btn" id="letters-dl-pack" disabled>Pack</button>
+              <button type="button" class="btn btn-primary" id="portrait-dl-svg" disabled>SVG</button>
+              <button type="button" class="btn" id="portrait-dl-motion" disabled>Motion</button>
+              <button type="button" class="btn" id="portrait-dl-pack" disabled>Pack</button>
+            </div>
+          </details>
+        </div>
+      </div>
+    </section>
   </main>
+
+  <!-- Compatibility aliases for legacy id lookups -->
+  <div hidden aria-hidden="true">
+    <div id="letters-stats"></div>
+    <div id="portrait-stats"></div>
+    <button type="button" id="letters-play"></button>
+    <button type="button" id="letters-pause"></button>
+    <button type="button" id="letters-skip"></button>
+    <input id="letters-speed" type="range" min="1" max="60" value="16" />
+    <button type="button" id="portrait-play"></button>
+    <button type="button" id="portrait-pause"></button>
+    <button type="button" id="portrait-skip"></button>
+    <input id="portrait-speed" type="range" min="1" max="60" value="16" />
+    <button type="button" id="letters-zoom-out"></button>
+    <button type="button" id="letters-zoom-fit"></button>
+    <button type="button" id="letters-zoom-in"></button>
+    <button type="button" id="letters-loupe"></button>
+    <span id="letters-zoom-label"></span>
+    <button type="button" id="portrait-zoom-out"></button>
+    <button type="button" id="portrait-zoom-fit"></button>
+    <button type="button" id="portrait-zoom-in"></button>
+    <button type="button" id="portrait-loupe"></button>
+    <span id="portrait-zoom-label"></span>
+    <button type="button" id="lab-zoom-out"></button>
+    <button type="button" id="lab-zoom-fit"></button>
+    <button type="button" id="lab-zoom-in"></button>
+    <button type="button" id="lab-loupe"></button>
+    <span id="lab-zoom-label"></span>
+  </div>
 
   <script src="/static/emulator.js"></script>
   <script src="/static/app.js"></script>

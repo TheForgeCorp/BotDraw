@@ -2,17 +2,17 @@ const player = new EmulatorPlayer(document.getElementById("emu"));
 const lettersPlayer = new EmulatorPlayer(document.getElementById("letters-emu"));
 const portraitPlayer = new EmulatorPlayer(document.getElementById("portrait-emu"));
 const statsEl = document.getElementById("stats");
-const lettersStatsEl = document.getElementById("letters-stats");
-const portraitStatsEl = document.getElementById("portrait-stats");
+const lettersStatsEl = statsEl;
+const portraitStatsEl = statsEl;
 const controls = document.getElementById("controls");
 const inspectorBody = document.getElementById("inspector-body");
 const downloadSvg = document.getElementById("download-svg");
-const labShell = document.getElementById("lab-shell");
-const lettersShell = document.getElementById("letters-shell");
-const portraitShell = document.getElementById("portrait-shell");
+const railInspector = document.getElementById("rail-inspector");
+const stageSegEl = document.getElementById("stage-seg");
+let portraitStageSeg = "vector";
 player.onStats = (m) => { statsEl.textContent = m; };
-lettersPlayer.onStats = (m) => { if (lettersStatsEl) lettersStatsEl.textContent = m; };
-portraitPlayer.onStats = (m) => { if (portraitStatsEl) portraitStatsEl.textContent = m; };
+lettersPlayer.onStats = (m) => { statsEl.textContent = m; };
+portraitPlayer.onStats = (m) => { statsEl.textContent = m; };
 let portraitImageMode = "photo";
 let portraitFile = null;
 let portraitIngestId = null;
@@ -227,34 +227,106 @@ const state = {
   rpm: 3,
 };
 
-document.getElementById("play").onclick = () => player.play();
-document.getElementById("pause").onclick = () => player.pause();
-document.getElementById("skip").onclick = () => player.skipEnd();
-document.getElementById("speed").oninput = (e) => player.setSpeed(e.target.value);
-document.getElementById("ghost").onchange = (e) => player.setGhost(e.target.checked);
+function stagePlayer() {
+  if (currentApp === "lettersbot") return lettersPlayer;
+  if (currentApp === "portraitbot") return portraitPlayer;
+  return player;
+}
 
-document.getElementById("letters-play").onclick = () => lettersPlayer.play();
-document.getElementById("letters-pause").onclick = () => lettersPlayer.pause();
-document.getElementById("letters-skip").onclick = () => lettersPlayer.skipEnd();
-document.getElementById("letters-speed").oninput = (e) => lettersPlayer.setSpeed(e.target.value);
-document.getElementById("portrait-play").onclick = () => portraitPlayer.play();
-document.getElementById("portrait-pause").onclick = () => portraitPlayer.pause();
-document.getElementById("portrait-skip").onclick = () => portraitPlayer.skipEnd();
-document.getElementById("portrait-speed").oninput = (e) => portraitPlayer.setSpeed(e.target.value);
+function syncZoomLabel(z) {
+  const zl = document.getElementById("zoom-label");
+  if (zl) zl.textContent = `${Number(z || 1).toFixed(2)}×`;
+  const loupe = document.getElementById("loupe");
+  if (loupe) loupe.classList.toggle("active", !!stagePlayer().loupeOn);
+}
+
+function setPortraitStageSeg(seg) {
+  portraitStageSeg = seg || "vector";
+  if (stageSegEl) {
+    stageSegEl.querySelectorAll("button").forEach((b) => {
+      b.classList.toggle("active", b.dataset.seg === portraitStageSeg);
+    });
+  }
+  document.querySelectorAll("#portrait-sheet [data-seg-view]").forEach((el) => {
+    el.hidden = el.dataset.segView !== portraitStageSeg;
+  });
+  const toggles = document.getElementById("ingest-toggles");
+  if (toggles) toggles.hidden = portraitStageSeg !== "ingest";
+  requestAnimationFrame(() => {
+    portraitPlayer.syncSize();
+    portraitPlayer.fitZoom();
+  });
+}
 
 function setShellForApp(app) {
   document.body.dataset.app = app;
   const letters = app === "lettersbot";
   const portrait = app === "portraitbot";
-  labShell.hidden = letters || portrait;
-  if (lettersShell) lettersShell.hidden = !letters;
-  if (portraitShell) portraitShell.hidden = !portrait;
+  const lab = !letters && !portrait;
+
+  const controlsEl = document.getElementById("controls");
+  const lettersRail = document.getElementById("letters-rail");
+  const portraitContent = document.getElementById("portrait-content");
+  if (controlsEl) controlsEl.hidden = !lab;
+  if (lettersRail) lettersRail.hidden = !letters;
+  if (portraitContent) portraitContent.hidden = !portrait;
+  if (railInspector) railInspector.hidden = !lab;
+
+  const labSheet = document.getElementById("lab-sheet");
+  const lettersSheet = document.getElementById("letters-sheet");
+  const portraitSheet = document.getElementById("portrait-sheet");
+  if (labSheet) labSheet.hidden = !lab;
+  if (lettersSheet) lettersSheet.hidden = !letters;
+  if (portraitSheet) portraitSheet.hidden = !portrait;
+  if (stageSegEl) stageSegEl.hidden = !portrait;
+
+  const exportPack = document.getElementById("export-pack");
+  const letterSvg = document.getElementById("letters-dl-svg");
+  const portraitSvg = document.getElementById("portrait-dl-svg");
+  // Show app-appropriate export actions inside the shared menu
+  ["export-pack", "export-settings", "export-layers", "export-motion", "export-palette", "copy-json", "download-svg"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.hidden = !lab;
+  });
+  ["letters-dl-svg", "letters-dl-motion", "letters-dl-pack"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.hidden = !letters;
+  });
+  ["portrait-dl-svg", "portrait-dl-motion", "portrait-dl-pack"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.hidden = !portrait;
+  });
+  void exportPack;
+  void letterSvg;
+  void portraitSvg;
+
+  if (portrait) setPortraitStageSeg(portraitStageSeg);
+  requestAnimationFrame(() => {
+    const pl = stagePlayer();
+    pl.syncSize();
+    syncZoomLabel(pl.zoom);
+  });
 }
 
-function stagePlayer() {
-  if (currentApp === "lettersbot") return lettersPlayer;
-  if (currentApp === "portraitbot") return portraitPlayer;
-  return player;
+document.getElementById("play").onclick = () => stagePlayer().play();
+document.getElementById("pause").onclick = () => stagePlayer().pause();
+document.getElementById("skip").onclick = () => stagePlayer().skipEnd();
+document.getElementById("speed").oninput = (e) => stagePlayer().setSpeed(e.target.value);
+document.getElementById("ghost").onchange = (e) => stagePlayer().setGhost(e.target.checked);
+
+document.getElementById("zoom-in").onclick = () => stagePlayer().zoomBy(1.15);
+document.getElementById("zoom-out").onclick = () => stagePlayer().zoomBy(1 / 1.15);
+document.getElementById("zoom-fit").onclick = () => stagePlayer().fitZoom();
+document.getElementById("loupe").onclick = () => {
+  const pl = stagePlayer();
+  pl.toggleLoupe();
+  document.getElementById("loupe").classList.toggle("active", pl.loupeOn);
+};
+
+if (stageSegEl) {
+  stageSegEl.querySelectorAll("button").forEach((btn) => {
+    btn.onclick = () => setPortraitStageSeg(btn.dataset.seg);
+  });
 }
 
 document.querySelectorAll("#tabs button").forEach((btn) => {
@@ -267,9 +339,9 @@ document.querySelectorAll("#tabs button").forEach((btn) => {
   };
 });
 
-document.querySelectorAll(".insp-tabs button").forEach((btn) => {
+document.querySelectorAll(".insp-tabs button, #insp-tabs button").forEach((btn) => {
   btn.onclick = () => {
-    document.querySelectorAll(".insp-tabs button").forEach((b) => b.classList.remove("active"));
+    document.querySelectorAll(".insp-tabs button, #insp-tabs button").forEach((b) => b.classList.remove("active"));
     btn.classList.add("active");
     inspTab = btn.dataset.insp;
     renderInspector();
@@ -347,7 +419,10 @@ function loadResult(data, opts = {}) {
     downloadSvg.hidden = currentApp === "portraitbot" || currentApp === "lettersbot";
     downloadSvg.href = `/api/jobs/${lastJob.id}/svg`;
   }
-  if (currentApp === "portraitbot") setPortraitDownloads(true, lastJob?.id);
+  if (currentApp === "portraitbot") {
+    setPortraitDownloads(true, lastJob?.id);
+    setPortraitStageSeg("vector");
+  }
   if (currentApp !== "portraitbot" && currentApp !== "lettersbot") setExportEnabled(true);
   inspectorJson = {
     settings: lastSettings,
@@ -684,16 +759,10 @@ function applyLineStockToPortraitForm(root, stock) {
 }
 
 function ensureLabEmuInCompare() {
-  const compare = document.getElementById("lab-compare");
-  const pane = document.querySelector(".lab-vector-pane");
-  const frame = document.getElementById("lab-emu-frame");
-  const emu = document.getElementById("emu");
-  if (!compare || !pane || !emu) return;
-  compare.hidden = false;
-  const stage = (frame || emu).closest(".stage");
-  if (stage) stage.classList.add("compare-on");
-  const moveEl = frame || emu;
-  if (moveEl.parentElement !== pane) pane.appendChild(moveEl);
+  // Apple shell: keep a single paper hero; Source/Ingest draw to offstage canvases.
+  const labSheet = document.getElementById("lab-sheet");
+  if (labSheet) labSheet.hidden = false;
+  requestAnimationFrame(() => player.syncSize());
 }
 
 function drawLabSource(file) {
@@ -817,7 +886,7 @@ function renderPortrait() {
     .join("");
   root.innerHTML = `
     <h3>Portrait</h3>
-    <p class="muted">Step 1: Ingest (linedraw vectors). Step 2: Vectorize — styles use those edges/hatch. Prefer line type <code>solid</code>.</p>
+    <p class="muted">Ingest linedraw vectors, then vectorize with a style. Stage: Source · Ingest · Vector.</p>
     <h4>Image</h4>
     <div class="portrait-drop ${portraitFile ? "has-file" : ""}" id="portrait-drop">
       ${portraitFile ? portraitFile.name : "Drop a photo or choose a file"}
@@ -1234,6 +1303,7 @@ async function runPortraitIngest(opts = {}) {
   if (data.crop) portraitCrop = data.crop;
   drawPortraitSourcePreview(portraitFile, data.crop);
   drawPortraitIngestPreview(data);
+  setPortraitStageSeg("ingest");
   const wall = ((performance.now() - t0) / 1000).toFixed(2);
   const timing = data.timing_s || {};
   const meta = data.meta || {};
@@ -1596,14 +1666,14 @@ function renderGenArt() {
   );
   if (!list.find((s) => s.id === selectedStyle)) selectedStyle = list[0]?.id || "stipple";
   controls.innerHTML = `
-    <h3>GenArtBot · Dev</h3>
-    <p class="muted">Tune vectorization + multicolor layers. Optional photo ingest (linedraw) before Vectorize.</p>
+    <h3>GenArt</h3>
+    <p class="muted">Style, paper, optional photo ingest, then vectorize.</p>
     <h4>Style</h4>
     ${styleButtons(list)}
     ${commonDevOpts()}
     <div class="row">
-      <button type="button" id="genart-ingest">Ingest</button>
-      <button class="primary" id="go">Vectorize</button>
+      <button type="button" class="btn" id="genart-ingest">Ingest</button>
+      <button type="button" class="btn btn-primary primary" id="go">Vectorize</button>
     </div>
   `;
   bindStyleGrid();
@@ -2220,8 +2290,7 @@ async function vectorizeLetter(opts = {}) {
     }
   }
   syncLineHandles();
-  const zl = document.getElementById("letters-zoom-label");
-  if (zl) zl.textContent = `${lettersPlayer.zoom.toFixed(2)}×`;
+  syncZoomLabel(lettersPlayer.zoom);
   setLettersDownloads(true, lastJob?.id);
   const timing = data.settings?.timing_s || {};
   const src = data.draft?.source || "?";
@@ -2288,18 +2357,8 @@ async function renderLetters() {
       letterVectorizeTimer = setTimeout(() => scheduleLetterVectorize(), 180);
     }
   };
-  const setZoomUi = () => {
-    const zl = document.getElementById("letters-zoom-label");
-    if (zl) zl.textContent = `${lettersPlayer.zoom.toFixed(2)}×`;
-  };
-  lettersPlayer.onZoomChange = () => setZoomUi();
-  const zin = document.getElementById("letters-zoom-in");
-  const zout = document.getElementById("letters-zoom-out");
-  const zfit = document.getElementById("letters-zoom-fit");
-  if (zin) zin.onclick = () => { lettersPlayer.zoomBy(1.15); };
-  if (zout) zout.onclick = () => { lettersPlayer.zoomBy(1 / 1.15); };
-  if (zfit) zfit.onclick = () => { lettersPlayer.fitZoom(); };
-  setZoomUi();
+  lettersPlayer.onZoomChange = (z) => syncZoomLabel(z);
+  syncZoomLabel(lettersPlayer.zoom);
   root.querySelector("#palette").value = selectedPaletteId;
   root.querySelector("#palette").onchange = () => {
     selectedPaletteId = root.querySelector("#palette").value;
@@ -2869,28 +2928,17 @@ document.getElementById("copy-json").onclick = async () => {
   statsEl.textContent = "Copied inspector JSON";
 };
 
-function wireZoomToolbar(prefix, emu) {
-  const zin = document.getElementById(`${prefix}-zoom-in`);
-  const zout = document.getElementById(`${prefix}-zoom-out`);
-  const zfit = document.getElementById(`${prefix}-zoom-fit`);
-  const loupe = document.getElementById(`${prefix}-loupe`);
-  const zl = document.getElementById(`${prefix}-zoom-label`);
-  emu.onZoomChange = (z) => { if (zl) zl.textContent = `${z.toFixed(2)}×`; };
-  if (zin) zin.onclick = () => emu.zoomBy(1.15);
-  if (zout) zout.onclick = () => emu.zoomBy(1 / 1.15);
-  if (zfit) zfit.onclick = () => emu.fitZoom();
-  if (loupe) loupe.onclick = () => {
-    emu.toggleLoupe();
-    loupe.classList.toggle("active", emu.loupeOn);
-  };
-  emu.enableInteraction();
-  emu.syncSize();
+function wireSharedPlayers() {
+  [player, lettersPlayer, portraitPlayer].forEach((emu) => {
+    emu.onZoomChange = (z) => {
+      if (emu === stagePlayer()) syncZoomLabel(z);
+    };
+    emu.enableInteraction();
+    emu.syncSize();
+  });
 }
 
-wireZoomToolbar("letters", lettersPlayer);
-wireZoomToolbar("portrait", portraitPlayer);
-wireZoomToolbar("lab", player);
-
+wireSharedPlayers();
 setShellForApp(currentApp);
 
 renderControls().catch((e) => {
