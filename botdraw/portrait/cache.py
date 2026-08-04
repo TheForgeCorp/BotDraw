@@ -54,7 +54,7 @@ def make_ingest_key(
         f"|{mode}|{quality}|{paper}|{_crop_key(crop)}"
         f"|p{posterize_levels}|s{filter_speckle}|m{min_path_points}|c{contrast}"
         f"|cs{contour_simplify}|hs{hatch_size}|lj{linedraw_jitter}|e{ensemble}"
-        f"|sm{scan_mode}|tg1"  # tone-grid IR v1 + edge prep
+        f"|sm{scan_mode}|mesh1"  # portrait mesh IR + interface walks
     )
     h.update(knobs.encode())
     return h.hexdigest()[:24]
@@ -75,6 +75,8 @@ def save_portrait_vector(pv: PortraitVector, ingest_id: str | None = None) -> st
         save_kw["tone_grid"] = arrays["tone_grid"]
     if "tone_codes" in arrays:
         save_kw["tone_codes"] = arrays["tone_codes"]
+    if "mesh_edge" in arrays:
+        save_kw["mesh_edge"] = arrays["mesh_edge"]
     np.savez_compressed(out / "arrays.npz", **save_kw)
     meta = {
         "width_px": pv.width_px,
@@ -125,6 +127,7 @@ def load_portrait_vector(ingest_id: str) -> PortraitVector | None:
         hatch_polylines_mm=meta.get("hatch_polylines_mm") or [],
         tone_grid=data["tone_grid"] if "tone_grid" in data.files else None,
         tone_codes=data["tone_codes"] if "tone_codes" in data.files else None,
+        mesh_edge=data["mesh_edge"] if "mesh_edge" in data.files else None,
         tone_cell_mm=float(meta.get("tone_cell_mm") or 0.0),
         tone_origin_mm=(float(origin[0]), float(origin[1])),
         regions=[RegionPoly.model_validate(r) for r in meta.get("regions") or []],

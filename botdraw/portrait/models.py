@@ -50,9 +50,10 @@ class PortraitVector(BaseModel):
     edge_map: Any  # np.ndarray float32 HxW
     edge_polylines_mm: list[list[tuple[float, float]]] = Field(default_factory=list)
     hatch_polylines_mm: list[list[tuple[float, float]]] = Field(default_factory=list)
-    # Intensity tone grid (coarse cells → pen recipe codes)
+    # Intensity tone / portrait mesh (cells → pen recipe codes + edge fraction)
     tone_grid: Any = None  # np.ndarray float32 Gh×Gw, 0..1 ink
     tone_codes: Any = None  # np.ndarray uint8 Gh×Gw, 0..5
+    mesh_edge: Any = None  # np.ndarray float32 Gh×Gw edge occupancy
     tone_cell_mm: float = 0.0
     tone_origin_mm: tuple[float, float] = (0.0, 0.0)
     regions: list[RegionPoly] = Field(default_factory=list)
@@ -75,4 +76,6 @@ class PortraitVector(BaseModel):
             out["tone_grid"] = np.asarray(self.tone_grid, dtype=np.float32)
         if self.tone_codes is not None:
             out["tone_codes"] = np.asarray(self.tone_codes, dtype=np.uint8)
+        if self.mesh_edge is not None:
+            out["mesh_edge"] = np.asarray(self.mesh_edge, dtype=np.float32)
         return out

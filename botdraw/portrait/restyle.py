@@ -249,7 +249,7 @@ def restyle_hatch(pv: PortraitVector, palette, params: StyleParams, *, line_spac
         # Underlay edges for structure
         edges = _edge_polys(pv, palette, limit=max(40, limit // 8))
         buckets = _bucketize(edges + ingest)
-        src = "tone_grid" if pv.tone_codes is not None else "ingest_hatch"
+        src = "mesh_walks" if pv.tone_codes is not None else "ingest_hatch"
         return LayeredSVG(
             width_mm=pv.page_w_mm,
             height_mm=pv.page_h_mm,
@@ -499,7 +499,7 @@ def restyle_scribble_tone(pv: PortraitVector, palette, params: StyleParams, *, l
         style="scribble",
         seed=int(params.seed) + 7,
     )
-    src = "tone_grid+edges"
+    src = "mesh_walks+edges"
     if not tone_polys:
         # Legacy fallback when tone grid missing (old caches)
         from botdraw.portrait.linedraw_edges import curve_tone_from_lum, polylines_to_mm
