@@ -1,0 +1,12 @@
+{
+  "id": "double",
+  "name": "Double",
+  "line_type": "double",
+  "line_spacing_mm": 1.4,
+  "pattern_period_mm": 2.0,
+  "pattern_amplitude_mm": 0.8,
+  "dash_mm": 2.0,
+  "gap_mm": 1.2,
+  "ornament_target": "all",
+  "notes": ""
+}

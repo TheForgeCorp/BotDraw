@@ -165,6 +165,19 @@ class CalibrateRequest(BaseModel):
     nib_type: Optional[str] = None
 
 
+class LineSaveRequest(BaseModel):
+    id: str
+    name: str
+    line_type: str = "solid"
+    line_spacing_mm: float = 1.2
+    pattern_period_mm: float = 2.0
+    pattern_amplitude_mm: float = 0.8
+    dash_mm: float = 2.0
+    gap_mm: float = 1.2
+    ornament_target: str = "all"
+    notes: str = ""
+
+
 @app.on_event("startup")
 def _startup():
     ensure_styles_loaded()
@@ -209,6 +222,47 @@ def api_papers():
     from botdraw.paper import list_papers
 
     return list_papers()
+
+
+@app.get("/api/lines")
+def api_lines():
+    from botdraw.lines import list_lines
+
+    return list_lines()
+
+
+@app.get("/api/lines/{line_id}/preview.svg")
+def api_line_preview(line_id: str):
+    from botdraw.lines import load_line, preview_svg
+
+    try:
+        stock = load_line(line_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Line not found") from None
+    svg = preview_svg(stock)
+    return Response(content=svg, media_type="image/svg+xml")
+
+
+@app.post("/api/lines/save")
+def api_line_save(body: LineSaveRequest):
+    from botdraw.lines import LineStock, save_line
+
+    stock = LineStock.model_validate(body.model_dump())
+    save_line(stock)
+    return stock.model_dump()
+
+
+@app.delete("/api/lines/{line_id}")
+def api_line_delete(line_id: str):
+    from botdraw.lines import delete_line
+
+    try:
+        delete_line(line_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from None
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Line not found") from None
+    return {"ok": True, "id": line_id}
 
 
 @app.get("/api/portrait/line-types")
