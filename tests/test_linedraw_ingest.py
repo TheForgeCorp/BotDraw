@@ -152,6 +152,15 @@ def test_curve_tone_skips_dark_wall():
     assert border < face * 0.2
 
 
+def test_hatch_off_empty():
+    lum = luminance(synthetic_portrait(96).astype(np.float32))
+    assert hatch_from_lum(lum, hatch_size=0) == []
+    _, hatch, _ = linedraw_edges_and_hatch(
+        lum, page_w=100, page_h=150, hatch_size=0, contour_simplify=2, jitter=0
+    )
+    assert hatch == []
+
+
 def test_vertical_bar_contour_extent():
     rgb = np.ones((120, 80, 3), dtype=np.float32) * 240
     rgb[20:100, 35:45] = 30
