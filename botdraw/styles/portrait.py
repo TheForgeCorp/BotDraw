@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from botdraw.core.models import LayeredSVG, PaperSize, StyleParams
+from botdraw.core.models import LayeredSVG, Orientation, PaperSize, StyleParams
 from botdraw.styles import get_style, register
 from botdraw.styles import artistic as artistic_mod  # ensure loaded
 from botdraw.styles import patterns as patterns_mod  # noqa: F401
@@ -17,7 +17,7 @@ class _PortraitProxy:
         self.base_id = base_id
         self.tweaks = tweaks or {}
 
-    def render(self, *, palette, params, paper=PaperSize.A4, image_path=None, image_array=None):
+    def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
         base = get_style(self.base_id)
         extra = {**params.extra, **self.tweaks, "portrait_profile": True}
         tuned = StyleParams(
@@ -32,6 +32,7 @@ class _PortraitProxy:
             palette=palette,
             params=tuned,
             paper=paper,
+            orientation=orientation,
             image_path=image_path,
             image_array=image_array,
         )
@@ -46,7 +47,7 @@ class _Cubism:
     category = "portrait"
     description = "Angular faceted planes over a face crop"
 
-    def render(self, *, palette, params, paper=PaperSize.A4, image_path=None, image_array=None):
+    def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
         # Use mosaic with coarser cells + abstract accents via mosaic engine
         base = get_style("mosaic")
         tuned = StyleParams(
@@ -60,6 +61,7 @@ class _Cubism:
             palette=palette,
             params=tuned,
             paper=paper,
+            orientation=orientation,
             image_path=image_path,
             image_array=image_array,
         )
@@ -73,7 +75,7 @@ class _Dots:
     category = "portrait"
     description = "Lighter grid-dot halftone than full pointillism"
 
-    def render(self, *, palette, params, paper=PaperSize.A4, image_path=None, image_array=None):
+    def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
         base = get_style("stipple")
         tuned = StyleParams(
             seed=params.seed,
@@ -85,6 +87,7 @@ class _Dots:
             palette=palette,
             params=tuned,
             paper=paper,
+            orientation=orientation,
             image_path=image_path,
             image_array=image_array,
         )
@@ -98,7 +101,7 @@ class _ColorShade:
     category = "portrait"
     description = "Palette-band stroke fills for facial shading"
 
-    def render(self, *, palette, params, paper=PaperSize.A4, image_path=None, image_array=None):
+    def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
         base = get_style("hatch")
         tuned = StyleParams(
             seed=params.seed,
@@ -110,6 +113,7 @@ class _ColorShade:
             palette=palette,
             params=tuned,
             paper=paper,
+            orientation=orientation,
             image_path=image_path,
             image_array=image_array,
         )
@@ -123,11 +127,12 @@ class _PenSketch:
     category = "portrait"
     description = "Loose contour and short pen strokes"
 
-    def render(self, *, palette, params, paper=PaperSize.A4, image_path=None, image_array=None):
+    def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
         contour = get_style("contour").render(
             palette=palette,
             params=StyleParams(seed=params.seed, quality=params.quality, density=0.8),
             paper=paper,
+            orientation=orientation,
             image_path=image_path,
             image_array=image_array,
         )
@@ -135,6 +140,7 @@ class _PenSketch:
             palette=palette,
             params=StyleParams(seed=params.seed + 1, quality=params.quality, density=0.6),
             paper=paper,
+            orientation=orientation,
             image_path=image_path,
             image_array=image_array,
         )
@@ -149,11 +155,12 @@ class _Linework:
     category = "portrait"
     description = "Clean edge/contour strokes"
 
-    def render(self, *, palette, params, paper=PaperSize.A4, image_path=None, image_array=None):
+    def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
         layered = get_style("contour").render(
             palette=palette,
             params=StyleParams(seed=params.seed, quality=params.quality, density=0.7),
             paper=paper,
+            orientation=orientation,
             image_path=image_path,
             image_array=image_array,
         )
@@ -167,7 +174,7 @@ class _TSP:
     category = "portrait"
     description = "Stipple then greedy TSP path (slow — HQ/queue)"
 
-    def render(self, *, palette, params, paper=PaperSize.A4, image_path=None, image_array=None):
+    def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
         from botdraw.core.models import Polyline
         from botdraw.core.svg import make_pass
         from botdraw.palettes import ink_pens
@@ -176,6 +183,7 @@ class _TSP:
             palette=palette,
             params=StyleParams(seed=params.seed, quality=params.quality, density=0.7),
             paper=paper,
+            orientation=orientation,
             image_path=image_path,
             image_array=image_array,
         )

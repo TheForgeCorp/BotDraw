@@ -6,7 +6,7 @@ import math
 
 import numpy as np
 
-from botdraw.core.models import LayeredSVG, PaperSize, Polyline, StyleParams
+from botdraw.core.models import LayeredSVG, Orientation, PaperSize, Polyline, StyleParams
 from botdraw.core.svg import make_pass
 from botdraw.palettes import ink_pens
 from botdraw.styles import page_size, register
@@ -18,8 +18,8 @@ class _Blueprint:
     category = "technical"
     description = "Title block, grid, multi-weight technical lines"
 
-    def render(self, *, palette, params, paper=PaperSize.A4, image_path=None, image_array=None):
-        pw, ph = page_size(paper)
+    def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
+        pw, ph = page_size(paper, orientation)
         pens = ink_pens(palette)
         grid_pen = pens[0]
         bold = pens[min(1, len(pens) - 1)]
@@ -86,8 +86,8 @@ class _Isometric:
     category = "technical"
     description = "Parametric isometric boxes and connectors"
 
-    def render(self, *, palette, params, paper=PaperSize.A4, image_path=None, image_array=None):
-        pw, ph = page_size(paper)
+    def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
+        pw, ph = page_size(paper, orientation)
         pens = ink_pens(palette)
         rng = np.random.default_rng(params.seed)
         polys: list[Polyline] = []
@@ -126,8 +126,8 @@ class _PCB:
     category = "technical"
     description = "Traces and pad rings"
 
-    def render(self, *, palette, params, paper=PaperSize.A4, image_path=None, image_array=None):
-        pw, ph = page_size(paper)
+    def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
+        pw, ph = page_size(paper, orientation)
         pens = ink_pens(palette)
         rng = np.random.default_rng(params.seed)
         trace_pen = pens[0]

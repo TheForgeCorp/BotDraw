@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 from botdraw.audio import render_audio_file, render_demo_tone
 from botdraw.core.jobs import list_jobs, load_job
-from botdraw.core.models import PaperSize, QualityPreset
+from botdraw.core.models import Orientation, PaperSize, QualityPreset
 from botdraw.core.pipeline import render_job
 from botdraw.handwriting import load_samples, render_with_clone, save_samples
 from botdraw.letters import render_letter
@@ -45,6 +45,7 @@ class RenderRequest(BaseModel):
     style_id: str
     palette_id: str = "default-6"
     paper: PaperSize = PaperSize.A4
+    orientation: Orientation = Orientation.PORTRAIT
     quality: QualityPreset = QualityPreset.BOOTH_BALANCED
     seed: int = 42
     density: float = 1.0
@@ -143,6 +144,7 @@ def api_render(body: RenderRequest):
         style_id=body.style_id,
         palette_id=body.palette_id,
         paper=body.paper,
+        orientation=body.orientation,
         quality=body.quality,
         seed=body.seed,
         density=body.density,
@@ -160,6 +162,7 @@ async def api_render_upload(
     palette_id: str = Form("default-6"),
     quality: str = Form("booth-balanced"),
     paper: str = Form("A4"),
+    orientation: str = Form("portrait"),
     seed: int = Form(42),
     density: float = Form(1.0),
     pen_up_speed_mm_s: float = Form(100.0),
@@ -176,6 +179,7 @@ async def api_render_upload(
         style_id=style_id,
         palette_id=palette_id,
         paper=PaperSize(paper),
+        orientation=Orientation(orientation),
         quality=QualityPreset(quality),
         seed=seed,
         density=density,
@@ -382,6 +386,7 @@ async def api_rdlab(
     palette_id: str = Form("default-6"),
     quality: str = Form("booth-balanced"),
     density: float = Form(1.0),
+    orientation: str = Form("portrait"),
     file: UploadFile | None = File(None),
 ):
     from botdraw.core.jobs import artifact_dir, save_job
@@ -403,6 +408,7 @@ async def api_rdlab(
         image_path=image_path,
         quality=QualityPreset(quality),
         density=density,
+        orientation=Orientation(orientation),
     )
     palette = load_palette(palette_id)
     from botdraw.core.pipeline import layers_summary
@@ -420,6 +426,7 @@ async def api_rdlab(
         "palette_id": palette_id,
         "quality": quality,
         "density": density,
+        "orientation": orientation,
         "image_path": image_path,
     }
     payload = plan_to_emulator_payload(plan)

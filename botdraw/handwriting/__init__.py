@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from botdraw.core.models import LayeredSVG, PAPER_MM, PaperSize, Polyline
+from botdraw.core.models import LayeredSVG, Orientation, PaperSize, Polyline, paper_dims
 from botdraw.core.svg import make_pass
 from botdraw.palettes import load_palette
 
@@ -39,13 +39,14 @@ def render_with_clone(
     *,
     palette_id: str = "wedding-highlight",
     paper: PaperSize = PaperSize.A5,
+    orientation: Orientation = Orientation.PORTRAIT,
     seed: int = 3,
 ) -> LayeredSVG:
     data = load_samples(user_id)
     glyphs = data.get("glyphs", {})
     palette = load_palette(palette_id)
     pen = palette.pens[0]
-    pw, ph = PAPER_MM[paper]
+    pw, ph = paper_dims(paper, orientation)
     x, y = 18.0, 24.0
     scale = 0.45
     polys: list[Polyline] = []
