@@ -473,6 +473,12 @@ function designLibraryParams() {
       angle_deg: Number(controls.querySelector("#phy-angle")?.value || 137.5),
     };
   }
+  if (selectedStyle === "modular_chords") {
+    return {
+      n_points: Number(controls.querySelector("#mod-n")?.value || 200),
+      k: Number(controls.querySelector("#mod-k")?.value || 77),
+    };
+  }
   return {
     cols: Number(controls.querySelector("#ca-cols")?.value || 120),
     rows: Number(controls.querySelector("#ca-rows")?.value || 90),
@@ -488,6 +494,16 @@ function designLibraryKnobsHtml() {
       <div class="grid-2">
         ${field("Points", `<input id="phy-points" type="number" min="50" max="4000" value="900" />`)}
         ${field("Angle °", `<input id="phy-angle" type="number" min="1" max="179" step="0.1" value="137.5" />`)}
+      </div>
+    `;
+  }
+  if (selectedStyle === "modular_chords") {
+    return `
+      <h4>Circle steps</h4>
+      <p class="muted">i → (i + k) mod N — petals from periodicity, dense ring from chord interference.</p>
+      <div class="grid-2">
+        ${field("N points", `<input id="mod-n" type="number" min="12" max="2000" value="200" />`)}
+        ${field("Step k", `<input id="mod-k" type="number" min="1" max="1999" value="77" />`)}
       </div>
     `;
   }
@@ -508,7 +524,7 @@ function renderDesignLibrary() {
     <h3>Design Library</h3>
     <p class="muted">Math-derived and structured motifs for the plotter — pick a design, then vectorize.</p>
     <h4>Math Derived</h4>
-    <p class="muted">Cellular automata, phyllotaxis, and related constructions.</p>
+    <p class="muted">Cellular automata, phyllotaxis, modular chords, and related constructions.</p>
     ${styleButtons(list)}
     ${designLibraryKnobsHtml()}
     ${fractalDevOpts()}

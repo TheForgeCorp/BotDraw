@@ -218,5 +218,86 @@ class _Phyllotaxis:
         )
 
 
-for _e in (_Rule30(), _Phyllotaxis()):
+def modular_chord_edges(n: int, k: int) -> list[tuple[int, int]]:
+    """Circulant chords: for each i, edge i → (i + k) mod N (undirected, unique)."""
+    n = max(3, int(n))
+    k = int(k) % n
+    if k == 0:
+        k = 1
+    # Prefer shorter step representation for uniqueness
+    k = min(k, n - k) if n - k != k else k
+    edges: list[tuple[int, int]] = []
+    seen: set[tuple[int, int]] = set()
+    for i in range(n):
+        j = (i + k) % n
+        a, b = (i, j) if i < j else (j, i)
+        if a == b or (a, b) in seen:
+            continue
+        seen.add((a, b))
+        edges.append((a, b))
+    return edges
+
+
+class _ModularChords:
+    id = "modular_chords"
+    name = "Modular Chords"
+    category = "design"
+    description = (
+        "Modular arithmetic in ink — N points on a circle, jump by k: "
+        "i → (i + k) mod N; chord family forms outer petals and a dense central ring"
+    )
+
+    def render(
+        self,
+        *,
+        palette,
+        params: StyleParams,
+        paper=PaperSize.A4,
+        orientation=Orientation.PORTRAIT,
+        image_path=None,
+        image_array=None,
+    ):
+        del image_path, image_array
+        extra = params.extra or {}
+        base_n = int(extra.get("n_points") or extra.get("n") or 200)
+        base_k = int(extra.get("k") or extra.get("step") or 77)
+        dens = max(0.5, float(params.density or 1.0))
+        n = max(12, int(round(base_n * dens)))
+        k = max(1, int(base_k) % n)
+        if k == 0:
+            k = 1
+
+        edges = modular_chord_edges(n, k)
+        angles = [2 * math.pi * i / n for i in range(n)]
+
+        pw, ph = page_size(paper, orientation)
+        pen = ink_pens(palette)[0]
+        margin = 12.0
+        radius = min(pw, ph) * 0.5 - margin
+        cx, cy = pw / 2, ph / 2
+
+        def pt(i: int) -> tuple[float, float]:
+            a = angles[i]
+            return (cx + radius * math.cos(a), cy + radius * math.sin(a))
+
+        polys = [Polyline(points=[pt(a), pt(b)], pen_id=pen.id) for a, b in edges]
+
+        return LayeredSVG(
+            width_mm=pw,
+            height_mm=ph,
+            passes=[make_pass("modular-chords", f"N={n} k={k}", pen.id, polys)],
+            seed=params.seed,
+            meta={
+                "style": self.id,
+                "library": "design",
+                "subsection": "math_derived",
+                "n_points": n,
+                "k": k,
+                "equation": "i → (i + k) mod N",
+                "strokes": len(polys),
+            },
+        )
+
+
+for _e in (_Rule30(), _Phyllotaxis(), _ModularChords()):
     register(_e)

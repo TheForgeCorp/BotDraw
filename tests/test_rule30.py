@@ -62,6 +62,7 @@ def test_rule30_listed_under_design_category():
     ids = {s["id"] for s in list_styles(category="design")}
     assert "rule30" in ids
     assert "phyllotaxis" in ids
+    assert "modular_chords" in ids
 
 
 def test_phyllotaxis_points_and_render():
@@ -92,3 +93,34 @@ def test_phyllotaxis_points_and_render():
     assert layered.meta["n_points"] == 900
     assert layered.meta["angle_deg"] == 137.5
     assert layered.meta["strokes"] == 900
+
+
+def test_modular_chords_edges_and_render():
+    from botdraw.styles.design_library import modular_chord_edges
+
+    edges = modular_chord_edges(10, 3)
+    # Circulant with step 3 on 10 verts → 10 unique undirected edges? 
+    # min(3,7)=3; each of 10 vertices emits one edge; undirected so 10 edges
+    assert len(edges) == 10
+    assert (0, 3) in edges
+
+    ensure_styles_loaded()
+    eng = get_style("modular_chords")
+    assert eng.category == "design"
+    palette = load_palette("default-6")
+    layered = eng.render(
+        palette=palette,
+        params=StyleParams(
+            seed=1,
+            quality=QualityPreset.BOOTH_BALANCED,
+            density=1.0,
+            extra={"n_points": 200, "k": 77},
+        ),
+        paper=PaperSize.A4,
+    )
+    assert layered.meta["style"] == "modular_chords"
+    assert layered.meta["subsection"] == "math_derived"
+    assert layered.meta["n_points"] == 200
+    assert layered.meta["k"] == 77
+    assert layered.meta["strokes"] == 200
+    assert layered.meta["equation"] == "i → (i + k) mod N"
