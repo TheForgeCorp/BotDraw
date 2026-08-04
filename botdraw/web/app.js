@@ -1779,11 +1779,11 @@ function renderGenArt() {
         ${styleButtons(list)}
       </div>
     </div>
-    ${commonDevOpts()}
-    <div class="row">
+    <div class="row actions">
       <button type="button" class="btn" id="genart-ingest">Ingest</button>
       <button type="button" class="btn btn-primary primary" id="go">Vectorize</button>
     </div>
+    ${commonDevOpts()}
   `;
   bindStyleGrid();
   applyCommonDefaults();
