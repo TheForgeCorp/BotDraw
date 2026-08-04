@@ -86,10 +86,8 @@ anti_patterns:
 |--------|------|
 | Top app tabs | BotDraw apps |
 | LETTERS identity | Static product lockup |
-| Left type rail | Professional → Postcards |
-| Left content | Letter fields + Vectorize |
-| Center | Layer / pen specs |
-| Right | Paper emulator + hardware download |
+| Left | Type rail + editor (layers, draft meta, palette, Vectorize) |
+| Right | Paper emulator + margins + hardware download |
 
 ## Venue-facing (future)
 

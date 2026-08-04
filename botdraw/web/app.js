@@ -26,7 +26,6 @@ let letterLayerTab = "layer-0";
 let letterFonts = [];
 let letterLayersState = [];
 let letterVectorizeTimer = null;
-let layerSamplePlayer = null;
 
 const LETTER_TYPE_DEFAULTS = {
   professional: {
@@ -515,31 +514,14 @@ function syncActiveLayerFromForm() {
   if (g("layer-kind")) layer.kind = g("layer-kind").value;
   if (g("layer-tracking")) layer.tracking = Number(g("layer-tracking").value || 0.15);
   if (g("layer-humanize")) layer.humanize = Number(g("layer-humanize").value || 0.08);
-  // Keep left body in sync with layer 0 for draft UX
-  if (layer.id === letterLayersState[0]?.id) {
-    const leftBody = letterContentRoot()?.querySelector("#body");
-    if (leftBody) leftBody.value = layer.body;
-  }
 }
 
-function renderLetterLayerEditor() {
-  if (!letterLayersState.length) {
-    letterLayersState = defaultLetterLayers(LETTER_TYPE_DEFAULTS[letterType]?.body || "HELLO");
-  }
-  if (!letterLayersState.find((l) => l.id === letterLayerTab)) {
-    letterLayerTab = letterLayersState[0].id;
-  }
-  const tabs = document.getElementById("letter-layer-tabs");
-  const specs = document.getElementById("letter-layer-specs");
-  const layer = activeLetterLayer();
-  tabs.innerHTML = letterLayersState.map((l) =>
-    `<button type="button" data-layer="${l.id}" class="${l.id === letterLayerTab ? "active" : ""}">${l.name || l.id}</button>`
-  ).join("");
+function layerEditorFieldsHtml(layer) {
   const showTranslate = (layer.language || "en") !== "en";
-  specs.innerHTML = `
+  return `
     <div class="spec-block layer-editor">
       ${field("Layer name", `<input id="layer-name" value="${layer.name || ""}" />`)}
-      ${field("Body", `<textarea id="layer-body" rows="4">${layer.body || ""}</textarea>`)}
+      ${field("Body", `<textarea id="layer-body" rows="5">${layer.body || ""}</textarea>`)}
       <div class="grid-2">
         ${field("Font", `<select id="layer-font">${fontOptionsHtml(layer.font_name)}</select>`)}
         ${field("Size mm", `<input id="layer-size" type="number" step="0.1" min="1" value="${layer.size_mm}" />`)}
@@ -578,6 +560,69 @@ function renderLetterLayerEditor() {
         <button type="button" id="letter-hide">Hide</button>
       </div>
     </div>`;
+}
+
+function draftMetaHtml() {
+  if (!selectedPaletteId || selectedPaletteId === "default-6") {
+    selectedPaletteId = "wedding-highlight";
+  }
+  const def = LETTER_TYPE_DEFAULTS[letterType] || LETTER_TYPE_DEFAULTS.personal;
+  return `
+    <h4>Draft meta</h4>
+    <p class="muted">Used for AI draft only. Letter text lives on layers above.</p>
+    ${field("Names", `<input id="names" value="${def.names}" />`)}
+    <div class="grid-2">
+      ${field("Mood", `<input id="mood" value="${def.mood}" />`)}
+      ${field("Seed", `<input id="seed" type="number" value="7" />`)}
+    </div>
+    ${field("Era", `<select id="era"><option>golden</option><option>70s</option><option selected>90s</option><option>2000s</option><option>contemporary</option></select>`)}
+    ${field("Facts", `<textarea id="facts" style="min-height:56px">${def.facts}</textarea>`)}
+    ${field("Guest quote", `<textarea id="quote" style="min-height:48px" placeholder="Optional line"></textarea>`)}
+    <div class="chk-row">
+      <label><input id="use_llm" type="checkbox" /> Local AI draft</label>
+    </div>
+    <h4>Palette</h4>
+    ${field("Palette", paletteSelectHtml())}
+    <div class="row"><button class="primary" id="go">Vectorize</button></div>
+  `;
+}
+
+function letterEditorShellHtml() {
+  const def = LETTER_TYPE_DEFAULTS[letterType] || LETTER_TYPE_DEFAULTS.personal;
+  return `
+    <h3>${def.title}</h3>
+    <p class="muted">Layers drive text passes · paper preview on the right.</p>
+    <div class="layers-head">
+      <div>
+        <h4>Layers</h4>
+        <p class="muted">Text · font · pen · offset</p>
+      </div>
+      <div class="layer-actions">
+        <button type="button" id="letter-layer-add" title="Add layer">+</button>
+        <button type="button" id="letter-layer-remove" title="Remove layer">−</button>
+      </div>
+    </div>
+    <div class="layer-tabs" id="letter-layer-tabs"></div>
+    <div class="layer-specs" id="letter-layer-specs"></div>
+    ${draftMetaHtml()}
+  `;
+}
+
+function renderLetterLayerEditor() {
+  if (!letterLayersState.length) {
+    letterLayersState = defaultLetterLayers(LETTER_TYPE_DEFAULTS[letterType]?.body || "HELLO");
+  }
+  if (!letterLayersState.find((l) => l.id === letterLayerTab)) {
+    letterLayerTab = letterLayersState[0].id;
+  }
+  const tabs = document.getElementById("letter-layer-tabs");
+  const specs = document.getElementById("letter-layer-specs");
+  if (!tabs || !specs) return;
+  const layer = activeLetterLayer();
+  tabs.innerHTML = letterLayersState.map((l) =>
+    `<button type="button" data-layer="${l.id}" class="${l.id === letterLayerTab ? "active" : ""}">${l.name || l.id}</button>`
+  ).join("");
+  specs.innerHTML = layerEditorFieldsHtml(layer);
 
   tabs.querySelectorAll("button").forEach((btn) => {
     btn.onclick = () => {
@@ -595,8 +640,10 @@ function renderLetterLayerEditor() {
     const trCb = specs.querySelector("#layer-translate");
     if (tr) tr.style.display = lang === "en" ? "none" : "";
     if (note) note.style.display = lang !== "en" && trCb?.checked ? "" : "none";
-    if (specs.querySelector("#layer-pen")) {
-      document.getElementById("pen-card").innerHTML = penCardHtml(specs.querySelector("#layer-pen").value);
+    const penSel = specs.querySelector("#layer-pen");
+    if (penSel) {
+      const card = specs.querySelector("#pen-card");
+      if (card) card.innerHTML = penCardHtml(penSel.value);
     }
     scheduleLetterVectorize();
   };
@@ -610,36 +657,6 @@ function renderLetterLayerEditor() {
   specs.querySelector("#letter-hide")?.addEventListener("click", () => {
     lettersPlayer.setPassVisible(layer.id, false);
   });
-}
-
-function letterTypeFormHtml() {
-  if (!selectedPaletteId || selectedPaletteId === "default-6") {
-    selectedPaletteId = "wedding-highlight";
-  }
-  const def = LETTER_TYPE_DEFAULTS[letterType] || LETTER_TYPE_DEFAULTS.personal;
-  const body0 = letterLayersState[0]?.body ?? def.body;
-  return `
-    <h3>${def.title}</h3>
-    <p class="muted">Meta for draft · layer text lives in Layers.</p>
-    ${field("Primary body", `<textarea id="body" placeholder="Letter text">${body0}</textarea>`)}
-    ${field("Names", `<input id="names" value="${def.names}" />`)}
-    <div class="grid-2">
-      ${field("Mood", `<input id="mood" value="${def.mood}" />`)}
-      ${field("Seed", `<input id="seed" type="number" value="7" />`)}
-    </div>
-    <div class="grid-2">
-      ${field("Era", `<select id="era"><option>golden</option><option>70s</option><option selected>90s</option><option>2000s</option><option>contemporary</option></select>`)}
-      ${field("Language", `<select id="lang"><option value="en">en</option><option value="hi">hi</option><option value="pa">pa</option><option value="ur">ur</option></select>`)}
-    </div>
-    ${field("Facts", `<textarea id="facts" style="min-height:56px">${def.facts}</textarea>`)}
-    ${field("Guest quote", `<textarea id="quote" style="min-height:48px" placeholder="Optional line"></textarea>`)}
-    <div class="chk-row">
-      <label><input id="use_llm" type="checkbox" /> Local AI draft</label>
-    </div>
-    <h4>Palette</h4>
-    ${field("Palette", paletteSelectHtml())}
-    <div class="row"><button class="primary" id="go">Vectorize</button></div>
-  `;
 }
 
 function bindLetterTypeRail() {
@@ -657,7 +674,10 @@ function bindLetterTypeRail() {
 }
 
 function bindLayerChrome() {
-  document.getElementById("letter-layer-add").onclick = () => {
+  const addBtn = document.getElementById("letter-layer-add");
+  const removeBtn = document.getElementById("letter-layer-remove");
+  if (!addBtn || !removeBtn) return;
+  addBtn.onclick = () => {
     syncActiveLayerFromForm();
     const pal = currentPalette();
     const pens = pal?.pens || [];
@@ -683,7 +703,7 @@ function bindLayerChrome() {
     renderLetterLayerEditor();
     scheduleLetterVectorize();
   };
-  document.getElementById("letter-layer-remove").onclick = () => {
+  removeBtn.onclick = () => {
     if (letterLayersState.length <= 1) return;
     syncActiveLayerFromForm();
     letterLayersState = letterLayersState.filter((l) => l.id !== letterLayerTab);
@@ -693,30 +713,11 @@ function bindLayerChrome() {
   };
 }
 
-function updateLayerSample(payload) {
-  const canvas = document.getElementById("layer-sample");
-  if (!canvas || !payload) return;
-  if (!layerSamplePlayer) layerSamplePlayer = new EmulatorPlayer(canvas);
-  layerSamplePlayer.load(payload);
-  layerSamplePlayer.skipEnd();
-  const active = activeLetterLayer();
-  if (active) {
-    // Dim non-active passes if present
-    (payload.layers?.passes || []).forEach((p) => {
-      if (p.id !== active.id) layerSamplePlayer.setPassVisible(p.id, false);
-      else layerSamplePlayer.setPassVisible(p.id, true);
-    });
-  }
-}
-
 async function vectorizeLetter(opts = {}) {
   const quiet = !!opts.quiet;
   syncActiveLayerFromForm();
   const root = letterContentRoot();
   selectedPaletteId = lval("palette", selectedPaletteId);
-  // Sync layer 0 body from left primary body if user edited left
-  const leftBody = lval("body").trim();
-  if (letterLayersState[0] && leftBody) letterLayersState[0].body = leftBody;
   const useLlm = !!root?.querySelector("#use_llm")?.checked;
   const hasBody = letterLayersState.some((l) => (l.body || "").trim());
   if (!quiet) {
@@ -733,7 +734,7 @@ async function vectorizeLetter(opts = {}) {
     body: JSON.stringify({
       letter_type: letterType,
       names: lval("names"),
-      language: lval("lang", letterLayersState[0]?.language || "en"),
+      language: letterLayersState[0]?.language || "en",
       era: lval("era"),
       mood: lval("mood"),
       facts: lval("facts"),
@@ -757,7 +758,6 @@ async function vectorizeLetter(opts = {}) {
   lastSettings = data.settings;
   lettersPlayer.load(lastPayload);
   lettersPlayer.skipEnd();
-  updateLayerSample(lastPayload);
   setLettersDownloads(true, lastJob?.id);
   const timing = data.settings?.timing_s || {};
   const src = data.draft?.source || "?";
@@ -787,7 +787,6 @@ async function renderLetters() {
     letterLayerTab = letterLayersState[0].id;
   }
   bindLetterTypeRail();
-  bindLayerChrome();
   updatePaperFrame();
   ["letters-paper", "letters-orientation"].forEach((id) => {
     const el = document.getElementById(id);
@@ -801,17 +800,12 @@ async function renderLetters() {
   });
 
   const root = letterContentRoot();
-  root.innerHTML = letterTypeFormHtml();
+  root.innerHTML = letterEditorShellHtml();
+  bindLayerChrome();
   root.querySelector("#palette").value = selectedPaletteId;
   root.querySelector("#palette").onchange = () => {
     selectedPaletteId = root.querySelector("#palette").value;
     renderLetterLayerEditor();
-    scheduleLetterVectorize();
-  };
-  root.querySelector("#body").oninput = () => {
-    if (letterLayersState[0]) letterLayersState[0].body = root.querySelector("#body").value;
-    const layerBody = document.querySelector("#layer-body");
-    if (layerBody && letterLayersState[0]?.id === letterLayerTab) layerBody.value = root.querySelector("#body").value;
     scheduleLetterVectorize();
   };
   root.querySelector("#go").onclick = () => vectorizeLetter().catch((e) => {
