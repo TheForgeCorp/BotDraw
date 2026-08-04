@@ -732,6 +732,11 @@ body[data-app="lettersbot"] .tabs button.active, body[data-app="portraitbot"] .t
   font-size: 0.6875rem;
   color: var(--l-faint);
 }
+.image-mode-grid button.active {
+  border-color: var(--l-accent);
+  background: var(--l-soft);
+  color: var(--l-ink);
+}
 .letters-lab .style-grid button.selected {
   outline: 2px solid var(--l-accent);
   background: var(--l-soft);
