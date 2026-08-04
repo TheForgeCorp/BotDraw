@@ -111,6 +111,9 @@ def assign_pens(
     # Edge role: narrowest non-highlighter
     edge_pen = min(pens, key=lambda p: (p.profile.width_mm, 0 if p.profile.nib_type == NibType.FINELINER else 1))
     auto_map["edge"] = edge_pen.id
+    # Hatch role: slightly wider than edge when available
+    wider = sorted(pens, key=lambda p: (p.profile.width_mm, p.id))
+    auto_map["hatch"] = wider[min(1, len(wider) - 1)].id if len(wider) > 1 else edge_pen.id
 
     # Merge overrides
     final = dict(auto_map)

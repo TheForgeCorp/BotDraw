@@ -660,7 +660,7 @@ function renderPortrait() {
     .join("");
   root.innerHTML = `
     <h3>Portrait</h3>
-    <p class="muted">Step 1: Ingest (see raw edges/regions). Step 2: Vectorize styles. Prefer line type <code>solid</code> while reviewing ingest.</p>
+    <p class="muted">Step 1: Ingest (linedraw vectors). Step 2: Vectorize — styles use those edges/hatch. Prefer line type <code>solid</code>.</p>
     <h4>Image</h4>
     <div class="portrait-drop ${portraitFile ? "has-file" : ""}" id="portrait-drop">
       ${portraitFile ? portraitFile.name : "Drop a photo or choose a file"}

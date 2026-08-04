@@ -44,15 +44,15 @@ class _PortraitRestyler:
 
 
 PORTRAIT_STYLES = [
-    _PortraitRestyler("portrait_linework", "Simple Linework Portrait", "Edge + region outline from ingest"),
-    _PortraitRestyler("portrait_squiggle", "Squiggle Portrait", "Ink-target modulated squiggles"),
-    _PortraitRestyler("portrait_pen", "Pen Sketch Portrait", "Edges plus adaptive hatch shade"),
-    _PortraitRestyler("portrait_color_shade", "Color Shade Portrait", "Adaptive multi-pen hatch from tone"),
-    _PortraitRestyler("portrait_pointillism", "Pointillism Portrait", "Ink-weighted stipple"),
-    _PortraitRestyler("portrait_dots", "Dot Halftone Portrait", "Lighter stipple halftone"),
-    _PortraitRestyler("portrait_cubism", "Cubism Portrait", "Facet fills from traced regions"),
-    _PortraitRestyler("portrait_hatch", "Hatch Portrait", "Classic adaptive hatch shading"),
-    _PortraitRestyler("portrait_tsp", "TSP Single-line Portrait", "Stipple centers → greedy tour"),
+    _PortraitRestyler("portrait_linework", "Simple Linework Portrait", "Linedraw edges + ingest hatch + region outlines"),
+    _PortraitRestyler("portrait_squiggle", "Squiggle Portrait", "Midtone squiggles with linedraw edge underlay"),
+    _PortraitRestyler("portrait_pen", "Pen Sketch Portrait", "Linedraw edges plus ingest/adaptive hatch"),
+    _PortraitRestyler("portrait_color_shade", "Color Shade Portrait", "Linedraw hatch (multi-pen) from ingest"),
+    _PortraitRestyler("portrait_pointillism", "Pointillism Portrait", "Ink stipple with linedraw edge underlay"),
+    _PortraitRestyler("portrait_dots", "Dot Halftone Portrait", "Lighter stipple with linedraw edges"),
+    _PortraitRestyler("portrait_cubism", "Cubism Portrait", "Region facets + linedraw edge structure"),
+    _PortraitRestyler("portrait_hatch", "Hatch Portrait", "Linedraw ingest hatch (fallback: midtone adaptive)"),
+    _PortraitRestyler("portrait_tsp", "TSP Single-line Portrait", "Stipple tour with linedraw edge underlay"),
 ]
 
 for _e in PORTRAIT_STYLES:

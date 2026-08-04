@@ -9,7 +9,6 @@ import numpy as np
 from botdraw.core.models import (
     QUALITY_LIMITS,
     LayeredSVG,
-    PaperSize,
     Polyline,
     QualityPreset,
     StyleParams,
@@ -32,105 +31,187 @@ def _pen_for(pv: PortraitVector, palette, cluster_id: str | None = None, rgb=Non
             return palette.pen_by_id(pv.pen_map["edge"])
         except KeyError:
             pass
+    if "hatch" in pv.pen_map and cluster_id == "hatch":
+        try:
+            return palette.pen_by_id(pv.pen_map["hatch"])
+        except KeyError:
+            pass
     if rgb is not None:
         return nearest_pen(palette, int(rgb[0]), int(rgb[1]), int(rgb[2]))
     return pens[0]
 
 
-def restyle_linework(pv: PortraitVector, palette, params: StyleParams) -> LayeredSVG:
+def _budget(params: StyleParams) -> int:
+    return int(QUALITY_LIMITS[params.quality]["max_paths"])
+
+
+def _edge_polys(pv: PortraitVector, palette, *, limit: int) -> list[Polyline]:
     edge_pen = _pen_for(pv, palette, "edge")
-    polys = [
-        Polyline(points=pts, pen_id=edge_pen.id)
-        for pts in pv.edge_polylines_mm
-        if len(pts) >= 2
-    ]
-    # Linedraw tone hatch (when ingest produced it)
-    hatch_pen = _pen_for(pv, palette, "hatch") if "hatch" in pv.pen_map else edge_pen
-    for pts in pv.hatch_polylines_mm:
-        if len(pts) >= 2:
-            polys.append(Polyline(points=pts, pen_id=hatch_pen.id))
-    # Dark region outlines
-    for r in pv.regions:
-        mean_l = 0.299 * r.mean_rgb[0] + 0.587 * r.mean_rgb[1] + 0.114 * r.mean_rgb[2]
-        if mean_l > 200:
+    out: list[Polyline] = []
+    for pts in pv.edge_polylines_mm:
+        if len(pts) < 2:
             continue
-        pen = _pen_for(pv, palette, r.id, r.mean_rgb)
-        if len(r.points_mm) >= 2:
-            polys.append(Polyline(points=list(r.points_mm), pen_id=pen.id, closed=True))
-    limits = QUALITY_LIMITS[params.quality]
-    polys = polys[: int(limits["max_paths"])]
-    edge_ids = {edge_pen.id, hatch_pen.id}
-    return LayeredSVG(
-        width_mm=pv.page_w_mm,
-        height_mm=pv.page_h_mm,
-        passes=[make_pass("edges", "Portrait edges", edge_pen.id, [p for p in polys if p.pen_id == edge_pen.id])]
-        + (
-            [make_pass("hatch", "Portrait hatch", hatch_pen.id, [p for p in polys if p.pen_id == hatch_pen.id and p.pen_id != edge_pen.id])]
-            if hatch_pen.id != edge_pen.id and any(p.pen_id == hatch_pen.id for p in polys)
-            else []
-        )
-        + [
-            make_pass(f"reg-{pid}", f"Region {pid}", pid, [p for p in polys if p.pen_id == pid])
-            for pid in {p.pen_id for p in polys if p.pen_id not in edge_ids}
-        ],
-        seed=params.seed,
-        meta={"style": "portrait_linework", "quality": params.quality.value},
-    )
-
-
-def restyle_hatch(pv: PortraitVector, palette, params: StyleParams, *, line_spacing_mm: float | None = None) -> LayeredSVG:
-    arrays = pv.arrays()
-    ink = arrays["ink_target"]
-    rgb = arrays["rgb"]
-    h, w = ink.shape
-    pens = ink_pens(palette) or list(palette.pens)
-    limits = QUALITY_LIMITS[params.quality]
-    max_paths = int(limits["max_paths"])
-    base_step = line_spacing_mm
-    if base_step is None:
-        base_step = max(0.6, pens[0].profile.width_mm * 2.2 / max(0.35, params.density))
-    # Convert mm spacing rough → pixel step
-    usable = min(pv.page_w_mm, pv.page_h_mm) - 20
-    px_per_mm = max(w, h) / max(usable, 1)
-    step = max(2, int(base_step * px_per_mm))
-    buckets: dict[str, list[Polyline]] = {p.id: [] for p in pens}
-    count = 0
-    for y in range(0, h, step):
-        for x in range(0, w, step):
-            if count >= max_paths:
-                break
-            tone = float(ink[y, x])
-            if tone < 0.08:
-                continue
-            # Adaptive: darker → shorter local step via cross hatch
-            pen = _pen_for(pv, palette, rgb=rgb[y, x])
-            # Width-aware segment length
-            seg = max(step, int(step * (0.6 + tone)))
-            x0, y0 = map_to_page(x, y, img_w=w, img_h=h, page_w=pv.page_w_mm, page_h=pv.page_h_mm)
-            x1, y1 = map_to_page(x + seg, y + seg, img_w=w, img_h=h, page_w=pv.page_w_mm, page_h=pv.page_h_mm)
-            buckets[pen.id].append(Polyline(points=[(x0, y0), (x1, y1)], pen_id=pen.id))
-            count += 1
-            if tone > 0.45 and count < max_paths:
-                x2, y2 = map_to_page(x + seg, y, img_w=w, img_h=h, page_w=pv.page_w_mm, page_h=pv.page_h_mm)
-                x3, y3 = map_to_page(x, y + seg, img_w=w, img_h=h, page_w=pv.page_w_mm, page_h=pv.page_h_mm)
-                buckets[pen.id].append(Polyline(points=[(x2, y2), (x3, y3)], pen_id=pen.id))
-                count += 1
-        if count >= max_paths:
+        out.append(Polyline(points=pts, pen_id=edge_pen.id))
+        if len(out) >= limit:
             break
-    passes = [make_pass(f"hatch-{pid}", f"Hatch {pid}", pid, polys) for pid, polys in buckets.items() if polys]
+    return out
+
+
+def _ingest_hatch_polys(pv: PortraitVector, palette, *, limit: int) -> list[Polyline]:
+    """Use linedraw hatch from ingest when present (vectorized shading)."""
+    if not pv.hatch_polylines_mm:
+        return []
+    hatch_pen = _pen_for(pv, palette, "hatch") if "hatch" in pv.pen_map else _pen_for(pv, palette, "edge")
+    rgb = np.asarray(pv.rgb, dtype=np.float32)
+    h, w = rgb.shape[:2]
+    out: list[Polyline] = []
+    for pts in pv.hatch_polylines_mm:
+        if len(pts) < 2:
+            continue
+        # Sample mid-stroke color for multi-pen assignment when possible
+        mx = sum(p[0] for p in pts) / len(pts)
+        my = sum(p[1] for p in pts) / len(pts)
+        # Inverse of map_to_page: rough page→px
+        usable_w = pv.page_w_mm
+        usable_h = pv.page_h_mm
+        ix = int(np.clip(mx / max(usable_w, 1e-3) * w, 0, w - 1))
+        iy = int(np.clip(my / max(usable_h, 1e-3) * h, 0, h - 1))
+        pen = _pen_for(pv, palette, "hatch", rgb=rgb[iy, ix]) if "hatch" not in pv.pen_map else hatch_pen
+        if "hatch" not in pv.pen_map:
+            pen = _pen_for(pv, palette, rgb=rgb[iy, ix])
+        out.append(Polyline(points=pts, pen_id=pen.id))
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _passes_from_buckets(prefix: str, label: str, buckets: dict[str, list[Polyline]]) -> list:
+    return [make_pass(f"{prefix}-{pid}", f"{label} {pid}", pid, polys) for pid, polys in buckets.items() if polys]
+
+
+def _bucketize(polys: list[Polyline]) -> dict[str, list[Polyline]]:
+    buckets: dict[str, list[Polyline]] = {}
+    for p in polys:
+        buckets.setdefault(p.pen_id, []).append(p)
+    return buckets
+
+
+def restyle_linework(
+    pv: PortraitVector,
+    palette,
+    params: StyleParams,
+    *,
+    include_hatch: bool = True,
+    include_regions: bool = True,
+) -> LayeredSVG:
+    """Primary vector style: linedraw edges (+ ingest hatch + dark region outlines)."""
+    limit = _budget(params)
+    polys = _edge_polys(pv, palette, limit=limit)
+    if include_hatch:
+        remain = max(0, limit - len(polys))
+        polys.extend(_ingest_hatch_polys(pv, palette, limit=remain))
+    if include_regions:
+        for r in pv.regions:
+            if len(polys) >= limit:
+                break
+            mean_l = 0.299 * r.mean_rgb[0] + 0.587 * r.mean_rgb[1] + 0.114 * r.mean_rgb[2]
+            if mean_l > 200:
+                continue
+            pen = _pen_for(pv, palette, r.id, r.mean_rgb)
+            if len(r.points_mm) >= 2:
+                polys.append(Polyline(points=list(r.points_mm), pen_id=pen.id, closed=True))
+
+    edge_pen = _pen_for(pv, palette, "edge")
+    buckets = _bucketize(polys)
+    edge_pass = make_pass(
+        "edges",
+        "Portrait edges",
+        edge_pen.id,
+        buckets.pop(edge_pen.id, []),
+    )
+    passes = [edge_pass] if edge_pass.polylines else []
+    passes += _passes_from_buckets("vec", "Vector", buckets)
     return LayeredSVG(
         width_mm=pv.page_w_mm,
         height_mm=pv.page_h_mm,
         passes=passes,
         seed=params.seed,
-        meta={"style": "portrait_hatch", "quality": params.quality.value},
+        meta={"style": "portrait_linework", "quality": params.quality.value, "vector_source": "ingest"},
+    )
+
+
+def restyle_hatch(pv: PortraitVector, palette, params: StyleParams, *, line_spacing_mm: float | None = None) -> LayeredSVG:
+    """Prefer linedraw ingest hatch; fall back to midtone-masked adaptive grid."""
+    limit = _budget(params)
+    ingest = _ingest_hatch_polys(pv, palette, limit=limit)
+    if ingest:
+        # Underlay edges for structure
+        edges = _edge_polys(pv, palette, limit=max(40, limit // 8))
+        buckets = _bucketize(edges + ingest)
+        return LayeredSVG(
+            width_mm=pv.page_w_mm,
+            height_mm=pv.page_h_mm,
+            passes=_passes_from_buckets("hatch", "Hatch", buckets),
+            seed=params.seed,
+            meta={"style": "portrait_hatch", "quality": params.quality.value, "vector_source": "ingest_hatch"},
+        )
+
+    arrays = pv.arrays()
+    ink = arrays["ink_target"]
+    rgb = arrays["rgb"]
+    lum = arrays["lum"]
+    h, w = ink.shape
+    pens = ink_pens(palette) or list(palette.pens)
+    base_step = line_spacing_mm
+    if base_step is None:
+        base_step = max(0.6, pens[0].profile.width_mm * 2.2 / max(0.35, params.density))
+    usable = min(pv.page_w_mm, pv.page_h_mm) - 20
+    px_per_mm = max(w, h) / max(usable, 1)
+    step = max(2, int(base_step * px_per_mm))
+    # Midtone mask: skip flat near-black backgrounds
+    lo = float(np.percentile(lum, 18))
+    hi = float(np.percentile(lum, 88))
+    buckets: dict[str, list[Polyline]] = {p.id: [] for p in pens}
+    count = 0
+    for y in range(0, h, step):
+        for x in range(0, w, step):
+            if count >= limit:
+                break
+            tone = float(ink[y, x])
+            lv = float(lum[y, x])
+            if tone < 0.08 or lv < max(30.0, lo - 5) or lv > min(220.0, hi + 5):
+                continue
+            pen = _pen_for(pv, palette, rgb=rgb[y, x])
+            seg = max(step, int(step * (0.6 + tone)))
+            x0, y0 = map_to_page(x, y, img_w=w, img_h=h, page_w=pv.page_w_mm, page_h=pv.page_h_mm)
+            x1, y1 = map_to_page(x + seg, y + seg, img_w=w, img_h=h, page_w=pv.page_w_mm, page_h=pv.page_h_mm)
+            buckets[pen.id].append(Polyline(points=[(x0, y0), (x1, y1)], pen_id=pen.id))
+            count += 1
+            if tone > 0.45 and count < limit:
+                x2, y2 = map_to_page(x + seg, y, img_w=w, img_h=h, page_w=pv.page_w_mm, page_h=pv.page_h_mm)
+                x3, y3 = map_to_page(x, y + seg, img_w=w, img_h=h, page_w=pv.page_w_mm, page_h=pv.page_h_mm)
+                buckets[pen.id].append(Polyline(points=[(x2, y2), (x3, y3)], pen_id=pen.id))
+                count += 1
+        if count >= limit:
+            break
+    # Always add ingest edges when available
+    for poly in _edge_polys(pv, palette, limit=max(40, limit // 8)):
+        buckets.setdefault(poly.pen_id, []).append(poly)
+    return LayeredSVG(
+        width_mm=pv.page_w_mm,
+        height_mm=pv.page_h_mm,
+        passes=_passes_from_buckets("hatch", "Hatch", buckets),
+        seed=params.seed,
+        meta={"style": "portrait_hatch", "quality": params.quality.value, "vector_source": "adaptive_fallback"},
     )
 
 
 def restyle_squiggle(pv: PortraitVector, palette, params: StyleParams, *, line_spacing_mm: float | None = None) -> LayeredSVG:
+    """Squiggle fill on midtones + linedraw edge underlay."""
     arrays = pv.arrays()
     ink = arrays["ink_target"]
     rgb = arrays["rgb"]
+    lum = arrays["lum"]
     h, w = ink.shape
     pens = ink_pens(palette) or list(palette.pens)
     spacing = line_spacing_mm or max(0.8, pens[0].profile.width_mm * 2.5 / max(0.35, params.density))
@@ -138,29 +219,39 @@ def restyle_squiggle(pv: PortraitVector, palette, params: StyleParams, *, line_s
     px_per_mm = max(w, h) / max(usable, 1)
     step_y = max(2, int(spacing * px_per_mm))
     buckets: dict[str, list[Polyline]] = {p.id: [] for p in pens}
-    limits = QUALITY_LIMITS[params.quality]
-    max_paths = int(limits["max_paths"])
+    limit = _budget(params)
+    lo = float(np.percentile(lum, 15))
     n = 0
     for y in range(0, h, step_y):
-        if n >= max_paths:
+        if n >= limit:
             break
+        # Skip rows that are mostly dark background
+        if float(np.mean(lum[y, :])) < lo + 8:
+            continue
         pts = []
         for x in range(0, w, 2):
+            if float(ink[y, x]) < 0.05:
+                if len(pts) >= 2:
+                    pen = _pen_for(pv, palette, rgb=rgb[y, min(w - 1, x)])
+                    buckets[pen.id].append(Polyline(points=pts, pen_id=pen.id))
+                    n += 1
+                    pts = []
+                continue
             amp = float(ink[y, x]) * 4.0
             yy = y + math.sin(x * 0.2) * amp
             pts.append(map_to_page(x, yy, img_w=w, img_h=h, page_w=pv.page_w_mm, page_h=pv.page_h_mm))
-        if len(pts) < 2:
-            continue
-        pen = _pen_for(pv, palette, rgb=rgb[y, w // 2])
-        buckets[pen.id].append(Polyline(points=pts, pen_id=pen.id))
-        n += 1
-    passes = [make_pass(f"sq-{pid}", f"Squiggle {pid}", pid, polys) for pid, polys in buckets.items() if polys]
+        if len(pts) >= 2 and n < limit:
+            pen = _pen_for(pv, palette, rgb=rgb[y, w // 2])
+            buckets[pen.id].append(Polyline(points=pts, pen_id=pen.id))
+            n += 1
+    for poly in _edge_polys(pv, palette, limit=max(40, limit // 6)):
+        buckets.setdefault(poly.pen_id, []).append(poly)
     return LayeredSVG(
         width_mm=pv.page_w_mm,
         height_mm=pv.page_h_mm,
-        passes=passes,
+        passes=_passes_from_buckets("sq", "Squiggle", buckets),
         seed=params.seed,
-        meta={"style": "portrait_squiggle", "quality": params.quality.value},
+        meta={"style": "portrait_squiggle", "quality": params.quality.value, "vector_source": "ingest_edges+squiggle"},
     )
 
 
@@ -168,16 +259,20 @@ def restyle_stipple(pv: PortraitVector, palette, params: StyleParams, *, density
     arrays = pv.arrays()
     ink = arrays["ink_target"]
     rgb = arrays["rgb"]
+    lum = arrays["lum"]
     h, w = ink.shape
     limits = QUALITY_LIMITS[params.quality]
     n = int(limits["max_dots"] * params.density * density_mul)
     rng = np.random.default_rng(params.seed)
+    lo = float(np.percentile(lum, 12))
     pts = []
     attempts = 0
-    while len(pts) < n and attempts < n * 40:
+    while len(pts) < n and attempts < n * 50:
         attempts += 1
         x = int(rng.integers(0, w))
         y = int(rng.integers(0, h))
+        if float(lum[y, x]) < lo + 5:
+            continue
         if rng.random() < float(ink[y, x]):
             pts.append((x, y))
     buckets: dict[str, list[Polyline]] = {}
@@ -190,13 +285,14 @@ def restyle_stipple(pv: PortraitVector, palette, params: StyleParams, *, density
             for t in np.linspace(0, 2 * math.pi, 8, endpoint=False)
         ]
         buckets.setdefault(pen.id, []).append(Polyline(points=circle + [circle[0]], pen_id=pen.id, closed=True))
-    passes = [make_pass(f"stipple-{pid}", f"Stipple {pid}", pid, polys) for pid, polys in buckets.items() if polys]
+    for poly in _edge_polys(pv, palette, limit=max(40, int(QUALITY_LIMITS[params.quality]["max_paths"]) // 8)):
+        buckets.setdefault(poly.pen_id, []).append(poly)
     return LayeredSVG(
         width_mm=pv.page_w_mm,
         height_mm=pv.page_h_mm,
-        passes=passes,
+        passes=_passes_from_buckets("stipple", "Stipple", buckets),
         seed=params.seed,
-        meta={"style": "portrait_pointillism", "quality": params.quality.value},
+        meta={"style": "portrait_pointillism", "quality": params.quality.value, "vector_source": "ingest_edges+stipple"},
     )
 
 
@@ -211,7 +307,6 @@ def restyle_regions_mosaic(pv: PortraitVector, palette, params: StyleParams) -> 
         pts = list(r.points_mm)
         if len(pts) >= 3:
             outline.append(Polyline(points=pts, pen_id=border.id, closed=True))
-        # Horizontal fill scans inside bbox
         xs = [p[0] for p in pts]
         ys = [p[1] for p in pts]
         y0, y1 = min(ys), max(ys)
@@ -221,6 +316,8 @@ def restyle_regions_mosaic(pv: PortraitVector, palette, params: StyleParams) -> 
         while yy <= y1:
             fills.setdefault(pen.id, []).append(Polyline(points=[(x0, yy), (x1, yy)], pen_id=pen.id))
             yy += step
+    # Prefer ingest edges as additional outline structure
+    outline.extend(_edge_polys(pv, palette, limit=80))
     passes = [make_pass("mosaic-outline", "Facet outline", border.id, outline)]
     passes += [make_pass(f"mosaic-{pid}", f"Facet {pid}", pid, polys) for pid, polys in fills.items() if polys]
     return LayeredSVG(
@@ -228,15 +325,29 @@ def restyle_regions_mosaic(pv: PortraitVector, palette, params: StyleParams) -> 
         height_mm=pv.page_h_mm,
         passes=passes,
         seed=params.seed,
-        meta={"style": "portrait_cubism", "quality": params.quality.value},
+        meta={"style": "portrait_cubism", "quality": params.quality.value, "vector_source": "regions+edges"},
     )
 
 
 def restyle_pen_sketch(pv: PortraitVector, palette, params: StyleParams, **kwargs) -> LayeredSVG:
-    line = restyle_linework(pv, palette, params)
-    hatch = restyle_hatch(pv, palette, StyleParams(seed=params.seed + 1, quality=params.quality, density=params.density * 0.6), **kwargs)
-    line.passes.extend(hatch.passes)
+    # Edges + regions once; hatch once (ingest preferred via restyle_hatch)
+    line = restyle_linework(pv, palette, params, include_hatch=False, include_regions=True)
+    hatch = restyle_hatch(
+        pv,
+        palette,
+        StyleParams(seed=params.seed + 1, quality=params.quality, density=params.density * 0.6),
+        **kwargs,
+    )
+    # Avoid duplicating edge passes already in line
+    edge_ids = {p.id for p in line.passes}
+    for pas in hatch.passes:
+        if pas.id.startswith("hatch-") or pas.name.startswith("Hatch"):
+            # Drop pure edge-only dupes by filtering polylines already in line? Keep hatch strokes.
+            line.passes.append(pas)
+        elif pas.id not in edge_ids:
+            line.passes.append(pas)
     line.meta["style"] = "portrait_pen"
+    line.meta["vector_source"] = "ingest+hatch"
     return line
 
 
@@ -244,6 +355,8 @@ def restyle_tsp(pv: PortraitVector, palette, params: StyleParams) -> LayeredSVG:
     stippled = restyle_stipple(pv, palette, StyleParams(seed=params.seed, quality=params.quality, density=0.7), density_mul=0.7)
     centers = []
     for pas in stippled.passes:
+        if pas.id.startswith("edges") or "edge" in pas.name.lower():
+            continue
         for poly in pas.polylines:
             if not poly.points:
                 continue
@@ -259,12 +372,17 @@ def restyle_tsp(pv: PortraitVector, palette, params: StyleParams) -> LayeredSVG:
         best_i = min(range(len(remaining)), key=lambda i: (remaining[i][0] - x) ** 2 + (remaining[i][1] - y) ** 2)
         tour.append(remaining.pop(best_i))
     pen = _pen_for(pv, palette, "edge")
+    passes = [make_pass("tsp", "TSP path", pen.id, [Polyline(points=tour, pen_id=pen.id)])]
+    # Keep linedraw edges as underlay
+    edge_polys = _edge_polys(pv, palette, limit=60)
+    if edge_polys:
+        passes.insert(0, make_pass("edges", "Portrait edges", pen.id, edge_polys))
     return LayeredSVG(
         width_mm=pv.page_w_mm,
         height_mm=pv.page_h_mm,
-        passes=[make_pass("tsp", "TSP path", pen.id, [Polyline(points=tour, pen_id=pen.id)])],
+        passes=passes,
         seed=params.seed,
-        meta={"style": "portrait_tsp", "quality": params.quality.value},
+        meta={"style": "portrait_tsp", "quality": params.quality.value, "vector_source": "ingest_edges+tsp"},
     )
 
 
@@ -309,5 +427,7 @@ def render_from_vector(
         "pen_assignment": (pv.meta or {}).get("pen_assignment"),
         "crop": pv.crop.model_dump(),
         "quality": params.quality.value if isinstance(params.quality, QualityPreset) else params.quality,
+        "edge_count": len(pv.edge_polylines_mm),
+        "hatch_count": len(pv.hatch_polylines_mm),
     }
     return layered
