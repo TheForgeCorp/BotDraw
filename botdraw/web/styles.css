@@ -577,6 +577,52 @@ body[data-app="lettersbot"] .tabs button.active {
   border: 1px dashed rgba(0, 0, 0, 0.12);
   border-radius: 0;
 }
+.letters-zoom {
+  display: flex;
+  gap: 0.3rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.letters-zoom button {
+  border: 1px solid var(--l-line);
+  background: #fff;
+  border-radius: 4px;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 0.45rem;
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  color: var(--l-text);
+}
+.letters-zoom button:hover { background: var(--l-soft); }
+.letters-zoom .zoom-label {
+  font-family: var(--font-mono-tech);
+  font-size: 0.6875rem;
+  color: var(--l-muted);
+}
+.mode-toggle {
+  display: inline-flex;
+  border: 1px solid var(--l-line);
+  border-radius: 4px;
+  overflow: hidden;
+  margin: 0.35rem 0 0.55rem;
+}
+.mode-toggle button {
+  border: 0;
+  background: #fff;
+  padding: 0.35rem 0.7rem;
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--l-muted);
+  cursor: pointer;
+}
+.mode-toggle button.active {
+  background: var(--l-ink);
+  color: #fff;
+}
 .letters-transport,
 .letters-download {
   display: flex;

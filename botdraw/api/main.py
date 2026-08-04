@@ -17,7 +17,14 @@ from botdraw.core.jobs import list_jobs, load_job
 from botdraw.core.models import PaperSize, QualityPreset
 from botdraw.core.pipeline import render_job
 from botdraw.handwriting import load_samples, render_with_clone, save_samples
-from botdraw.letters import LetterLayerSpec, Margins, render_letter, render_letter_layers
+from botdraw.letters import (
+    LetterLayerSpec,
+    LineGeom,
+    Margins,
+    SnapSpec,
+    render_letter,
+    render_letter_layers,
+)
 from botdraw.letters.fonts import list_fonts
 from botdraw.llm import draft_wedding_letter, is_loaded, try_local_ollama, unload
 from botdraw.palettes import calibrate_pen, create_palette, list_palette_ids, load_palette
@@ -68,6 +75,23 @@ class MarginsModel(BaseModel):
     bottom: float = 18.0
 
 
+class LineGeomModel(BaseModel):
+    x0_mm: float = 20.0
+    y0_mm: float = 40.0
+    x1_mm: float = 120.0
+    y1_mm: float = 40.0
+    style: str = "solid"
+    dash_mm: float = 2.0
+    gap_mm: float = 1.2
+    width_mm: Optional[float] = None
+
+
+class SnapModel(BaseModel):
+    target_layer_id: Optional[str] = None
+    span_index: Optional[int] = None
+    role: str = "underline"
+
+
 class LetterLayerModel(BaseModel):
     id: str = "layer-0"
     name: str = "Ink"
@@ -84,6 +108,12 @@ class LetterLayerModel(BaseModel):
     humanize: float = 0.08
     line_height: Optional[float] = None
     highlight_words: list[str] = []
+    draw_mode: str = "text"
+    leading_variation: float = 0.12
+    line_angle_deg: float = 0.0
+    line: Optional[LineGeomModel] = None
+    placement: str = "freehand"
+    snap: Optional[SnapModel] = None
 
 
 class LetterRequest(BaseModel):
@@ -285,6 +315,8 @@ def api_letter_draft(body: LetterRequest):
             btxt = (lm.body or "").strip()
             if i == 0 and not btxt:
                 btxt = draft["body"]
+            lg = lm.line or LineGeomModel()
+            sn = lm.snap or SnapModel()
             specs.append(
                 LetterLayerSpec(
                     id=lm.id or f"layer-{i}",
@@ -302,6 +334,25 @@ def api_letter_draft(body: LetterRequest):
                     humanize=lm.humanize,
                     line_height=lm.line_height,
                     highlight_words=list(lm.highlight_words or []),
+                    draw_mode=lm.draw_mode or "text",
+                    leading_variation=lm.leading_variation,
+                    line_angle_deg=lm.line_angle_deg,
+                    line=LineGeom(
+                        x0_mm=lg.x0_mm,
+                        y0_mm=lg.y0_mm,
+                        x1_mm=lg.x1_mm,
+                        y1_mm=lg.y1_mm,
+                        style=lg.style,
+                        dash_mm=lg.dash_mm,
+                        gap_mm=lg.gap_mm,
+                        width_mm=lg.width_mm,
+                    ),
+                    placement=lm.placement or "freehand",
+                    snap=SnapSpec(
+                        target_layer_id=sn.target_layer_id,
+                        span_index=sn.span_index,
+                        role=sn.role or "underline",
+                    ),
                 )
             )
         layered = render_letter_layers(
@@ -380,6 +431,7 @@ def api_letter_draft(body: LetterRequest):
             else None
         ),
         "letter_layers": layered.meta.get("layers", []),
+        "layer_spans": layered.meta.get("layer_spans", {}),
         "timing_s": {"draft": round(t_draft, 3), "vectorize": round(t_vector, 3)},
     }
     job = JobRecord(app="lettersbot", style_id="letter", status=JobStatus.READY, seed=body.seed, palette_id=body.palette_id)

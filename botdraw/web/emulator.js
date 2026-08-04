@@ -1,4 +1,4 @@
-/* BotDraw emulator canvas player with layer / pen filters */
+/* BotDraw emulator canvas player with layer / pen filters, zoom, line handles */
 class EmulatorPlayer {
   constructor(canvas) {
     this.canvas = canvas;
@@ -18,6 +18,14 @@ class EmulatorPlayer {
     this.hiddenPenIds = new Set();
     this.showGhost = true;
     this.soloPassId = null;
+    this.zoom = 1;
+    this.panX = 0;
+    this.panY = 0;
+    this.editLine = null; // { x0_mm, y0_mm, x1_mm, y1_mm }
+    this.snapGhost = null; // { x, y, w, h }
+    this.onLineEdit = null; // (line) => void while dragging / after
+    this._drag = null; // { end: 'a'|'b' }
+    this._bound = false;
   }
 
   load(plan) {
@@ -34,6 +42,48 @@ class EmulatorPlayer {
 
   setSpeed(v) { this.speed = Number(v) || 1; }
   setGhost(v) { this.showGhost = !!v; this.drawFrame(); }
+
+  setZoom(z) {
+    this.zoom = Math.max(0.5, Math.min(3, Number(z) || 1));
+    this.drawFrame();
+  }
+
+  zoomBy(factor) {
+    this.setZoom(this.zoom * factor);
+  }
+
+  fitZoom() {
+    this.zoom = 1;
+    this.panX = 0;
+    this.panY = 0;
+    this.drawFrame();
+  }
+
+  setEditLine(line) {
+    this.editLine = line ? { ...line } : null;
+    this.drawFrame();
+  }
+
+  setSnapGhost(span) {
+    this.snapGhost = span ? { ...span } : null;
+    this.drawFrame();
+  }
+
+  enableInteraction() {
+    if (this._bound) return;
+    this._bound = true;
+    const c = this.canvas;
+    c.style.touchAction = "none";
+    c.addEventListener("pointerdown", (e) => this._onPointerDown(e));
+    c.addEventListener("pointermove", (e) => this._onPointerMove(e));
+    c.addEventListener("pointerup", (e) => this._onPointerUp(e));
+    c.addEventListener("pointerleave", (e) => this._onPointerUp(e));
+    c.addEventListener("wheel", (e) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      this.zoomBy(e.deltaY < 0 ? 1.08 : 1 / 1.08);
+    }, { passive: false });
+  }
 
   setPassVisible(passId, visible) {
     if (visible) this.hiddenPassIds.delete(passId);
@@ -105,6 +155,88 @@ class EmulatorPlayer {
     if (seg.kind === "pen_change") this._stats(`Pen change → ${seg.pen_id || "?"}`);
   }
 
+  _paperScale() {
+    if (!this.plan) return { sx: 1, sy: 1, w: this.canvas.width, h: this.canvas.height };
+    const w = this.canvas.width;
+    const h = this.canvas.height;
+    return { sx: w / this.plan.width_mm, sy: h / this.plan.height_mm, w, h };
+  }
+
+  /** Apply zoom/pan about paper center. */
+  _applyViewTransform(ctx) {
+    const { w, h } = this._paperScale();
+    ctx.translate(w / 2 + this.panX, h / 2 + this.panY);
+    ctx.scale(this.zoom, this.zoom);
+    ctx.translate(-w / 2, -h / 2);
+  }
+
+  canvasToMm(clientX, clientY) {
+    const rect = this.canvas.getBoundingClientRect();
+    const cssX = clientX - rect.left;
+    const cssY = clientY - rect.top;
+    const scaleX = this.canvas.width / rect.width;
+    const scaleY = this.canvas.height / rect.height;
+    let x = cssX * scaleX;
+    let y = cssY * scaleY;
+    const { sx, sy, w, h } = this._paperScale();
+    // Inverse of view transform
+    x = (x - (w / 2 + this.panX)) / this.zoom + w / 2;
+    y = (y - (h / 2 + this.panY)) / this.zoom + h / 2;
+    return { x_mm: x / sx, y_mm: y / sy };
+  }
+
+  _handleScreen(x_mm, y_mm) {
+    const { sx, sy, w, h } = this._paperScale();
+    let x = x_mm * sx;
+    let y = y_mm * sy;
+    x = (x - w / 2) * this.zoom + w / 2 + this.panX;
+    y = (y - h / 2) * this.zoom + h / 2 + this.panY;
+    return { x, y };
+  }
+
+  _hitHandle(clientX, clientY) {
+    if (!this.editLine) return null;
+    const a = this._handleScreen(this.editLine.x0_mm, this.editLine.y0_mm);
+    const b = this._handleScreen(this.editLine.x1_mm, this.editLine.y1_mm);
+    const rect = this.canvas.getBoundingClientRect();
+    const scaleX = this.canvas.width / rect.width;
+    const scaleY = this.canvas.height / rect.height;
+    const x = (clientX - rect.left) * scaleX;
+    const y = (clientY - rect.top) * scaleY;
+    const r = 10;
+    if (Math.hypot(x - a.x, y - a.y) <= r) return "a";
+    if (Math.hypot(x - b.x, y - b.y) <= r) return "b";
+    return null;
+  }
+
+  _onPointerDown(e) {
+    const hit = this._hitHandle(e.clientX, e.clientY);
+    if (!hit || !this.editLine) return;
+    this._drag = { end: hit };
+    this.canvas.setPointerCapture?.(e.pointerId);
+    e.preventDefault();
+  }
+
+  _onPointerMove(e) {
+    if (!this._drag || !this.editLine) return;
+    const mm = this.canvasToMm(e.clientX, e.clientY);
+    if (this._drag.end === "a") {
+      this.editLine.x0_mm = mm.x_mm;
+      this.editLine.y0_mm = mm.y_mm;
+    } else {
+      this.editLine.x1_mm = mm.x_mm;
+      this.editLine.y1_mm = mm.y_mm;
+    }
+    this.drawFrame();
+    if (this.onLineEdit) this.onLineEdit({ ...this.editLine }, { live: true });
+  }
+
+  _onPointerUp(e) {
+    if (!this._drag) return;
+    this._drag = null;
+    if (this.onLineEdit && this.editLine) this.onLineEdit({ ...this.editLine }, { live: false });
+  }
+
   drawFrame() {
     const ctx = this.ctx;
     const w = this.canvas.width;
@@ -113,12 +245,12 @@ class EmulatorPlayer {
     ctx.fillStyle = "#f7f1e8";
     ctx.fillRect(0, 0, w, h);
     if (!this.plan) return;
-    const sx = w / this.plan.width_mm;
-    const sy = h / this.plan.height_mm;
+    const { sx, sy } = this._paperScale();
 
     const current = this.plan.segments[Math.min(this.index, this.plan.segments.length - 1)];
     const theta = current && current.base_theta_rad ? current.base_theta_rad : 0;
     ctx.save();
+    this._applyViewTransform(ctx);
     if (theta) {
       ctx.translate(w / 2, h / 2);
       ctx.rotate(theta);
@@ -127,6 +259,15 @@ class EmulatorPlayer {
       ctx.beginPath();
       ctx.arc(w / 2, h / 2, Math.min(w, h) * 0.42, 0, Math.PI * 2);
       ctx.stroke();
+    }
+
+    if (this.snapGhost) {
+      const g = this.snapGhost;
+      ctx.fillStyle = "rgba(59, 130, 246, 0.12)";
+      ctx.strokeStyle = "rgba(59, 130, 246, 0.45)";
+      ctx.lineWidth = 1;
+      ctx.fillRect(g.x * sx, g.y * sy, g.w * sx, g.h * sy);
+      ctx.strokeRect(g.x * sx, g.y * sy, g.w * sx, g.h * sy);
     }
 
     for (const seg of this.ink) {
@@ -158,11 +299,36 @@ class EmulatorPlayer {
     }
     ctx.restore();
 
+    // Handles in screen space (after view restore) so size stays constant
+    if (this.editLine) {
+      const a = this._handleScreen(this.editLine.x0_mm, this.editLine.y0_mm);
+      const b = this._handleScreen(this.editLine.x1_mm, this.editLine.y1_mm);
+      ctx.save();
+      ctx.strokeStyle = "rgba(17,17,17,0.55)";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      for (const p of [a, b]) {
+        ctx.fillStyle = "#fff";
+        ctx.strokeStyle = "#111";
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.rect(p.x - 5, p.y - 5, 10, 10);
+        ctx.fill();
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
     if (this.plan.stats) {
       const s = this.plan.stats;
       const visibleInk = this.ink.filter((seg) => this._visible(seg)).length;
       this._stats(
-        `ink segs ${visibleInk}/${this.ink.length} · paths ${s.stroke_count} · pens ${s.pen_ids.length} · ETA ${s.estimated_time_s.toFixed(1)}s`
+        `ink segs ${visibleInk}/${this.ink.length} · paths ${s.stroke_count} · pens ${s.pen_ids.length} · ETA ${s.estimated_time_s.toFixed(1)}s · zoom ${this.zoom.toFixed(2)}×`
       );
     }
   }

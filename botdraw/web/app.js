@@ -26,6 +26,7 @@ let letterLayerTab = "layer-0";
 let letterFonts = [];
 let letterLayersState = [];
 let letterVectorizeTimer = null;
+let letterLayerSpans = {};
 
 const LETTER_TYPE_DEFAULTS = {
   professional: {
@@ -72,11 +73,25 @@ const LETTER_TYPE_DEFAULTS = {
   },
 };
 
+function ensureLineFields(layer) {
+  if (!layer.line) {
+    layer.line = { x0_mm: 20, y0_mm: 40, x1_mm: 120, y1_mm: 40, style: "solid", dash_mm: 2, gap_mm: 1.2, width_mm: null };
+  }
+  if (!layer.snap) {
+    layer.snap = { target_layer_id: null, span_index: null, role: "underline" };
+  }
+  if (layer.draw_mode == null) layer.draw_mode = "text";
+  if (layer.leading_variation == null) layer.leading_variation = 0.12;
+  if (layer.line_angle_deg == null) layer.line_angle_deg = 0;
+  if (layer.placement == null) layer.placement = "freehand";
+  return layer;
+}
+
 function defaultLetterLayers(bodyText = "HELLO") {
   const pal = currentPalette();
   const ink = pal?.pens?.find((p) => p.profile?.nib_type !== "highlighter") || pal?.pens?.[0];
   return [
-    {
+    ensureLineFields({
       id: "layer-0",
       name: "Ink",
       body: bodyText,
@@ -91,8 +106,70 @@ function defaultLetterLayers(bodyText = "HELLO") {
       tracking: 0.15,
       humanize: 0.08,
       highlight_words: [],
-    },
+      draw_mode: "text",
+      leading_variation: 0.12,
+      line_angle_deg: 0,
+      placement: "freehand",
+    }),
   ];
+}
+
+function textLayerOptionsHtml(selectedId) {
+  const texts = letterLayersState.filter((l) => (l.draw_mode || "text") === "text");
+  if (!texts.length) return `<option value="">—</option>`;
+  return texts.map((l) =>
+    `<option value="${l.id}" ${l.id === selectedId ? "selected" : ""}>${l.name || l.id}</option>`
+  ).join("");
+}
+
+function spanOptionsHtml(targetId, selectedIdx) {
+  const spans = letterLayerSpans[targetId] || [];
+  if (!spans.length) return `<option value="">No spans yet — Vectorize</option>`;
+  return spans.map((s, i) => {
+    const label = (s.text || `span ${i}`).slice(0, 24);
+    return `<option value="${i}" ${Number(selectedIdx) === i ? "selected" : ""}>${i}: ${label}</option>`;
+  }).join("");
+}
+
+function applySnapToLayer(layer) {
+  ensureLineFields(layer);
+  if ((layer.placement || "freehand") !== "snap") return;
+  const tid = layer.snap.target_layer_id;
+  const sidx = layer.snap.span_index;
+  const spans = letterLayerSpans[tid] || [];
+  if (sidx == null || sidx === "" || !spans[sidx]) return;
+  const span = spans[sidx];
+  const role = layer.snap.role || "underline";
+  let x0 = span.x0 != null ? span.x0 : span.x;
+  let y0 = span.y0 != null ? span.y0 : (span.baseline_y ?? span.y);
+  let x1 = span.x1 != null ? span.x1 : span.x + span.w;
+  let y1 = span.y1 != null ? span.y1 : y0;
+  if (role === "highlight") {
+    const mid = span.y + span.h * 0.55;
+    x0 = span.x - 0.4; x1 = span.x + span.w + 0.4; y0 = mid; y1 = mid;
+  } else {
+    const uy = (span.baseline_y != null ? span.baseline_y : y0) + span.h * 0.12;
+    y0 = uy; y1 = uy;
+  }
+  layer.line.x0_mm = x0; layer.line.y0_mm = y0; layer.line.x1_mm = x1; layer.line.y1_mm = y1;
+}
+
+function syncLineHandles() {
+  const layer = activeLetterLayer();
+  if (!layer || !lettersPlayer) return;
+  ensureLineFields(layer);
+  if ((layer.draw_mode || "text") === "line") {
+    lettersPlayer.setEditLine(layer.line);
+    if (layer.placement === "snap" && layer.snap?.target_layer_id != null && layer.snap.span_index != null) {
+      const sp = (letterLayerSpans[layer.snap.target_layer_id] || [])[layer.snap.span_index];
+      lettersPlayer.setSnapGhost(sp || null);
+    } else {
+      lettersPlayer.setSnapGhost(null);
+    }
+  } else {
+    lettersPlayer.setEditLine(null);
+    lettersPlayer.setSnapGhost(null);
+  }
 }
 
 function readMargins() {
@@ -499,35 +576,120 @@ function penCardHtml(penId) {
 function syncActiveLayerFromForm() {
   const layer = activeLetterLayer();
   if (!layer) return;
+  ensureLineFields(layer);
   const specs = document.getElementById("letter-layer-specs");
   if (!specs) return;
   const g = (id) => specs.querySelector(`#${id}`);
-  if (g("layer-body")) layer.body = g("layer-body").value;
   if (g("layer-name")) layer.name = g("layer-name").value;
-  if (g("layer-font")) layer.font_name = g("layer-font").value;
-  if (g("layer-size")) layer.size_mm = Number(g("layer-size").value || 4.5);
+  if (g("layer-draw-mode")) layer.draw_mode = g("layer-draw-mode").value;
   if (g("layer-pen")) layer.pen_id = g("layer-pen").value;
-  if (g("layer-lang")) layer.language = g("layer-lang").value;
-  if (g("layer-translate")) layer.translate_from_en = !!g("layer-translate").checked;
-  if (g("layer-ox")) layer.offset_x_mm = Number(g("layer-ox").value || 0);
-  if (g("layer-oy")) layer.offset_y_mm = Number(g("layer-oy").value || 0);
   if (g("layer-kind")) layer.kind = g("layer-kind").value;
-  if (g("layer-tracking")) layer.tracking = Number(g("layer-tracking").value || 0.15);
-  if (g("layer-humanize")) layer.humanize = Number(g("layer-humanize").value || 0.08);
+  if ((layer.draw_mode || "text") === "line") {
+    if (g("layer-placement")) layer.placement = g("layer-placement").value;
+    if (g("layer-snap-target")) layer.snap.target_layer_id = g("layer-snap-target").value || null;
+    if (g("layer-snap-span")) {
+      const v = g("layer-snap-span").value;
+      layer.snap.span_index = v === "" ? null : Number(v);
+    }
+    if (g("layer-snap-role")) layer.snap.role = g("layer-snap-role").value;
+    if (g("line-x0")) layer.line.x0_mm = Number(g("line-x0").value || 0);
+    if (g("line-y0")) layer.line.y0_mm = Number(g("line-y0").value || 0);
+    if (g("line-x1")) layer.line.x1_mm = Number(g("line-x1").value || 0);
+    if (g("line-y1")) layer.line.y1_mm = Number(g("line-y1").value || 0);
+    if (g("line-style")) layer.line.style = g("line-style").value;
+    if (g("line-dash")) layer.line.dash_mm = Number(g("line-dash").value || 2);
+    if (g("line-gap")) layer.line.gap_mm = Number(g("line-gap").value || 1.2);
+    if (g("line-width") && g("line-width").value !== "") layer.line.width_mm = Number(g("line-width").value);
+    if (layer.placement === "snap") applySnapToLayer(layer);
+  } else {
+    if (g("layer-body")) layer.body = g("layer-body").value;
+    if (g("layer-font")) layer.font_name = g("layer-font").value;
+    if (g("layer-size")) layer.size_mm = Number(g("layer-size").value || 4.5);
+    if (g("layer-lang")) layer.language = g("layer-lang").value;
+    if (g("layer-translate")) layer.translate_from_en = !!g("layer-translate").checked;
+    if (g("layer-ox")) layer.offset_x_mm = Number(g("layer-ox").value || 0);
+    if (g("layer-oy")) layer.offset_y_mm = Number(g("layer-oy").value || 0);
+    if (g("layer-tracking")) layer.tracking = Number(g("layer-tracking").value || 0.15);
+    if (g("layer-humanize")) layer.humanize = Number(g("layer-humanize").value || 0.08);
+    if (g("layer-leading-var")) layer.leading_variation = Number(g("layer-leading-var").value || 0);
+    if (g("layer-angle")) {
+      let a = Number(g("layer-angle").value || 0);
+      a = Math.round(a / 0.05) * 0.05;
+      layer.line_angle_deg = Math.max(-0.5, Math.min(0.5, a));
+    }
+  }
 }
 
 function layerEditorFieldsHtml(layer) {
+  ensureLineFields(layer);
+  const mode = layer.draw_mode || "text";
   const showTranslate = (layer.language || "en") !== "en";
+  const modeToggle = `
+    <div class="mode-toggle" id="draw-mode-toggle">
+      <button type="button" data-mode="text" class="${mode === "text" ? "active" : ""}">Font</button>
+      <button type="button" data-mode="line" class="${mode === "line" ? "active" : ""}">Line</button>
+    </div>
+    <input type="hidden" id="layer-draw-mode" value="${mode}" />`;
+  const shared = `
+      ${field("Layer name", `<input id="layer-name" value="${layer.name || ""}" />`)}
+      ${modeToggle}
+      ${field("Pen / marker", `<select id="layer-pen">${penOptionsHtml(layer.pen_id)}</select>`)}
+      <div id="pen-card">${penCardHtml(layer.pen_id)}</div>
+      ${field("Kind", `<select id="layer-kind">
+          <option value="ink" ${layer.kind === "ink" ? "selected" : ""}>ink</option>
+          <option value="highlight" ${layer.kind === "highlight" ? "selected" : ""}>highlight</option>
+          <option value="accent" ${layer.kind === "accent" ? "selected" : ""}>accent</option>
+          <option value="underline" ${layer.kind === "underline" ? "selected" : ""}>underline</option>
+        </select>`)}`;
+  if (mode === "line") {
+    const dashed = (layer.line.style || "solid") === "dashed";
+    return `
+    <div class="spec-block layer-editor">
+      ${shared}
+      ${field("Placement", `<select id="layer-placement">
+        <option value="freehand" ${layer.placement === "freehand" ? "selected" : ""}>Freehand</option>
+        <option value="snap" ${layer.placement === "snap" ? "selected" : ""}>Snap to text</option>
+      </select>`)}
+      <div id="snap-fields" style="${layer.placement === "snap" ? "" : "display:none"}">
+        ${field("Snap target layer", `<select id="layer-snap-target">${textLayerOptionsHtml(layer.snap.target_layer_id)}</select>`)}
+        ${field("Snap span", `<select id="layer-snap-span">${spanOptionsHtml(layer.snap.target_layer_id, layer.snap.span_index)}</select>`)}
+        ${field("Snap role", `<select id="layer-snap-role">
+          <option value="underline" ${layer.snap.role === "underline" ? "selected" : ""}>underline</option>
+          <option value="highlight" ${layer.snap.role === "highlight" ? "selected" : ""}>highlight</option>
+        </select>`)}
+      </div>
+      <div class="grid-2">
+        ${field("X0 mm", `<input id="line-x0" type="number" step="0.1" value="${layer.line.x0_mm}" />`)}
+        ${field("Y0 mm", `<input id="line-y0" type="number" step="0.1" value="${layer.line.y0_mm}" />`)}
+      </div>
+      <div class="grid-2">
+        ${field("X1 mm", `<input id="line-x1" type="number" step="0.1" value="${layer.line.x1_mm}" />`)}
+        ${field("Y1 mm", `<input id="line-y1" type="number" step="0.1" value="${layer.line.y1_mm}" />`)}
+      </div>
+      <p class="muted">Drag endpoint handles on the emulator, or edit numbers.</p>
+      ${field("Line style", `<select id="line-style">
+        <option value="solid" ${!dashed ? "selected" : ""}>Continuous</option>
+        <option value="dashed" ${dashed ? "selected" : ""}>Dashed</option>
+      </select>`)}
+      <div class="grid-2" id="dash-fields" style="${dashed ? "" : "display:none"}">
+        ${field("Dash mm", `<input id="line-dash" type="number" step="0.1" min="0.2" value="${layer.line.dash_mm}" />`)}
+        ${field("Gap mm", `<input id="line-gap" type="number" step="0.1" min="0.1" value="${layer.line.gap_mm}" />`)}
+      </div>
+      ${field("Width mm (optional)", `<input id="line-width" type="number" step="0.1" min="0" value="${layer.line.width_mm ?? ""}" placeholder="pen default" />`)}
+      <div class="row" style="margin-top:0.55rem">
+        <button type="button" id="letter-solo">Solo</button>
+        <button type="button" id="letter-hide">Hide</button>
+      </div>
+    </div>`;
+  }
   return `
     <div class="spec-block layer-editor">
-      ${field("Layer name", `<input id="layer-name" value="${layer.name || ""}" />`)}
+      ${shared}
       ${field("Body", `<textarea id="layer-body" rows="5">${layer.body || ""}</textarea>`)}
       <div class="grid-2">
         ${field("Font", `<select id="layer-font">${fontOptionsHtml(layer.font_name)}</select>`)}
         ${field("Size mm", `<input id="layer-size" type="number" step="0.1" min="1" value="${layer.size_mm}" />`)}
       </div>
-      ${field("Pen / marker", `<select id="layer-pen">${penOptionsHtml(layer.pen_id)}</select>`)}
-      <div id="pen-card">${penCardHtml(layer.pen_id)}</div>
       <div class="grid-2">
         ${field("Language", `<select id="layer-lang">
           <option value="en" ${layer.language === "en" ? "selected" : ""}>en</option>
@@ -535,11 +697,7 @@ function layerEditorFieldsHtml(layer) {
           <option value="pa" ${layer.language === "pa" ? "selected" : ""}>pa</option>
           <option value="ur" ${layer.language === "ur" ? "selected" : ""}>ur</option>
         </select>`)}
-        ${field("Kind", `<select id="layer-kind">
-          <option value="ink" ${layer.kind === "ink" ? "selected" : ""}>ink</option>
-          <option value="highlight" ${layer.kind === "highlight" ? "selected" : ""}>highlight</option>
-          <option value="accent" ${layer.kind === "accent" ? "selected" : ""}>accent</option>
-        </select>`)}
+        ${field("Line angle °", `<input id="layer-angle" type="number" step="0.05" min="-0.5" max="0.5" value="${layer.line_angle_deg}" />`)}
       </div>
       <div class="chk-row" id="translate-row" style="${showTranslate ? "" : "display:none"}">
         <label><input id="layer-translate" type="checkbox" ${layer.translate_from_en ? "checked" : ""} /> Translate from English (AI)</label>
@@ -555,11 +713,116 @@ function layerEditorFieldsHtml(layer) {
         ${field("Tracking", `<input id="layer-tracking" type="number" step="0.05" value="${layer.tracking}" />`)}
         ${field("Humanize", `<input id="layer-humanize" type="number" step="0.01" min="0" max="1" value="${layer.humanize}" />`)}
       </div>
+      ${field("Leading variation", `<input id="layer-leading-var" type="number" step="0.01" min="0" max="1" value="${layer.leading_variation}" />`)}
       <div class="row" style="margin-top:0.55rem">
         <button type="button" id="letter-solo">Solo</button>
         <button type="button" id="letter-hide">Hide</button>
       </div>
     </div>`;
+}
+
+function renderLetterLayerEditor() {
+  if (!letterLayersState.length) {
+    letterLayersState = defaultLetterLayers(LETTER_TYPE_DEFAULTS[letterType]?.body || "HELLO");
+  }
+  letterLayersState.forEach(ensureLineFields);
+  if (!letterLayersState.find((l) => l.id === letterLayerTab)) {
+    letterLayerTab = letterLayersState[0].id;
+  }
+  const tabs = document.getElementById("letter-layer-tabs");
+  const specs = document.getElementById("letter-layer-specs");
+  if (!tabs || !specs) return;
+  const layer = activeLetterLayer();
+  tabs.innerHTML = letterLayersState.map((l) =>
+    `<button type="button" data-layer="${l.id}" class="${l.id === letterLayerTab ? "active" : ""}">${l.name || l.id}</button>`
+  ).join("");
+  specs.innerHTML = layerEditorFieldsHtml(layer);
+
+  tabs.querySelectorAll("button").forEach((btn) => {
+    btn.onclick = () => {
+      syncActiveLayerFromForm();
+      letterLayerTab = btn.dataset.layer;
+      renderLetterLayerEditor();
+      syncLineHandles();
+    };
+  });
+
+  specs.querySelectorAll("#draw-mode-toggle button").forEach((btn) => {
+    btn.onclick = () => {
+      syncActiveLayerFromForm();
+      layer.draw_mode = btn.dataset.mode;
+      if (layer.draw_mode === "line") {
+        layer.kind = layer.kind === "ink" ? "underline" : layer.kind;
+        if (!layer.snap.target_layer_id) {
+          const t = letterLayersState.find((l) => (l.draw_mode || "text") === "text");
+          layer.snap.target_layer_id = t?.id || null;
+          layer.snap.span_index = 0;
+        }
+      }
+      renderLetterLayerEditor();
+      scheduleLetterVectorize();
+    };
+  });
+
+  const onEdit = () => {
+    const prevMode = layer.draw_mode;
+    const prevPlacement = layer.placement;
+    syncActiveLayerFromForm();
+    const mode = specs.querySelector("#layer-draw-mode")?.value || layer.draw_mode;
+    const place = specs.querySelector("#layer-placement")?.value;
+    const style = specs.querySelector("#line-style")?.value;
+    const snapBox = specs.querySelector("#snap-fields");
+    const dashBox = specs.querySelector("#dash-fields");
+    if (snapBox && place) snapBox.style.display = place === "snap" ? "" : "none";
+    if (dashBox && style) dashBox.style.display = style === "dashed" ? "" : "none";
+    const lang = specs.querySelector("#layer-lang")?.value || "en";
+    const tr = specs.querySelector("#translate-row");
+    const note = specs.querySelector("#translate-note");
+    const trCb = specs.querySelector("#layer-translate");
+    if (tr) tr.style.display = lang === "en" ? "none" : "";
+    if (note) note.style.display = lang !== "en" && trCb?.checked ? "" : "none";
+    const penSel = specs.querySelector("#layer-pen");
+    if (penSel) {
+      const card = specs.querySelector("#pen-card");
+      if (card) card.innerHTML = penCardHtml(penSel.value);
+    }
+    // Refresh span options when target changes
+    const targetSel = specs.querySelector("#layer-snap-target");
+    const spanSel = specs.querySelector("#layer-snap-span");
+    if (targetSel && spanSel && targetSel.value !== (layer.snap.target_layer_id || "")) {
+      // already synced
+    }
+    if (targetSel && spanSel) {
+      const html = spanOptionsHtml(targetSel.value, layer.snap.span_index);
+      if (spanSel.innerHTML !== html) {
+        const cur = spanSel.value;
+        spanSel.innerHTML = html;
+        if ([...spanSel.options].some((o) => o.value === cur)) spanSel.value = cur;
+      }
+    }
+    if (layer.placement === "snap") {
+      applySnapToLayer(layer);
+      if (specs.querySelector("#line-x0")) {
+        specs.querySelector("#line-x0").value = layer.line.x0_mm.toFixed(2);
+        specs.querySelector("#line-y0").value = layer.line.y0_mm.toFixed(2);
+        specs.querySelector("#line-x1").value = layer.line.x1_mm.toFixed(2);
+        specs.querySelector("#line-y1").value = layer.line.y1_mm.toFixed(2);
+      }
+    }
+    syncLineHandles();
+    scheduleLetterVectorize();
+  };
+  specs.querySelectorAll("input, select, textarea").forEach((el) => {
+    el.addEventListener("input", onEdit);
+    el.addEventListener("change", onEdit);
+  });
+  specs.querySelector("#letter-solo")?.addEventListener("click", () => {
+    lettersPlayer.soloPass(layer.id);
+  });
+  specs.querySelector("#letter-hide")?.addEventListener("click", () => {
+    lettersPlayer.setPassVisible(layer.id, false);
+  });
+  syncLineHandles();
 }
 
 function draftMetaHtml() {
@@ -595,7 +858,7 @@ function letterEditorShellHtml() {
     <div class="layers-head">
       <div>
         <h4>Layers</h4>
-        <p class="muted">Text · font · pen · offset</p>
+        <p class="muted">Font or line · pen · snap</p>
       </div>
       <div class="layer-actions">
         <button type="button" id="letter-layer-add" title="Add layer">+</button>
@@ -606,57 +869,6 @@ function letterEditorShellHtml() {
     <div class="layer-specs" id="letter-layer-specs"></div>
     ${draftMetaHtml()}
   `;
-}
-
-function renderLetterLayerEditor() {
-  if (!letterLayersState.length) {
-    letterLayersState = defaultLetterLayers(LETTER_TYPE_DEFAULTS[letterType]?.body || "HELLO");
-  }
-  if (!letterLayersState.find((l) => l.id === letterLayerTab)) {
-    letterLayerTab = letterLayersState[0].id;
-  }
-  const tabs = document.getElementById("letter-layer-tabs");
-  const specs = document.getElementById("letter-layer-specs");
-  if (!tabs || !specs) return;
-  const layer = activeLetterLayer();
-  tabs.innerHTML = letterLayersState.map((l) =>
-    `<button type="button" data-layer="${l.id}" class="${l.id === letterLayerTab ? "active" : ""}">${l.name || l.id}</button>`
-  ).join("");
-  specs.innerHTML = layerEditorFieldsHtml(layer);
-
-  tabs.querySelectorAll("button").forEach((btn) => {
-    btn.onclick = () => {
-      syncActiveLayerFromForm();
-      letterLayerTab = btn.dataset.layer;
-      renderLetterLayerEditor();
-    };
-  });
-
-  const onEdit = () => {
-    syncActiveLayerFromForm();
-    const lang = specs.querySelector("#layer-lang")?.value || "en";
-    const tr = specs.querySelector("#translate-row");
-    const note = specs.querySelector("#translate-note");
-    const trCb = specs.querySelector("#layer-translate");
-    if (tr) tr.style.display = lang === "en" ? "none" : "";
-    if (note) note.style.display = lang !== "en" && trCb?.checked ? "" : "none";
-    const penSel = specs.querySelector("#layer-pen");
-    if (penSel) {
-      const card = specs.querySelector("#pen-card");
-      if (card) card.innerHTML = penCardHtml(penSel.value);
-    }
-    scheduleLetterVectorize();
-  };
-  specs.querySelectorAll("input, select, textarea").forEach((el) => {
-    el.addEventListener("input", onEdit);
-    el.addEventListener("change", onEdit);
-  });
-  specs.querySelector("#letter-solo")?.addEventListener("click", () => {
-    lettersPlayer.soloPass(layer.id);
-  });
-  specs.querySelector("#letter-hide")?.addEventListener("click", () => {
-    lettersPlayer.setPassVisible(layer.id, false);
-  });
 }
 
 function bindLetterTypeRail() {
@@ -683,22 +895,40 @@ function bindLayerChrome() {
     const pens = pal?.pens || [];
     const nextPen = pens[letterLayersState.length % Math.max(1, pens.length)] || pens[0];
     const id = `layer-${Date.now().toString(36)}`;
-    letterLayersState.push({
+    const isHl = nextPen?.profile?.nib_type === "highlighter";
+    const textTarget = letterLayersState.find((l) => (l.draw_mode || "text") === "text");
+    const asLine = true;
+    const layer = ensureLineFields({
       id,
-      name: `Layer ${letterLayersState.length + 1}`,
+      name: isHl ? "Highlight" : `Line ${letterLayersState.length}`,
       body: letterLayersState[0]?.body || "HELLO",
       font_name: "simplex",
       size_mm: 4.5,
       pen_id: nextPen?.id || "ink",
       language: "en",
       translate_from_en: false,
-      offset_x_mm: nextPen?.profile?.nib_type === "highlighter" ? 0 : 0.8,
-      offset_y_mm: nextPen?.profile?.nib_type === "highlighter" ? 0 : 0.8,
-      kind: nextPen?.profile?.nib_type === "highlighter" ? "highlight" : "accent",
+      offset_x_mm: 0,
+      offset_y_mm: 0,
+      kind: isHl ? "highlight" : "underline",
       tracking: 0.15,
       humanize: 0.08,
       highlight_words: ["forever", "heart", "love"],
+      draw_mode: "line",
+      leading_variation: 0.12,
+      line_angle_deg: 0,
+      placement: textTarget ? "snap" : "freehand",
+      snap: {
+        target_layer_id: textTarget?.id || null,
+        span_index: 0,
+        role: isHl ? "highlight" : "underline",
+      },
+      line: {
+        x0_mm: 20, y0_mm: 40, x1_mm: 120, y1_mm: 40,
+        style: "solid", dash_mm: 2, gap_mm: 1.2, width_mm: null,
+      },
     });
+    applySnapToLayer(layer);
+    letterLayersState.push(layer);
     letterLayerTab = id;
     renderLetterLayerEditor();
     scheduleLetterVectorize();
@@ -756,8 +986,19 @@ async function vectorizeLetter(opts = {}) {
   lastPayload = data.emulator;
   lastLayers = data.layers || data.emulator?.layers || null;
   lastSettings = data.settings;
+  letterLayerSpans = data.settings?.layer_spans || {};
+  for (const meta of (data.settings?.letter_layers || [])) {
+    if (meta.draw_mode !== "line" || !meta.line) continue;
+    const L = letterLayersState.find((x) => x.id === meta.id);
+    if (!L) continue;
+    ensureLineFields(L);
+    Object.assign(L.line, meta.line);
+  }
   lettersPlayer.load(lastPayload);
   lettersPlayer.skipEnd();
+  syncLineHandles();
+  const zl = document.getElementById("letters-zoom-label");
+  if (zl) zl.textContent = `${lettersPlayer.zoom.toFixed(2)}×`;
   setLettersDownloads(true, lastJob?.id);
   const timing = data.settings?.timing_s || {};
   const src = data.draft?.source || "?";
@@ -802,6 +1043,39 @@ async function renderLetters() {
   const root = letterContentRoot();
   root.innerHTML = letterEditorShellHtml();
   bindLayerChrome();
+  lettersPlayer.enableInteraction();
+  lettersPlayer.onLineEdit = (line, opts) => {
+    const layer = activeLetterLayer();
+    if (!layer || (layer.draw_mode || "text") !== "line") return;
+    ensureLineFields(layer);
+    layer.placement = "freehand";
+    Object.assign(layer.line, line);
+    const specs = document.getElementById("letter-layer-specs");
+    if (specs?.querySelector("#line-x0")) {
+      specs.querySelector("#line-x0").value = Number(line.x0_mm).toFixed(2);
+      specs.querySelector("#line-y0").value = Number(line.y0_mm).toFixed(2);
+      specs.querySelector("#line-x1").value = Number(line.x1_mm).toFixed(2);
+      specs.querySelector("#line-y1").value = Number(line.y1_mm).toFixed(2);
+      const place = specs.querySelector("#layer-placement");
+      if (place) place.value = "freehand";
+    }
+    if (!opts?.live) scheduleLetterVectorize();
+    else {
+      clearTimeout(letterVectorizeTimer);
+      letterVectorizeTimer = setTimeout(() => scheduleLetterVectorize(), 180);
+    }
+  };
+  const setZoomUi = () => {
+    const zl = document.getElementById("letters-zoom-label");
+    if (zl) zl.textContent = `${lettersPlayer.zoom.toFixed(2)}×`;
+  };
+  const zin = document.getElementById("letters-zoom-in");
+  const zout = document.getElementById("letters-zoom-out");
+  const zfit = document.getElementById("letters-zoom-fit");
+  if (zin) zin.onclick = () => { lettersPlayer.zoomBy(1.15); setZoomUi(); };
+  if (zout) zout.onclick = () => { lettersPlayer.zoomBy(1 / 1.15); setZoomUi(); };
+  if (zfit) zfit.onclick = () => { lettersPlayer.fitZoom(); setZoomUi(); };
+  setZoomUi();
   root.querySelector("#palette").value = selectedPaletteId;
   root.querySelector("#palette").onchange = () => {
     selectedPaletteId = root.querySelector("#palette").value;
