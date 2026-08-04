@@ -677,11 +677,11 @@ body[data-app="lettersbot"] .tabs button.active, body[data-app="portraitbot"] .t
 .portrait-left .letter-content { max-height: calc(100vh - 8.5rem); }
 .portrait-compare {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr 1fr 1fr;
   gap: 0.55rem;
   align-items: start;
 }
-@media (max-width: 900px) {
+@media (max-width: 1100px) {
   .portrait-compare { grid-template-columns: 1fr; }
 }
 .portrait-pane .pane-label {
@@ -691,6 +691,29 @@ body[data-app="lettersbot"] .tabs button.active, body[data-app="portraitbot"] .t
   text-transform: uppercase;
   color: var(--l-faint);
   margin-bottom: 0.35rem;
+}
+.portrait-pane .pane-hint {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+  color: var(--l-muted);
+  margin-left: 0.25rem;
+}
+.ingest-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  align-items: center;
+  margin-top: 0.35rem;
+  font-size: 0.75rem;
+  color: var(--l-muted);
+}
+.ingest-toggles a { color: var(--l-accent); }
+#portrait-ingest {
+  width: 100%;
+  height: auto;
+  display: block;
+  background: #f7f1e8;
 }
 #portrait-src,
 #portrait-emu {

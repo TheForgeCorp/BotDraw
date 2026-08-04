@@ -8,7 +8,7 @@ from typing import Any, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -216,6 +216,126 @@ def api_portrait_line_types():
     from botdraw.portrait.ornament import LINE_TYPES
 
     return {"line_types": LINE_TYPES}
+
+
+class PortraitIngestRequest(BaseModel):
+    image_mode: str = "photo"
+    quality: QualityPreset = QualityPreset.BOOTH_BALANCED
+    paper: PaperSize = PaperSize.A4
+    crop: Optional[dict[str, Any]] = None
+    auto_frame: bool = True
+    force_reingest: bool = False
+    ingest_id: Optional[str] = None
+    reuse_ingest: bool = False
+    include_preview_png: bool = True
+
+
+def _portrait_ingest_response(pv, *, include_preview_png: bool = True) -> dict[str, Any]:
+    from botdraw.portrait.preview import portrait_vector_preview_dict
+
+    return portrait_vector_preview_dict(pv, include_preview_png=include_preview_png)
+
+
+@app.post("/api/portrait/ingest")
+def api_portrait_ingest_json(body: PortraitIngestRequest):
+    """Ingest only (no style/ornament) — synthetic face when no upload."""
+    from botdraw.portrait import resolve_portrait_vector
+
+    if body.reuse_ingest and body.ingest_id and not body.force_reingest:
+        pv, hit = resolve_portrait_vector(
+            image_path=None,
+            mode=body.image_mode,
+            quality=body.quality.value,
+            paper=body.paper.value,
+            crop=body.crop,
+            reuse_ingest=True,
+            ingest_id=body.ingest_id,
+            force_reingest=False,
+            auto_frame=body.auto_frame if body.crop is None else False,
+        )
+    else:
+        pv, hit = resolve_portrait_vector(
+            image_path=None,
+            mode=body.image_mode,
+            quality=body.quality.value,
+            paper=body.paper.value,
+            crop=body.crop,
+            reuse_ingest=False,
+            ingest_id=None,
+            force_reingest=body.force_reingest,
+            auto_frame=body.auto_frame if body.crop is None else False,
+        )
+    data = _portrait_ingest_response(pv, include_preview_png=body.include_preview_png)
+    data["cache_hit"] = hit
+    return data
+
+
+@app.post("/api/portrait/ingest/upload")
+async def api_portrait_ingest_upload(
+    image_mode: str = Form("photo"),
+    quality: str = Form("booth-balanced"),
+    paper: str = Form("A4"),
+    crop: Optional[str] = Form(None),
+    auto_frame: bool = Form(True),
+    force_reingest: bool = Form(False),
+    ingest_id: Optional[str] = Form(None),
+    reuse_ingest: bool = Form(False),
+    include_preview_png: bool = Form(True),
+    file: UploadFile = File(...),
+):
+    from uuid import uuid4
+
+    from botdraw.core.jobs import artifact_dir
+    from botdraw.portrait import resolve_portrait_vector
+
+    crop_obj = None
+    if crop:
+        try:
+            crop_obj = json.loads(crop)
+        except json.JSONDecodeError:
+            crop_obj = None
+    tmp = artifact_dir(uuid4().hex[:8]) / (file.filename or "upload.png")
+    raw = await file.read()
+    tmp.write_bytes(raw)
+    pv, hit = resolve_portrait_vector(
+        image_path=str(tmp),
+        mode=image_mode or "photo",
+        quality=quality,
+        paper=paper,
+        crop=crop_obj,
+        reuse_ingest=reuse_ingest and not force_reingest,
+        ingest_id=ingest_id,
+        force_reingest=force_reingest,
+        auto_frame=auto_frame if crop_obj is None else False,
+        image_bytes=raw,
+    )
+    data = _portrait_ingest_response(pv, include_preview_png=include_preview_png)
+    data["cache_hit"] = hit
+    return data
+
+
+@app.get("/api/portrait/ingest/{ingest_id}")
+def api_portrait_ingest_get(ingest_id: str, include_preview_png: bool = True):
+    from botdraw.portrait import load_portrait_vector
+
+    pv = load_portrait_vector(ingest_id)
+    if pv is None:
+        raise HTTPException(status_code=404, detail="Ingest not found")
+    data = _portrait_ingest_response(pv, include_preview_png=include_preview_png)
+    data["cache_hit"] = True
+    return data
+
+
+@app.get("/api/portrait/ingest/{ingest_id}/svg")
+def api_portrait_ingest_svg(ingest_id: str, paper_color_hex: str = "#f7f1e8"):
+    from botdraw.portrait import load_portrait_vector
+    from botdraw.portrait.preview import portrait_vector_raw_svg
+
+    pv = load_portrait_vector(ingest_id)
+    if pv is None:
+        raise HTTPException(status_code=404, detail="Ingest not found")
+    svg = portrait_vector_raw_svg(pv, paper_color_hex=paper_color_hex or "#f7f1e8")
+    return Response(content=svg, media_type="image/svg+xml")
 
 
 @app.post("/api/palettes/save")

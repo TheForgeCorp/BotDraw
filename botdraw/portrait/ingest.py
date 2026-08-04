@@ -109,37 +109,118 @@ def _mean_rgb_in_poly(rgb: np.ndarray, pts_px: list[tuple[float, float]]) -> tup
     )
 
 
-def _edge_polylines(edge_map: np.ndarray, *, step: int, max_paths: int, page_w: float, page_h: float) -> list[list[tuple[float, float]]]:
-    """Horizontal run extraction on edge map → simplified mm polylines."""
+def _polyline_length(pts: list[tuple[float, float]]) -> float:
+    if len(pts) < 2:
+        return 0.0
+    total = 0.0
+    for i in range(1, len(pts)):
+        total += float(np.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]))
+    return total
+
+
+def _trace_contour_from(
+    mask: np.ndarray,
+    visited: np.ndarray,
+    start: tuple[int, int],
+) -> list[tuple[float, float]]:
+    """Moore-neighborhood boundary walk starting at an on-pixel."""
+    h, w = mask.shape
+    # Clockwise neighbors relative to incoming direction index
+    # N, NE, E, SE, S, SW, W, NW
+    deltas = [(-1, 0), (-1, 1), (0, 1), (1, 1), (1, 0), (1, -1), (0, -1), (-1, -1)]
+    y, x = start
+    pts: list[tuple[float, float]] = [(float(x), float(y))]
+    visited[y, x] = True
+    # Start looking from West so first step prefers Eastward along edge
+    back_dir = 6
+    for _ in range(h * w * 2):
+        found = None
+        # Start search from back_dir + 6 (one past left of incoming) per Moore
+        for k in range(8):
+            d = (back_dir + 6 + k) % 8
+            ny, nx = y + deltas[d][0], x + deltas[d][1]
+            if 0 <= ny < h and 0 <= nx < w and mask[ny, nx]:
+                found = (ny, nx, d)
+                break
+        if found is None:
+            break
+        y, x, d = found
+        pts.append((float(x), float(y)))
+        visited[y, x] = True
+        back_dir = d
+        if (y, x) == start and len(pts) > 3:
+            break
+        if len(pts) > max(h, w) * 8:
+            break
+    return pts
+
+
+def _edge_polylines(
+    edge_map: np.ndarray,
+    *,
+    step: int,
+    max_paths: int,
+    page_w: float,
+    page_h: float,
+) -> list[list[tuple[float, float]]]:
+    """
+    Connected edge contours from edge_map (not horizontal-only runs).
+
+    Threshold → binary → Moore boundary traces → simplify → budget by length×ink.
+    """
     h, w = edge_map.shape
-    thr = max(20.0, float(np.percentile(edge_map, 85)))
-    runs: list[tuple[float, list[tuple[float, float]]]] = []
+    thr = max(18.0, float(np.percentile(edge_map, 82)))
+    mask = edge_map >= thr
+    # Thin-ish: keep boundary-ish pixels (on and has off neighbor) to reduce fill blobs
+    padded = np.pad(mask.astype(np.uint8), 1, mode="constant")
+    boundary = np.zeros_like(mask, dtype=bool)
+    for dy in (-1, 0, 1):
+        for dx in (-1, 0, 1):
+            if dy == 0 and dx == 0:
+                continue
+            neighbor = padded[1 + dy : 1 + dy + h, 1 + dx : 1 + dx + w].astype(bool)
+            boundary |= mask & (~neighbor)
+    if not np.any(boundary):
+        boundary = mask
+
+    visited = np.zeros_like(boundary, dtype=bool)
+    # Subsample seed scan by step for booth speed
+    seeds: list[tuple[int, int]] = []
     for y in range(0, h, max(1, step)):
-        row = edge_map[y]
-        run = None
-        for x in range(w):
-            on = row[x] >= thr
-            if on and run is None:
-                run = x
-            elif not on and run is not None:
-                if x - run >= 2:
-                    ink = float(row[run:x].mean())
-                    pts = [(float(run), float(y)), (float(x), float(y))]
-                    runs.append((ink * (x - run), pts))
-                run = None
-        if run is not None and w - run >= 2:
-            ink = float(row[run:].mean())
-            runs.append((ink * (w - run), [(float(run), float(y)), (float(w - 1), float(y))]))
-    runs.sort(key=lambda t: -t[0])
+        row = boundary[y]
+        for x in range(0, w, max(1, step)):
+            if row[x] and not visited[y, x]:
+                seeds.append((y, x))
+
+    scored: list[tuple[float, list[tuple[float, float]]]] = []
+    for sy, sx in seeds:
+        if visited[sy, sx] or not boundary[sy, sx]:
+            continue
+        pts_px = _trace_contour_from(boundary, visited, (sy, sx))
+        if len(pts_px) < 4:
+            continue
+        # Score: geometric length × mean edge strength along path
+        ink_vals = []
+        for x, y in pts_px:
+            ix, iy = int(np.clip(x, 0, w - 1)), int(np.clip(y, 0, h - 1))
+            ink_vals.append(float(edge_map[iy, ix]))
+        mean_ink = float(np.mean(ink_vals)) if ink_vals else 0.0
+        length = _polyline_length(pts_px)
+        if length < 3.0:
+            continue
+        scored.append((length * (0.25 + mean_ink / 255.0), pts_px))
+
+    scored.sort(key=lambda t: -t[0])
     out: list[list[tuple[float, float]]] = []
-    for _, pts in runs[:max_paths]:
-        mm = [map_to_page(x, y, img_w=w, img_h=h, page_w=page_w, page_h=page_h) for x, y in pts]
+    for _, pts_px in scored[:max_paths]:
+        mm = [map_to_page(x, y, img_w=w, img_h=h, page_w=page_w, page_h=page_h) for x, y in pts_px]
         try:
-            simple = list(LineString(mm).simplify(0.15, preserve_topology=False).coords)
+            simple = list(LineString(mm).simplify(0.2, preserve_topology=False).coords)
             if len(simple) >= 2:
                 out.append([(float(a), float(b)) for a, b in simple])
         except Exception:
-            out.append(mm)
+            if len(mm) >= 2:
+                out.append(mm)
     return out
 
 

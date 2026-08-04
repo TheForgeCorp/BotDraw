@@ -22,7 +22,10 @@ let portraitLineType = "solid";
 let portraitForceReingest = false;
 let portraitAutoFrame = true;
 let portraitCrop = null; // {x,y,w,h,source} normalized or null
-let portraitPenMap = null;
+let portraitIngestPreview = null; // last ingest API payload
+let portraitShowEdges = true;
+let portraitShowRegions = true;
+let portraitShowCrop = true;
 const PORTRAIT_LINE_TYPES = [
   "solid", "dashed", "dotted", "dash_dot", "zigzag", "triangle", "wave", "square_wave",
   "half_circle", "scallop_alt", "beads", "double", "railroad", "stitch", "hatch_tick",
@@ -367,16 +370,32 @@ function setPortraitDownloads(enabled, jobId) {
   };
 }
 
-function drawPortraitSourcePreview(file) {
+function drawPortraitSourcePreview(file, crop) {
   const canvas = document.getElementById("portrait-src");
   if (!canvas) return;
   const ctx = canvas.getContext("2d", { willReadFrequently: true, alpha: true });
   ctx.fillStyle = "#f4f4f5";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  const drawCrop = (ox, oy, dw, dh) => {
+    const c = crop || portraitCrop || portraitIngestPreview?.crop;
+    if (!portraitShowCrop || !c || c.w == null) return;
+    ctx.save();
+    ctx.strokeStyle = "rgba(234, 88, 12, 0.95)";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 4]);
+    ctx.strokeRect(ox + c.x * dw, oy + c.y * dh, c.w * dw, c.h * dh);
+    ctx.fillStyle = "rgba(234, 88, 12, 0.08)";
+    ctx.fillRect(ox + c.x * dw, oy + c.y * dh, c.w * dw, c.h * dh);
+    ctx.restore();
+  };
+
   if (!file) {
     ctx.fillStyle = "#a3a3a3";
     ctx.font = "12px sans-serif";
     ctx.fillText("Synthetic / upload a photo", 16, 28);
+    // Still show crop relative to full canvas if present
+    drawCrop(0, 0, canvas.width, canvas.height);
     return;
   }
   const url = URL.createObjectURL(file);
@@ -385,9 +404,12 @@ function drawPortraitSourcePreview(file) {
     const scale = Math.min(canvas.width / img.width, canvas.height / img.height);
     const w = img.width * scale;
     const h = img.height * scale;
+    const ox = (canvas.width - w) / 2;
+    const oy = (canvas.height - h) / 2;
     ctx.fillStyle = "#fff";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(img, (canvas.width - w) / 2, (canvas.height - h) / 2, w, h);
+    ctx.drawImage(img, ox, oy, w, h);
+    drawCrop(ox, oy, w, h);
     URL.revokeObjectURL(url);
   };
   img.onerror = () => {
@@ -397,6 +419,113 @@ function drawPortraitSourcePreview(file) {
     ctx.fillText("Could not preview image", 16, 28);
   };
   img.src = url;
+}
+
+function clearPortraitIngestCanvas(msg) {
+  const canvas = document.getElementById("portrait-ingest");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d", { willReadFrequently: false, alpha: true });
+  ctx.fillStyle = "#f7f1e8";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  if (msg) {
+    ctx.fillStyle = "#737373";
+    ctx.font = "12px sans-serif";
+    ctx.fillText(msg, 16, 28);
+  }
+}
+
+function drawPortraitIngestPreview(preview) {
+  const canvas = document.getElementById("portrait-ingest");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d", { willReadFrequently: false, alpha: true });
+  const paperHex = papers.find((p) => p.id === portraitPaperId)?.color_hex || "#f7f1e8";
+  ctx.fillStyle = paperHex;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  if (!preview) {
+    ctx.fillStyle = "#737373";
+    ctx.font = "12px sans-serif";
+    ctx.fillText("Run Ingest to see raw vectorization", 16, 28);
+    return;
+  }
+
+  const [pw, ph] = preview.page_mm || [210, 297];
+  const sx = canvas.width / pw;
+  const sy = canvas.height / ph;
+  const s = Math.min(sx, sy);
+  const ox = (canvas.width - pw * s) / 2;
+  const oy = (canvas.height - ph * s) / 2;
+
+  // Optional preprocessed bitmap underlay
+  if (preview.preview_png_b64) {
+    const img = new Image();
+    img.onload = () => {
+      ctx.globalAlpha = 0.22;
+      ctx.drawImage(img, ox, oy, pw * s, ph * s);
+      ctx.globalAlpha = 1;
+      _strokeIngestGeometry(ctx, preview, ox, oy, s);
+    };
+    img.src = `data:image/png;base64,${preview.preview_png_b64}`;
+  } else {
+    _strokeIngestGeometry(ctx, preview, ox, oy, s);
+  }
+
+  const dl = document.getElementById("portrait-dl-ingest-svg");
+  if (dl && preview.ingest_id) {
+    dl.hidden = false;
+    dl.href = `/api/portrait/ingest/${preview.ingest_id}/svg`;
+    dl.download = `botdraw-ingest-${preview.ingest_id}.svg`;
+  }
+}
+
+function _strokeIngestGeometry(ctx, preview, ox, oy, s) {
+  const map = (pt) => [ox + pt[0] * s, oy + pt[1] * s];
+
+  if (portraitShowRegions && preview.regions?.length) {
+    ctx.strokeStyle = "rgba(162, 28, 175, 0.85)";
+    ctx.lineWidth = 1.25;
+    for (const r of preview.regions) {
+      const pts = r.points_mm || [];
+      if (pts.length < 2) continue;
+      ctx.beginPath();
+      const p0 = map(pts[0]);
+      ctx.moveTo(p0[0], p0[1]);
+      for (let i = 1; i < pts.length; i++) {
+        const p = map(pts[i]);
+        ctx.lineTo(p[0], p[1]);
+      }
+      ctx.closePath();
+      ctx.stroke();
+    }
+  }
+
+  if (portraitShowEdges && preview.edge_polylines_mm?.length) {
+    ctx.strokeStyle = "rgba(14, 116, 144, 0.95)";
+    ctx.lineWidth = 1.1;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    for (const pts of preview.edge_polylines_mm) {
+      if (!pts || pts.length < 2) continue;
+      ctx.beginPath();
+      const p0 = map(pts[0]);
+      ctx.moveTo(p0[0], p0[1]);
+      for (let i = 1; i < pts.length; i++) {
+        const p = map(pts[i]);
+        ctx.lineTo(p[0], p[1]);
+      }
+      ctx.stroke();
+    }
+  }
+
+  // Legend
+  ctx.fillStyle = "rgba(0,0,0,0.55)";
+  ctx.font = "11px sans-serif";
+  const legendY = (ctx.canvas?.height || 640) - 12;
+  ctx.fillText(
+    `edges ${preview.edge_count ?? 0} · regions ${preview.region_count ?? 0}`,
+    10,
+    legendY
+  );
 }
 
 /** Copy File bytes so DOM rebuilds cannot invalidate the handle. */
@@ -510,7 +639,7 @@ function renderPortrait() {
     .join("");
   root.innerHTML = `
     <h3>Portrait</h3>
-    <p class="muted">Ingest → pens → style → ornament. Restyle reuses ingest when possible.</p>
+    <p class="muted">Step 1: Ingest (see raw edges/regions). Step 2: Vectorize styles. Prefer line type <code>solid</code> while reviewing ingest.</p>
     <h4>Image</h4>
     <div class="portrait-drop ${portraitFile ? "has-file" : ""}" id="portrait-drop">
       ${portraitFile ? portraitFile.name : "Drop a photo or choose a file"}
@@ -558,7 +687,8 @@ function renderPortrait() {
     ${field("Palette", paletteSelectHtml())}
     <div class="pen-chips">${penList}</div>
     <div class="row" style="margin-top:0.55rem; gap:0.35rem; flex-wrap:wrap">
-      <button class="primary" id="portrait-go">Vectorize</button>
+      <button class="primary" id="portrait-ingest-btn">Ingest</button>
+      <button type="button" id="portrait-go">Vectorize</button>
       <button type="button" id="portrait-apply" ${portraitIngestId ? "" : "disabled"}>Apply (restyle)</button>
       <button type="button" id="portrait-reingest">Re-ingest</button>
       <button type="button" id="reset-pen-map">Reset pen map</button>
@@ -643,15 +773,109 @@ function renderPortrait() {
     }
   };
   drawPortraitSourcePreview(portraitFile);
+  drawPortraitIngestPreview(portraitIngestPreview);
   setPortraitDownloads(!!lastJob?.id && lastJob?.app === "portraitbot", lastJob?.id);
+
+  const te = document.getElementById("toggle-edges");
+  const tr = document.getElementById("toggle-regions");
+  const tc = document.getElementById("toggle-crop");
+  if (te) {
+    te.checked = portraitShowEdges;
+    te.onchange = () => {
+      portraitShowEdges = te.checked;
+      drawPortraitIngestPreview(portraitIngestPreview);
+    };
+  }
+  if (tr) {
+    tr.checked = portraitShowRegions;
+    tr.onchange = () => {
+      portraitShowRegions = tr.checked;
+      drawPortraitIngestPreview(portraitIngestPreview);
+    };
+  }
+  if (tc) {
+    tc.checked = portraitShowCrop;
+    tc.onchange = () => {
+      portraitShowCrop = tc.checked;
+      drawPortraitSourcePreview(portraitFile);
+    };
+  }
+
   const run = (opts) =>
     renderPortraitJob(opts).catch((e) => {
       if (portraitStatsEl) portraitStatsEl.textContent = portraitNetworkErrorMessage(e);
       console.error(e);
     });
-  root.querySelector("#portrait-go").onclick = () => run({});
+  root.querySelector("#portrait-ingest-btn").onclick = () =>
+    runPortraitIngest({ forceReingest: true }).catch((e) => {
+      if (portraitStatsEl) portraitStatsEl.textContent = portraitNetworkErrorMessage(e);
+      console.error(e);
+    });
+  root.querySelector("#portrait-go").onclick = () => run({ reuse: !!portraitIngestId });
   root.querySelector("#portrait-apply").onclick = () => run({ reuse: true });
-  root.querySelector("#portrait-reingest").onclick = () => run({ forceReingest: true });
+  root.querySelector("#portrait-reingest").onclick = () =>
+    runPortraitIngest({ forceReingest: true }).then(() => run({ forceReingest: false, reuse: true })).catch((e) => {
+      if (portraitStatsEl) portraitStatsEl.textContent = portraitNetworkErrorMessage(e);
+      console.error(e);
+    });
+}
+
+async function runPortraitIngest(opts = {}) {
+  const root = portraitContentRoot();
+  state.paper = root.querySelector("#paper")?.value || state.paper;
+  state.quality = root.querySelector("#quality")?.value || state.quality;
+  portraitPaperId = root.querySelector("#paper-color")?.value || portraitPaperId;
+  portraitAutoFrame = !!root.querySelector("#auto-frame")?.checked;
+  if (portraitStatsEl) portraitStatsEl.textContent = "Ingesting (no style)…";
+  const t0 = performance.now();
+  let data;
+  const cropJson = portraitCrop ? JSON.stringify(portraitCrop) : null;
+  if (portraitFile) {
+    const uploadFile = await downscalePortraitForUpload(portraitFile, 1280);
+    const fd = new FormData();
+    fd.append("image_mode", portraitImageMode);
+    fd.append("quality", state.quality);
+    fd.append("paper", state.paper);
+    fd.append("auto_frame", portraitAutoFrame ? "true" : "false");
+    if (opts.forceReingest || portraitForceReingest) fd.append("force_reingest", "true");
+    if (cropJson) fd.append("crop", cropJson);
+    fd.append("include_preview_png", "true");
+    fd.append("file", uploadFile, uploadFile.name || "portrait.jpg");
+    data = await api("/api/portrait/ingest/upload", { method: "POST", body: fd });
+  } else {
+    data = await api("/api/portrait/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        image_mode: portraitImageMode,
+        quality: state.quality,
+        paper: state.paper,
+        auto_frame: portraitAutoFrame,
+        force_reingest: !!(opts.forceReingest || portraitForceReingest),
+        crop: portraitCrop || undefined,
+        include_preview_png: true,
+      }),
+    });
+  }
+  portraitForceReingest = false;
+  portraitIngestPreview = data;
+  portraitIngestId = data.ingest_id || null;
+  if (data.crop) portraitCrop = data.crop;
+  drawPortraitSourcePreview(portraitFile, data.crop);
+  drawPortraitIngestPreview(data);
+  const wall = ((performance.now() - t0) / 1000).toFixed(2);
+  const timing = data.timing_s || {};
+  if (portraitStatsEl) {
+    portraitStatsEl.textContent =
+      `Ingest ready · edges ${data.edge_count} · regions ${data.region_count} · wall ${wall}s` +
+      (timing.total != null ? ` · trace ${timing.total}s` : "") +
+      (data.cache_hit ? " · cache" : "") +
+      ` · id ${portraitIngestId || "?"}`;
+  }
+  // Enable Apply after ingest
+  const applyBtn = root.querySelector("#portrait-apply");
+  if (applyBtn) applyBtn.disabled = !portraitIngestId;
+  return data;
 }
 
 function collectPortraitExtra(root, { reuse = false, forceReingest = false } = {}) {
@@ -756,6 +980,18 @@ async function renderPortraitJob(opts = {}) {
   if (ingestId) portraitIngestId = ingestId;
   currentApp = "portraitbot";
   loadResult(data, { autoplay: false });
+  // Refresh ingest pane from cache so Source|Ingest|Vector stay aligned
+  if (portraitIngestId && (!portraitIngestPreview || portraitIngestPreview.ingest_id !== portraitIngestId)) {
+    try {
+      const prev = await api(`/api/portrait/ingest/${portraitIngestId}`);
+      portraitIngestPreview = prev;
+      if (prev.crop) portraitCrop = prev.crop;
+      drawPortraitSourcePreview(portraitFile, prev.crop);
+      drawPortraitIngestPreview(prev);
+    } catch (_) {
+      /* preview optional after vectorize */
+    }
+  }
   const wall = ((performance.now() - t0) / 1000).toFixed(2);
   const budget = data.layers?.budget || data.emulator?.budget;
   const cacheHit = data.emulator?.settings?.ingest_cache_hit;

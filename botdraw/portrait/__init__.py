@@ -13,6 +13,7 @@ from botdraw.portrait.ingest import ingest_portrait
 from botdraw.portrait.models import CropRect, PortraitVector
 from botdraw.portrait.ornament import LINE_TYPES, StrokeOrnamentParams, decorate_layered
 from botdraw.portrait.pens import apply_pen_overrides, assign_pens
+from botdraw.portrait.preview import portrait_vector_preview_dict, portrait_vector_raw_svg
 from botdraw.portrait.restyle import render_from_vector
 
 
@@ -66,6 +67,8 @@ __all__ = [
     "ingest_portrait",
     "load_portrait_vector",
     "normalize_crop",
+    "portrait_vector_preview_dict",
+    "portrait_vector_raw_svg",
     "preprocess_portrait_image",
     "render_from_vector",
     "resolve_portrait_vector",
