@@ -370,17 +370,86 @@ function drawPortraitSourcePreview(file) {
     ctx.drawImage(img, (canvas.width - w) / 2, (canvas.height - h) / 2, w, h);
     URL.revokeObjectURL(url);
   };
+  img.onerror = () => {
+    URL.revokeObjectURL(url);
+    ctx.fillStyle = "#92400e";
+    ctx.font = "12px sans-serif";
+    ctx.fillText("Could not preview image", 16, 28);
+  };
   img.src = url;
+}
+
+/** Copy File bytes so DOM rebuilds cannot invalidate the handle. */
+async function snapshotPortraitFile(file) {
+  if (!file) return null;
+  const buf = await file.arrayBuffer();
+  return new File([buf], file.name || "portrait.png", {
+    type: file.type || "image/png",
+    lastModified: file.lastModified || Date.now(),
+  });
+}
+
+/** Downscale for upload: max side ≤ 1280 to avoid proxy timeouts / huge multipart. */
+async function downscalePortraitForUpload(file, maxSide = 1280) {
+  if (!file) return null;
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((resolve, reject) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = () => reject(new Error("Could not decode image for upload"));
+      i.src = url;
+    });
+    const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+    const w = Math.max(1, Math.round(img.width * scale));
+    const h = Math.max(1, Math.round(img.height * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    // Readback-friendly: we call toBlob after draw (DESIGN.md analysis canvas).
+    const ctx = canvas.getContext("2d", { willReadFrequently: true, alpha: true });
+    ctx.drawImage(img, 0, 0, w, h);
+    const preferJpeg = !/^image\/png$/i.test(file.type || "");
+    const blob = await new Promise((resolve) => {
+      canvas.toBlob(
+        (b) => resolve(b),
+        preferJpeg ? "image/jpeg" : "image/png",
+        preferJpeg ? 0.88 : undefined
+      );
+    });
+    if (!blob) return file;
+    const base = (file.name || "portrait").replace(/\.[^.]+$/, "");
+    const name = preferJpeg ? `${base}.jpg` : `${base}.png`;
+    return new File([blob], name, { type: blob.type, lastModified: Date.now() });
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+function portraitNetworkErrorMessage(err) {
+  const msg = String(err?.message || err || "");
+  if (/failed to fetch|networkerror|load failed|network request failed/i.test(msg)) {
+    return "Network error — is botdraw serve reachable? Try a smaller image or booth-fast.";
+  }
+  return msg || "Vectorize failed";
 }
 
 function portraitContentRoot() {
   return document.getElementById("portrait-content");
 }
 
+function ensurePortraitStyleSelected(list) {
+  const ids = list.map((s) => s.id);
+  if (!ids.includes(selectedStyle)) {
+    selectedStyle = ids[0] || "portrait_linework";
+  }
+  return selectedStyle;
+}
+
 function renderPortrait() {
   setShellForApp("portraitbot");
   const list = styles.filter((s) => s.category === "portrait");
-  if (!list.find((s) => s.id === selectedStyle)) selectedStyle = list[0]?.id || "portrait_linework";
+  ensurePortraitStyleSelected(list);
   if (!selectedPaletteId) selectedPaletteId = "default-6";
   const root = portraitContentRoot();
   if (!root) return;
@@ -423,7 +492,6 @@ function renderPortrait() {
     <div class="row"><button class="primary" id="portrait-go">Vectorize</button></div>
   `;
 
-  // Rebind style grid against portrait content root
   root.querySelectorAll("[data-style]").forEach((btn) => {
     btn.onclick = () => {
       selectedStyle = btn.dataset.style;
@@ -444,8 +512,16 @@ function renderPortrait() {
     };
   });
   const fileInput = root.querySelector("#portrait-photo");
-  fileInput.onchange = () => {
-    portraitFile = fileInput.files?.[0] || null;
+  fileInput.onchange = async () => {
+    const raw = fileInput.files?.[0] || null;
+    try {
+      portraitFile = raw ? await snapshotPortraitFile(raw) : null;
+    } catch (e) {
+      portraitFile = null;
+      if (portraitStatsEl) portraitStatsEl.textContent = portraitNetworkErrorMessage(e);
+      console.error(e);
+      return;
+    }
     drawPortraitSourcePreview(portraitFile);
     const drop = root.querySelector("#portrait-drop");
     if (drop) {
@@ -457,13 +533,15 @@ function renderPortrait() {
   setPortraitDownloads(!!lastJob?.id && lastJob?.app === "portraitbot", lastJob?.id);
   root.querySelector("#portrait-go").onclick = () =>
     renderPortraitJob().catch((e) => {
-      if (portraitStatsEl) portraitStatsEl.textContent = String(e);
+      if (portraitStatsEl) portraitStatsEl.textContent = portraitNetworkErrorMessage(e);
       console.error(e);
     });
 }
 
 async function renderPortraitJob() {
   const root = portraitContentRoot();
+  const list = styles.filter((s) => s.category === "portrait");
+  ensurePortraitStyleSelected(list);
   state.paper = root.querySelector("#paper")?.value || state.paper;
   state.quality = root.querySelector("#quality")?.value || state.quality;
   state.seed = Number(root.querySelector("#seed")?.value || state.seed);
@@ -473,41 +551,45 @@ async function renderPortraitJob() {
   const t0 = performance.now();
   const extra = { image_mode: portraitImageMode };
   let data;
-  if (portraitFile) {
-    const fd = new FormData();
-    fd.append("style_id", selectedStyle);
-    fd.append("app_name", "portraitbot");
-    fd.append("palette_id", selectedPaletteId);
-    fd.append("quality", state.quality);
-    fd.append("paper", state.paper);
-    fd.append("seed", String(state.seed));
-    fd.append("density", String(state.density));
-    fd.append("pen_up_speed_mm_s", String(state.pen_up_speed_mm_s));
-    fd.append("pen_down_speed_mm_s", String(state.pen_down_speed_mm_s));
-    fd.append("params_extra", JSON.stringify(extra));
-    fd.append("file", portraitFile);
-    // params_extra may not be on Form API — also append flat field
-    fd.append("image_mode", portraitImageMode);
-    const res = await fetch("/api/render/upload", { method: "POST", body: fd });
-    if (!res.ok) throw new Error(await res.text());
-    data = await res.json();
-  } else {
-    data = await api("/api/render", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        app: "portraitbot",
-        style_id: selectedStyle,
-        palette_id: selectedPaletteId,
-        paper: state.paper,
-        quality: state.quality,
-        seed: state.seed,
-        density: state.density,
-        pen_up_speed_mm_s: state.pen_up_speed_mm_s,
-        pen_down_speed_mm_s: state.pen_down_speed_mm_s,
-        params_extra: extra,
-      }),
-    });
+  try {
+    if (portraitFile) {
+      if (portraitStatsEl) portraitStatsEl.textContent = "Preparing image…";
+      const uploadFile = await downscalePortraitForUpload(portraitFile, 1280);
+      if (portraitStatsEl) portraitStatsEl.textContent = "Vectorizing portrait…";
+      const fd = new FormData();
+      fd.append("style_id", selectedStyle);
+      fd.append("app_name", "portraitbot");
+      fd.append("palette_id", selectedPaletteId);
+      fd.append("quality", state.quality);
+      fd.append("paper", state.paper);
+      fd.append("seed", String(state.seed));
+      fd.append("density", String(state.density));
+      fd.append("pen_up_speed_mm_s", String(state.pen_up_speed_mm_s));
+      fd.append("pen_down_speed_mm_s", String(state.pen_down_speed_mm_s));
+      fd.append("params_extra", JSON.stringify(extra));
+      fd.append("image_mode", portraitImageMode);
+      fd.append("file", uploadFile, uploadFile.name || "portrait.jpg");
+      data = await api("/api/render/upload", { method: "POST", body: fd });
+    } else {
+      data = await api("/api/render", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          app: "portraitbot",
+          style_id: selectedStyle,
+          palette_id: selectedPaletteId,
+          paper: state.paper,
+          quality: state.quality,
+          seed: state.seed,
+          density: state.density,
+          pen_up_speed_mm_s: state.pen_up_speed_mm_s,
+          pen_down_speed_mm_s: state.pen_down_speed_mm_s,
+          params_extra: extra,
+        }),
+      });
+    }
+  } catch (e) {
+    throw new Error(portraitNetworkErrorMessage(e));
   }
   currentApp = "portraitbot";
   loadResult(data, { autoplay: false });
