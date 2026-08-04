@@ -76,6 +76,30 @@ def test_mesh_prune_drops_weak_outside_islands():
     assert not any(abs(c[0][0] - 2.0) < 1 for c in kept)
 
 
+def test_directional_strokes_follow_structure():
+    from botdraw.portrait.portrait_mesh import _directional_component_strokes
+    from botdraw.portrait.linedraw_edges import _make_perlin_table
+
+    # Vertical band component with horizontal gradient → strokes run vertically
+    mask = np.zeros((20, 20), dtype=bool)
+    mask[2:18, 8:12] = True
+    gx = np.ones((20, 20), dtype=np.float32)
+    gy = np.zeros((20, 20), dtype=np.float32)
+    strokes = _directional_component_strokes(
+        mask, gx, gy, cell_px=5.0, pitch_px=3.0, jitter=0.0,
+        table=_make_perlin_table(1), seed_off=0.0,
+    )
+    assert strokes
+    # Dominant extent should be vertical (along structure, perp. to gradient)
+    v_dominant = 0
+    for pts in strokes:
+        dx = abs(pts[-1][0] - pts[0][0])
+        dy = abs(pts[-1][1] - pts[0][1])
+        if dy > dx:
+            v_dominant += 1
+    assert v_dominant >= len(strokes) * 0.6
+
+
 def test_ingest_uses_mesh_walks_and_finer_default():
     rgb = _dark_bg_bright_face(160)
     rgb[40:46, 55:105] = 20

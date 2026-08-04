@@ -236,6 +236,83 @@ def _walk_horizontal_runs(
 _PITCH_MM = {1: 1.7, 2: 1.15, 3: 0.8, 4: 0.55}
 
 
+def _directional_component_strokes(
+    mask: np.ndarray,
+    grad_x: np.ndarray,
+    grad_y: np.ndarray,
+    *,
+    cell_px: float,
+    pitch_px: float,
+    jitter: float,
+    table: list[float],
+    seed_off: float,
+) -> list[list[tuple[float, float]]]:
+    """
+    Parallel strokes across one shade component, oriented along structure
+    (perpendicular to mean gradient) so hair/shirt read as flow, not blocks.
+    """
+    ys, xs = np.nonzero(mask)
+    if ys.size == 0:
+        return []
+    # Mean gradient over component → stroke direction is its perpendicular
+    gx = float(np.mean(grad_x[ys, xs]))
+    gy = float(np.mean(grad_y[ys, xs]))
+    gnorm = math.hypot(gx, gy)
+    if gnorm < 0.25:
+        # Incoherent gradient: fixed sketchy diagonal
+        dx, dy = math.cos(math.radians(-28.0)), math.sin(math.radians(-28.0))
+    else:
+        dx, dy = -gy / gnorm, gx / gnorm
+    nx, ny = -dy, dx  # normal (line spacing direction)
+
+    cx = (float(np.mean(xs)) + 0.5) * cell_px
+    cy = (float(np.mean(ys)) + 0.5) * cell_px
+    # Half-extent along direction / normal
+    span = max(
+        (xs.max() - xs.min() + 1) * cell_px,
+        (ys.max() - ys.min() + 1) * cell_px,
+    ) * 0.75
+    h_s, w_s = mask.shape
+
+    def in_mask(px: float, py: float) -> bool:
+        mxx = int(px / cell_px)
+        myy = int(py / cell_px)
+        if 0 <= myy < h_s and 0 <= mxx < w_s:
+            return bool(mask[myy, mxx])
+        return False
+
+    strokes: list[list[tuple[float, float]]] = []
+    n_lines = max(1, int(round((2.0 * span) / max(pitch_px, 1e-3))))
+    step = cell_px * 0.5
+    for li in range(n_lines + 1):
+        s = -span + li * (2.0 * span) / max(n_lines, 1)
+        ox = cx + nx * s
+        oy = cy + ny * s
+        run: list[tuple[float, float]] = []
+        t = -span
+        while t <= span:
+            px = ox + dx * t
+            py = oy + dy * t
+            if in_mask(px, py):
+                jx = cell_px * jitter * (_perlin_noise(table, seed_off + li * 0.3, t * 0.05, 1.0) - 0.5) * 2.0
+                jy = cell_px * jitter * (_perlin_noise(table, seed_off + li * 0.3, t * 0.05, 2.0) - 0.5) * 2.0
+                run.append((px + jx, py + jy))
+            else:
+                if len(run) >= 3:
+                    strokes.append(run)
+                run = []
+            t += step
+        if len(run) >= 3:
+            strokes.append(run)
+    # Drop stubs shorter than ~1.5 cells
+    min_len = cell_px * 1.5
+    out = []
+    for pts in strokes:
+        if math.hypot(pts[-1][0] - pts[0][0], pts[-1][1] - pts[0][1]) >= min_len:
+            out.append(pts)
+    return out
+
+
 def strokes_from_mesh_walks(
     mesh: dict[str, Any],
     *,
@@ -270,10 +347,44 @@ def strokes_from_mesh_walks(
     h_s, w_s = codes.shape
     table = _make_perlin_table(seed)
     out_px: list[list[tuple[float, float]]] = []
-
-    runs = _walk_horizontal_runs(codes, link_h, min_code=1, max_code=4)
-    # Prefer longer face runs first (path budget)
     face = np.asarray(mesh.get("mesh_face"), dtype=np.uint8) > 0 if mesh.get("mesh_face") is not None else None
+
+    # Deep shade (code 4) components → direction-following strokes (hair/shirt
+    # flow). Consumed cells are removed from the horizontal walk below.
+    walk_codes = codes.copy()
+    grad_x = mesh.get("mesh_grad_x")
+    grad_y = mesh.get("mesh_grad_y")
+    if grad_x is not None and grad_y is not None and style == "hatch":
+        gx = np.asarray(grad_x, dtype=np.float32)
+        gy = np.asarray(grad_y, dtype=np.float32)
+        deep = codes == 4
+        if np.any(deep):
+            labeled, nlab = ndimage.label(deep)
+            pitch4 = float(pitches.get(4, 0.55))
+            pitch_px4 = pitch4 / max(cell_mm, 1e-3) * hs
+            comps = []
+            if nlab:
+                sizes = ndimage.sum(deep, labeled, index=np.arange(1, nlab + 1))
+                comps = [lab + 1 for lab in range(nlab) if sizes[lab] >= 6]
+            for lab in comps:
+                comp = labeled == lab
+                strokes = _directional_component_strokes(
+                    comp,
+                    gx,
+                    gy,
+                    cell_px=hs,
+                    pitch_px=pitch_px4,
+                    jitter=jitter,
+                    table=table,
+                    seed_off=float(lab) * 1.7,
+                )
+                budget_left = max_paths - len(out_px)
+                out_px.extend(strokes[: max(0, budget_left)])
+                walk_codes[comp] = 0
+                if len(out_px) >= max_paths:
+                    break
+
+    runs = _walk_horizontal_runs(walk_codes, link_h, min_code=1, max_code=4)
 
     def run_score(r: tuple[int, int, int, int]) -> float:
         y, x0, x1, cmax = r
@@ -378,7 +489,7 @@ def prune_edges_with_mesh(
     contours_px: list[list[tuple[float, float]]],
     mesh: dict[str, Any],
     *,
-    outside_min_len: float = 64.0,
+    outside_min_len: float = 88.0,
     inside_min_len: float = 12.0,
 ) -> list[list[tuple[float, float]]]:
     """
@@ -426,10 +537,15 @@ def prune_edges_with_mesh(
             if plen >= inside_min_len or mean_deg >= 1.0:
                 out.append(c)
         else:
-            # Outside: kill floaters with weak mesh support
-            if plen >= outside_min_len and mean_edge >= 0.12 and mean_deg >= 0.5:
+            # Outside: kill floaters with weak mesh support; tiny bbox = blob
+            xs_c = [p[0] for p in c]
+            ys_c = [p[1] for p in c]
+            bbox = max(max(xs_c) - min(xs_c), max(ys_c) - min(ys_c))
+            if bbox < hs * 2.2:
+                continue
+            if plen >= outside_min_len and mean_edge >= 0.15 and mean_deg >= 0.75:
                 out.append(c)
-            elif plen >= outside_min_len * 1.6 and mean_edge >= 0.22:
+            elif plen >= outside_min_len * 1.6 and mean_edge >= 0.24:
                 out.append(c)
     return out
 
