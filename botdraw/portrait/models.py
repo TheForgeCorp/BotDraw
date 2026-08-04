@@ -50,6 +50,11 @@ class PortraitVector(BaseModel):
     edge_map: Any  # np.ndarray float32 HxW
     edge_polylines_mm: list[list[tuple[float, float]]] = Field(default_factory=list)
     hatch_polylines_mm: list[list[tuple[float, float]]] = Field(default_factory=list)
+    # Intensity tone grid (coarse cells → pen recipe codes)
+    tone_grid: Any = None  # np.ndarray float32 Gh×Gw, 0..1 ink
+    tone_codes: Any = None  # np.ndarray uint8 Gh×Gw, 0..5
+    tone_cell_mm: float = 0.0
+    tone_origin_mm: tuple[float, float] = (0.0, 0.0)
     regions: list[RegionPoly] = Field(default_factory=list)
     clusters: list[ColorCluster] = Field(default_factory=list)
     pen_map: dict[str, str] = Field(default_factory=dict)
@@ -60,9 +65,14 @@ class PortraitVector(BaseModel):
     meta: dict[str, Any] = Field(default_factory=dict)
 
     def arrays(self) -> dict[str, np.ndarray]:
-        return {
+        out: dict[str, np.ndarray] = {
             "rgb": np.asarray(self.rgb, dtype=np.float32),
             "lum": np.asarray(self.lum, dtype=np.float32),
             "ink_target": np.asarray(self.ink_target, dtype=np.float32),
             "edge_map": np.asarray(self.edge_map, dtype=np.float32),
         }
+        if self.tone_grid is not None:
+            out["tone_grid"] = np.asarray(self.tone_grid, dtype=np.float32)
+        if self.tone_codes is not None:
+            out["tone_codes"] = np.asarray(self.tone_codes, dtype=np.uint8)
+        return out

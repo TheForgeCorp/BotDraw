@@ -139,6 +139,40 @@ def _local_contrast_boost(lum: np.ndarray, *, radius: int = 8, amount: float = 1
     return np.clip(out, 0, 255)
 
 
+def prepare_luma_for_edges(
+    lum: np.ndarray,
+    *,
+    denoise: bool = True,
+    shadow_lift: float = 0.12,
+    local_amount: float = 1.45,
+) -> np.ndarray:
+    """
+    Edge-oriented luma prep: denoise → shadow lift → local contrast → mild normalize.
+
+    Prefer local ops over global contrast so walls don't explode with noise.
+    """
+    arr = np.asarray(lum, dtype=np.float32)
+    u8 = np.clip(arr, 0, 255).astype(np.uint8)
+    img = Image.fromarray(u8, mode="L")
+    if denoise:
+        # Bilateral-ish: light median then tiny blur (JPEG island kill)
+        img = img.filter(ImageFilter.MedianFilter(size=3))
+        img = img.filter(ImageFilter.GaussianBlur(radius=0.6))
+    arr = np.asarray(img, dtype=np.float32)
+    # Shadow lift (power curve on darks)
+    a = float(np.clip(shadow_lift, 0.0, 1.0))
+    if a > 1e-4:
+        x = arr / 255.0
+        lift = 1.0 - (1.0 - x) ** (1.0 + 1.5 * a)
+        arr = np.clip((x * (1.0 - 0.75 * a) + lift * (0.75 * a)) * 255.0, 0, 255)
+    # Soft highlight knee — keep cheek gradients from clipping
+    x = arr / 255.0
+    arr = np.where(x > 0.78, (0.78 + (x - 0.78) * 0.55) * 255.0, arr).astype(np.float32)
+    arr = _local_contrast_boost(arr, radius=6, amount=float(local_amount))
+    # Gradient magnitude normalize hint: stretch local dynamic range lightly
+    return autocontrast_lum(arr, cutoff=4.0).astype(np.float32)
+
+
 def _trace_edge_chains(mask: np.ndarray, *, min_len: int = 6) -> list[list[tuple[float, float]]]:
     """
     Greedy 8-connected walks on a bool edge mask → polylines in pixel space.
@@ -505,6 +539,7 @@ def contours_from_lum(
     soft_face_edges: bool = True,
     edge_low: float | None = None,
     edge_high: float | None = None,
+    prepare: bool = True,
 ) -> tuple[list[list[tuple[float, float]]], np.ndarray]:
     """
     Portrait edge chains: silhouette structure + face-feature pass.
@@ -512,18 +547,21 @@ def contours_from_lum(
     `simplify` controls post-trace strength (1=finest).
     Scan-mode knobs (Inkscape Trace Bitmap analogues) tune which passes run.
     """
-    h0, w0 = lum.shape
+    work = prepare_luma_for_edges(lum) if prepare else np.asarray(lum, dtype=np.float32)
+    h0, w0 = work.shape
     strength = max(1, int(simplify))
     sc = 2 if strength >= 3 else 1
     w_s = max(8, w0 // sc)
     h_s = max(8, int(round(h0 * (w_s / w0))))
     small = np.asarray(
-        Image.fromarray(np.clip(lum, 0, 255).astype(np.uint8), mode="L").resize(
+        Image.fromarray(np.clip(work, 0, 255).astype(np.uint8), mode="L").resize(
             (w_s, h_s), Image.Resampling.LANCZOS
         ),
         dtype=np.float32,
     )
-    boosted = _local_contrast_boost(small, radius=max(3, 5 // sc), amount=1.55)
+    # Prep already did denoise/local contrast; keep a mild multi-scale boost
+    boost_amt = 1.15 if prepare else 1.55
+    boosted = _local_contrast_boost(small, radius=max(3, 5 // sc), amount=boost_amt)
     small_u8 = autocontrast_lum(boosted, cutoff=5.0)
 
     from numpy.lib.stride_tricks import sliding_window_view
@@ -1073,10 +1111,16 @@ def linedraw_edges_and_hatch(
     max_edge_paths: int = 2000,
     max_hatch_paths: int = 4000,
     scan_knobs: dict | None = None,
+    prepare: bool = True,
 ) -> tuple[list[list[tuple[float, float]]], list[list[tuple[float, float]]], np.ndarray]:
     """Full linedraw-style pass → (edge_mm, hatch_mm, edge_map)."""
     h, w = lum.shape
-    lum_u8 = autocontrast_lum(lum, cutoff=10.0).astype(np.float32)
+    # Edge prep (denoise / shadow lift / local contrast) before contour extract
+    lum_u8 = (
+        prepare_luma_for_edges(lum)
+        if prepare
+        else autocontrast_lum(np.asarray(lum, dtype=np.float32), cutoff=10.0).astype(np.float32)
+    )
     knobs = dict(scan_knobs or {})
     # Over-extract then refine so face budget can choose
     raw_budget = min(max_edge_paths * 2, max(max_edge_paths + 80, 400))
@@ -1091,6 +1135,7 @@ def linedraw_edges_and_hatch(
         soft_face_edges=bool(knobs.get("soft_face_edges", True)),
         edge_low=knobs.get("edge_low"),
         edge_high=knobs.get("edge_high"),
+        prepare=False,  # already prepared above
     )
     contours_px = refine_edge_polylines(contours_px, lum_u8, max_paths=max_edge_paths)
     hatch_px = hatch_from_lum(
@@ -1113,12 +1158,17 @@ def edge_polylines_from_lum(
     seed: int = 0,
     max_paths: int = 2000,
     scan_knobs: dict | None = None,
+    prepare: bool = True,
 ) -> tuple[list[list[tuple[float, float]]], np.ndarray]:
     """Edges only in pixel space (ensemble variant pass)."""
-    lum_u8 = autocontrast_lum(np.asarray(lum, dtype=np.float32), cutoff=10.0).astype(np.float32)
+    work = (
+        prepare_luma_for_edges(lum)
+        if prepare
+        else autocontrast_lum(np.asarray(lum, dtype=np.float32), cutoff=10.0).astype(np.float32)
+    )
     knobs = dict(scan_knobs or {})
     return contours_from_lum(
-        lum_u8,
+        work,
         simplify=contour_simplify,
         jitter=jitter,
         seed=seed,
@@ -1128,6 +1178,7 @@ def edge_polylines_from_lum(
         soft_face_edges=bool(knobs.get("soft_face_edges", True)),
         edge_low=knobs.get("edge_low"),
         edge_high=knobs.get("edge_high"),
+        prepare=False,
     )
 
 

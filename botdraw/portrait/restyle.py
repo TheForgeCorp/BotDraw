@@ -57,15 +57,70 @@ def _edge_polys(pv: PortraitVector, palette, *, limit: int) -> list[Polyline]:
     return out
 
 
+def _tone_grid_polys(
+    pv: PortraitVector,
+    palette,
+    *,
+    limit: int,
+    style: str = "hatch",
+    seed: int = 1,
+) -> list[Polyline]:
+    """Render midtone strokes from persisted tone_codes when available."""
+    if pv.tone_codes is None:
+        return []
+    from botdraw.portrait.tone_grid import strokes_from_tone_grid
+
+    codes = np.asarray(pv.tone_codes, dtype=np.uint8)
+    cell_px = float((pv.meta or {}).get("tone_grid", {}).get("cell_px") or 0.0)
+    if cell_px <= 0:
+        # Infer from grid vs image size
+        gh, gw = codes.shape
+        cell_px = max(4.0, float(pv.width_px) / max(gw, 1))
+    strokes = strokes_from_tone_grid(
+        codes,
+        cell_px=cell_px,
+        img_w=int(pv.width_px),
+        img_h=int(pv.height_px),
+        page_w=pv.page_w_mm,
+        page_h=pv.page_h_mm,
+        style=style,
+        jitter=float((pv.meta or {}).get("linedraw_jitter") or 0.03),
+        seed=seed,
+        max_paths=limit,
+    )
+    hatch_pen = _pen_for(pv, palette, "hatch") if "hatch" in pv.pen_map else _pen_for(pv, palette, "edge")
+    rgb = np.asarray(pv.rgb, dtype=np.float32)
+    h, w = rgb.shape[:2]
+    out: list[Polyline] = []
+    for pts in strokes:
+        if len(pts) < 2:
+            continue
+        mx = sum(p[0] for p in pts) / len(pts)
+        my = sum(p[1] for p in pts) / len(pts)
+        ix = int(np.clip(mx / max(pv.page_w_mm, 1e-3) * w, 0, w - 1))
+        iy = int(np.clip(my / max(pv.page_h_mm, 1e-3) * h, 0, h - 1))
+        if "hatch" in pv.pen_map:
+            pen = hatch_pen
+        else:
+            pen = _pen_for(pv, palette, rgb=rgb[iy, ix])
+        out.append(Polyline(points=pts, pen_id=pen.id))
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _ingest_hatch_polys(pv: PortraitVector, palette, *, limit: int) -> list[Polyline]:
-    """Use linedraw hatch from ingest when present (vectorized shading)."""
-    if not pv.hatch_polylines_mm:
+    """Prefer ingest hatch (tone-grid strokes); rebuild from tone_codes if needed."""
+    hatch_src = list(pv.hatch_polylines_mm) if pv.hatch_polylines_mm else []
+    if not hatch_src and pv.tone_codes is not None:
+        return _tone_grid_polys(pv, palette, limit=limit, style="hatch", seed=1)
+    if not hatch_src:
         return []
     hatch_pen = _pen_for(pv, palette, "hatch") if "hatch" in pv.pen_map else _pen_for(pv, palette, "edge")
     rgb = np.asarray(pv.rgb, dtype=np.float32)
     h, w = rgb.shape[:2]
     out: list[Polyline] = []
-    for pts in pv.hatch_polylines_mm:
+    for pts in hatch_src:
         if len(pts) < 2:
             continue
         # Sample mid-stroke color for multi-pen assignment when possible
@@ -187,19 +242,20 @@ def restyle_linework(
 
 
 def restyle_hatch(pv: PortraitVector, palette, params: StyleParams, *, line_spacing_mm: float | None = None) -> LayeredSVG:
-    """Prefer linedraw ingest hatch; fall back to midtone-masked adaptive grid."""
+    """Prefer tone-grid / ingest hatch; fall back to midtone-masked adaptive grid."""
     limit = _budget(params)
     ingest = _ingest_hatch_polys(pv, palette, limit=limit)
     if ingest:
         # Underlay edges for structure
         edges = _edge_polys(pv, palette, limit=max(40, limit // 8))
         buckets = _bucketize(edges + ingest)
+        src = "tone_grid" if pv.tone_codes is not None else "ingest_hatch"
         return LayeredSVG(
             width_mm=pv.page_w_mm,
             height_mm=pv.page_h_mm,
             passes=_passes_from_buckets("hatch", "Hatch", buckets),
             seed=params.seed,
-            meta={"style": "portrait_hatch", "quality": params.quality.value, "vector_source": "ingest_hatch"},
+            meta={"style": "portrait_hatch", "quality": params.quality.value, "vector_source": src},
         )
 
     arrays = pv.arrays()
@@ -433,33 +489,45 @@ def restyle_tsp(pv: PortraitVector, palette, params: StyleParams) -> LayeredSVG:
 
 
 def restyle_scribble_tone(pv: PortraitVector, palette, params: StyleParams, *, line_spacing_mm: float | None = None) -> LayeredSVG:
-    """ScribbleTrace-inspired intensity curves + linedraw edge underlay."""
-    from botdraw.portrait.linedraw_edges import curve_tone_from_lum, polylines_to_mm
-
+    """Scribble / hatch from tone_codes (amplitude by code) + edge underlay."""
     limit = _budget(params)
-    arrays = pv.arrays()
-    lum = arrays["lum"]
-    cell = 16
-    if line_spacing_mm is not None:
-        cell = max(8, int(round(line_spacing_mm * 8)))
-    elif params.density:
-        cell = max(8, int(round(18 / max(0.5, float(params.density)))))
-    curves_px = curve_tone_from_lum(
-        lum.astype(np.float32),
-        cell=cell,
-        jitter=0.03,
+    tone_budget = max(200, limit - 80)
+    tone_polys = _tone_grid_polys(
+        pv,
+        palette,
+        limit=tone_budget,
+        style="scribble",
         seed=int(params.seed) + 7,
-        max_paths=max(200, limit - 80),
     )
-    curves_mm = polylines_to_mm(
-        curves_px,
-        img_w=int(pv.width_px),
-        img_h=int(pv.height_px),
-        page_w=pv.page_w_mm,
-        page_h=pv.page_h_mm,
-    )
-    hatch_pen = _pen_for(pv, palette, "hatch") if "hatch" in pv.pen_map else _pen_for(pv, palette, "edge")
-    tone_polys = [Polyline(points=pts, pen_id=hatch_pen.id) for pts in curves_mm if len(pts) >= 2]
+    src = "tone_grid+edges"
+    if not tone_polys:
+        # Legacy fallback when tone grid missing (old caches)
+        from botdraw.portrait.linedraw_edges import curve_tone_from_lum, polylines_to_mm
+
+        arrays = pv.arrays()
+        lum = arrays["lum"]
+        cell = 16
+        if line_spacing_mm is not None:
+            cell = max(8, int(round(line_spacing_mm * 8)))
+        elif params.density:
+            cell = max(8, int(round(18 / max(0.5, float(params.density)))))
+        curves_px = curve_tone_from_lum(
+            lum.astype(np.float32),
+            cell=cell,
+            jitter=0.03,
+            seed=int(params.seed) + 7,
+            max_paths=tone_budget,
+        )
+        curves_mm = polylines_to_mm(
+            curves_px,
+            img_w=int(pv.width_px),
+            img_h=int(pv.height_px),
+            page_w=pv.page_w_mm,
+            page_h=pv.page_h_mm,
+        )
+        hatch_pen = _pen_for(pv, palette, "hatch") if "hatch" in pv.pen_map else _pen_for(pv, palette, "edge")
+        tone_polys = [Polyline(points=pts, pen_id=hatch_pen.id) for pts in curves_mm if len(pts) >= 2]
+        src = "curve_tone+edges"
     edges = _edge_polys(pv, palette, limit=max(60, limit // 6))
     buckets = _bucketize(edges + tone_polys[: max(0, limit - len(edges))])
     return LayeredSVG(
@@ -467,7 +535,7 @@ def restyle_scribble_tone(pv: PortraitVector, palette, params: StyleParams, *, l
         height_mm=pv.page_h_mm,
         passes=_passes_from_buckets("scribble", "Scribble tone", buckets),
         seed=params.seed,
-        meta={"style": "portrait_scribble_tone", "quality": params.quality.value, "vector_source": "curve_tone+edges"},
+        meta={"style": "portrait_scribble_tone", "quality": params.quality.value, "vector_source": src},
     )
 
 

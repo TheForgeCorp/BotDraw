@@ -54,7 +54,7 @@ def make_ingest_key(
         f"|{mode}|{quality}|{paper}|{_crop_key(crop)}"
         f"|p{posterize_levels}|s{filter_speckle}|m{min_path_points}|c{contrast}"
         f"|cs{contour_simplify}|hs{hatch_size}|lj{linedraw_jitter}|e{ensemble}"
-        f"|sm{scan_mode}"
+        f"|sm{scan_mode}|tg1"  # tone-grid IR v1 + edge prep
     )
     h.update(knobs.encode())
     return h.hexdigest()[:24]
@@ -65,13 +65,17 @@ def save_portrait_vector(pv: PortraitVector, ingest_id: str | None = None) -> st
     pv.ingest_id = iid
     out = artifact_dir(f"ingest-{iid}")
     arrays = pv.arrays()
-    np.savez_compressed(
-        out / "arrays.npz",
+    save_kw = dict(
         rgb=arrays["rgb"],
         lum=arrays["lum"],
         ink_target=arrays["ink_target"],
         edge_map=arrays["edge_map"],
     )
+    if "tone_grid" in arrays:
+        save_kw["tone_grid"] = arrays["tone_grid"]
+    if "tone_codes" in arrays:
+        save_kw["tone_codes"] = arrays["tone_codes"]
+    np.savez_compressed(out / "arrays.npz", **save_kw)
     meta = {
         "width_px": pv.width_px,
         "height_px": pv.height_px,
@@ -79,6 +83,8 @@ def save_portrait_vector(pv: PortraitVector, ingest_id: str | None = None) -> st
         "page_h_mm": pv.page_h_mm,
         "edge_polylines_mm": pv.edge_polylines_mm,
         "hatch_polylines_mm": pv.hatch_polylines_mm,
+        "tone_cell_mm": float(pv.tone_cell_mm or 0.0),
+        "tone_origin_mm": list(pv.tone_origin_mm or (0.0, 0.0)),
         "regions": [r.model_dump() for r in pv.regions],
         "clusters": [c.model_dump() for c in pv.clusters],
         "pen_map": pv.pen_map,
@@ -105,6 +111,7 @@ def load_portrait_vector(ingest_id: str) -> PortraitVector | None:
         return None
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     data = np.load(arr_path)
+    origin = meta.get("tone_origin_mm") or [0.0, 0.0]
     pv = PortraitVector(
         width_px=meta["width_px"],
         height_px=meta["height_px"],
@@ -116,6 +123,10 @@ def load_portrait_vector(ingest_id: str) -> PortraitVector | None:
         edge_map=data["edge_map"],
         edge_polylines_mm=meta.get("edge_polylines_mm") or [],
         hatch_polylines_mm=meta.get("hatch_polylines_mm") or [],
+        tone_grid=data["tone_grid"] if "tone_grid" in data.files else None,
+        tone_codes=data["tone_codes"] if "tone_codes" in data.files else None,
+        tone_cell_mm=float(meta.get("tone_cell_mm") or 0.0),
+        tone_origin_mm=(float(origin[0]), float(origin[1])),
         regions=[RegionPoly.model_validate(r) for r in meta.get("regions") or []],
         clusters=[ColorCluster.model_validate(c) for c in meta.get("clusters") or []],
         pen_map=meta.get("pen_map") or {},

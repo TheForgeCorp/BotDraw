@@ -574,6 +574,7 @@ def ingest_portrait(
         refine_edge_polylines,
     )
     from botdraw.portrait.scan_modes import normalize_scan_mode, scan_mode_knobs
+    from botdraw.portrait.tone_grid import build_tone_grid, strokes_from_tone_grid
     from botdraw.portrait.tone_variants import ENSEMBLE_RECIPES, ToneRecipe, apply_tone_recipe
 
     t0 = time.perf_counter()
@@ -692,18 +693,14 @@ def ingest_portrait(
             seed=99,
             max_paths=min(edge_budget * 2, edge_budget + 200),
         )
-        lum_u8 = autocontrast_lum(lum.astype(np.float32), cutoff=10.0).astype(np.float32)
+        from botdraw.portrait.linedraw_edges import prepare_luma_for_edges
+
+        lum_u8 = prepare_luma_for_edges(lum.astype(np.float32))
         edges_px6 = refine_edge_polylines(raw6, lum_u8, max_paths=edge_budget)
         edge_polys = polylines_to_mm(edges_px6, img_w=w_px, img_h=h_px, page_w=page_w, page_h=page_h)
-        hatch_px = hatch_from_lum(
-            lum_u8,
-            hatch_size=hsize,
-            jitter=jitter,
-            seed=1,
-            max_paths=hatch_budget,
-        )
-        hatch_polys = polylines_to_mm(hatch_px, img_w=w_px, img_h=h_px, page_w=page_w, page_h=page_h)
         edges = consensus.astype(np.float32) * 255.0
+        # Placeholder; tone-grid hatch replaces ad-hoc hatch below
+        hatch_polys = []
         ensemble_meta = {
             "enabled": True,
             "mode": "blur_pyramid",
@@ -715,7 +712,7 @@ def ingest_portrait(
             "refine": "face_budget+island_kill+arc_repair",
         }
     else:
-        edge_polys, hatch_polys, edges = linedraw_edges_and_hatch(
+        edge_polys, _legacy_hatch, edges = linedraw_edges_and_hatch(
             lum.astype(np.float32),
             page_w=page_w,
             page_h=page_h,
@@ -726,6 +723,48 @@ def ingest_portrait(
             max_edge_paths=edge_budget,
             max_hatch_paths=hatch_budget,
             scan_knobs=sknobs,
+        )
+        hatch_polys = []  # filled from tone grid
+
+    # Intensity tone grid → coded hatch (booth: codes 0–3; studio: allow scribble code 4)
+    max_tone_code = 3 if quality_enum == QualityPreset.BOOTH_FAST else 4
+    tone_pack = build_tone_grid(
+        lum.astype(np.float32),
+        ink_target,
+        cell_px=hsize,
+        edge_map=np.asarray(edges, dtype=np.float32),
+        page_w_mm=page_w,
+        page_h_mm=page_h,
+        max_code=max_tone_code,
+    )
+    hatch_polys = strokes_from_tone_grid(
+        tone_pack["tone_codes"],
+        cell_px=tone_pack["tone_cell_px"],
+        img_w=int(rgb.shape[1]),
+        img_h=int(rgb.shape[0]),
+        page_w=page_w,
+        page_h=page_h,
+        style="hatch",
+        jitter=jitter,
+        seed=1,
+        max_paths=hatch_budget,
+    )
+    if not hatch_polys:
+        # Fallback to classic linedraw hatch if grid skipped everything
+        lum_fallback = autocontrast_lum(lum.astype(np.float32), cutoff=10.0).astype(np.float32)
+        hatch_px = hatch_from_lum(
+            lum_fallback,
+            hatch_size=hsize,
+            jitter=jitter,
+            seed=1,
+            max_paths=hatch_budget,
+        )
+        hatch_polys = polylines_to_mm(
+            hatch_px,
+            img_w=int(rgb.shape[1]),
+            img_h=int(rgb.shape[0]),
+            page_w=page_w,
+            page_h=page_h,
         )
     t_edges = time.perf_counter()
 
@@ -783,6 +822,10 @@ def ingest_portrait(
         edge_map=edges,
         edge_polylines_mm=edge_polys,
         hatch_polylines_mm=hatch_polys,
+        tone_grid=tone_pack["tone_grid"],
+        tone_codes=tone_pack["tone_codes"],
+        tone_cell_mm=float(tone_pack["tone_cell_mm"]),
+        tone_origin_mm=tuple(tone_pack["tone_origin_mm"]),
         regions=regions,
         clusters=clusters,
         crop=crop_r,
@@ -806,5 +849,16 @@ def ingest_portrait(
             "edge_extractor": "linedraw_ensemble" if use_ensemble else "linedraw",
             "ensemble": ensemble_meta,
             "scan_mode": scan,
+            "tone_grid": {
+                "cell_px": float(tone_pack["tone_cell_px"]),
+                "cell_mm": float(tone_pack["tone_cell_mm"]),
+                "origin_mm": list(tone_pack["tone_origin_mm"]),
+                "shape": list(tone_pack["grid_shape"]),
+                "max_code": max_tone_code,
+                "code_hist": {
+                    str(c): int((tone_pack["tone_codes"] == c).sum()) for c in range(6)
+                },
+            },
+            "edge_prep": "prepare_luma_for_edges",
         },
     )

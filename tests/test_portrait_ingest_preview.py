@@ -31,7 +31,7 @@ def test_preview_dict_and_raw_svg():
     assert d["meta"].get("posterize_levels") is not None
     svg = portrait_vector_raw_svg(pv)
     assert "<svg" in svg
-    assert 'id="edges"' in svg
+    assert 'id="layer-edges"' in svg or 'id="edges"' in svg
     assert len(svg) > 200
 
 

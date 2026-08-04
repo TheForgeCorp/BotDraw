@@ -70,7 +70,11 @@ def portrait_vector_preview_dict(
             "edge_extractor": (pv.meta or {}).get("edge_extractor"),
             "ensemble": (pv.meta or {}).get("ensemble"),
             "scan_mode": (pv.meta or {}).get("scan_mode") or "auto",
+            "tone_grid": (pv.meta or {}).get("tone_grid"),
+            "edge_prep": (pv.meta or {}).get("edge_prep"),
         },
+        "tone_cell_mm": float(pv.tone_cell_mm or 0.0),
+        "has_tone_grid": pv.tone_codes is not None,
     }
     if include_preview_png:
         try:
@@ -105,6 +109,28 @@ def portrait_vector_preview_dict(
             out["scan_mode"] = scan
         except Exception:
             out["intermediate_png_b64"] = None
+        # Tone-code heatmap underlay (coarse intensity recipes)
+        try:
+            if pv.tone_codes is not None:
+                from botdraw.portrait.tone_grid import tone_codes_heatmap_rgb
+
+                heat = tone_codes_heatmap_rgb(np.asarray(pv.tone_codes, dtype=np.uint8))
+                himg = Image.fromarray(heat, mode="RGB")
+                # Upscale to match photo preview size for overlay alignment
+                tw = max(1, int(pv.width_px))
+                th = max(1, int(pv.height_px))
+                max_side = 480
+                sc = max_side / max(tw, th)
+                if sc < 1:
+                    tw, th = max(1, int(tw * sc)), max(1, int(th * sc))
+                himg = himg.resize((tw, th), Image.Resampling.NEAREST)
+                buf = io.BytesIO()
+                himg.save(buf, format="PNG", optimize=True)
+                out["tone_heatmap_png_b64"] = base64.b64encode(buf.getvalue()).decode("ascii")
+            else:
+                out["tone_heatmap_png_b64"] = None
+        except Exception:
+            out["tone_heatmap_png_b64"] = None
     return out
 
 

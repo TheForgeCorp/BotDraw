@@ -185,6 +185,14 @@
               <label><input type="checkbox" id="toggle-hatch" checked /> Hatch</label>
               <label><input type="checkbox" id="toggle-regions" checked /> Regions</label>
               <label><input type="checkbox" id="toggle-crop" checked /> Crop</label>
+              <label>Underlay
+                <select id="ingest-underlay" title="Scan intermediate or tone-grid heatmap">
+                  <option value="scan">Scan</option>
+                  <option value="tone">Tone grid</option>
+                  <option value="photo">Photo</option>
+                  <option value="none">None</option>
+                </select>
+              </label>
               <a id="portrait-dl-ingest-svg" href="#" hidden>Raw SVG</a>
             </div>
             <p class="muted pane-hint" id="scan-mode-hint" style="margin:0.25rem 0 0;font-size:0.78rem"></p>

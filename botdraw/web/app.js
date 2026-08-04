@@ -35,6 +35,7 @@ let portraitHatchEnabled = true;
 let portraitEnsemble = null; // null = auto (studio-hq photo on); bool overrides
 let portraitScanMode = "auto"; // Inkscape Trace Bitmap–inspired filter
 let portraitPathSimplify = 2; // contour_simplify / Path→Simplify strength (1=finest)
+let portraitIngestUnderlay = "scan"; // scan | tone | photo | none
 let portraitIngestTimer = null;
 let portraitPenMap = null;
 const PORTRAIT_LINE_TYPES = [
@@ -467,9 +468,24 @@ function drawPortraitIngestPreview(preview) {
   const ox = (canvas.width - pw * s) / 2;
   const oy = (canvas.height - ph * s) / 2;
 
-  // Prefer Inkscape-style intermediate filter preview; fall back to photo underlay
-  const underlayB64 = preview.intermediate_png_b64 || preview.preview_png_b64;
-  const underlayAlpha = preview.intermediate_png_b64 ? 0.38 : 0.22;
+  // Underlay: scan intermediate, tone-code heatmap, or photo
+  let underlayB64 = null;
+  let underlayAlpha = 0.22;
+  if (portraitIngestUnderlay === "tone" && preview.tone_heatmap_png_b64) {
+    underlayB64 = preview.tone_heatmap_png_b64;
+    underlayAlpha = 0.55;
+  } else if (portraitIngestUnderlay === "photo" && preview.preview_png_b64) {
+    underlayB64 = preview.preview_png_b64;
+    underlayAlpha = 0.28;
+  } else if (portraitIngestUnderlay === "scan") {
+    underlayB64 = preview.intermediate_png_b64 || preview.preview_png_b64;
+    underlayAlpha = preview.intermediate_png_b64 ? 0.38 : 0.22;
+  } else if (portraitIngestUnderlay === "none") {
+    underlayB64 = null;
+  } else {
+    underlayB64 = preview.intermediate_png_b64 || preview.tone_heatmap_png_b64 || preview.preview_png_b64;
+    underlayAlpha = preview.tone_heatmap_png_b64 && !preview.intermediate_png_b64 ? 0.5 : 0.32;
+  }
   if (underlayB64) {
     const img = new Image();
     img.onload = () => {
@@ -1031,6 +1047,7 @@ function renderPortrait() {
   const th = document.getElementById("toggle-hatch");
   const tr = document.getElementById("toggle-regions");
   const tc = document.getElementById("toggle-crop");
+  const tu = document.getElementById("ingest-underlay");
   if (te) {
     te.checked = portraitShowEdges;
     te.onchange = () => {
@@ -1057,6 +1074,25 @@ function renderPortrait() {
     tc.onchange = () => {
       portraitShowCrop = tc.checked;
       drawPortraitSourcePreview(portraitFile);
+    };
+  }
+  if (tu) {
+    tu.value = portraitIngestUnderlay;
+    tu.onchange = () => {
+      portraitIngestUnderlay = tu.value || "scan";
+      drawPortraitIngestPreview(portraitIngestPreview);
+      const hint = document.getElementById("scan-mode-hint");
+      if (hint && portraitIngestPreview) {
+        if (portraitIngestUnderlay === "tone") {
+          hint.textContent = portraitIngestPreview.tone_heatmap_png_b64
+            ? "Tone grid heatmap (codes 1–4 shade, 5 edge-only)"
+            : "Tone grid not available — re-ingest";
+        } else if (portraitIngestUnderlay === "scan") {
+          hint.textContent = portraitIngestPreview.intermediate_png_b64
+            ? `Intermediate: ${portraitIngestPreview.scan_mode || "auto"} (shown under vectors)`
+            : "Scan intermediate unavailable";
+        }
+      }
     };
   }
 
@@ -1152,9 +1188,20 @@ async function runPortraitIngest(opts = {}) {
   }
   const hint = document.getElementById("scan-mode-hint");
   if (hint) {
-    hint.textContent = data.intermediate_png_b64
-      ? `Intermediate: ${data.scan_mode || meta.scan_mode || "auto"} (shown under vectors)`
+    const toneN = meta.tone_grid?.code_hist
+      ? Object.entries(meta.tone_grid.code_hist)
+          .filter(([c, n]) => Number(c) >= 1 && Number(n) > 0)
+          .map(([c, n]) => `${c}:${n}`)
+          .join(" ")
       : "";
+    if (portraitIngestUnderlay === "tone" && data.tone_heatmap_png_b64) {
+      hint.textContent = `Tone grid${toneN ? ` · ${toneN}` : ""}`;
+    } else {
+      hint.textContent = data.intermediate_png_b64
+        ? `Intermediate: ${data.scan_mode || meta.scan_mode || "auto"} (shown under vectors)`
+          + (toneN ? ` · tone ${toneN}` : "")
+        : (toneN ? `Tone codes ${toneN}` : "");
+    }
   }
   const applyBtn = root.querySelector("#portrait-apply");
   if (applyBtn) applyBtn.disabled = !portraitIngestId;
