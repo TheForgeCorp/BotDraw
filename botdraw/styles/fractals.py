@@ -164,5 +164,74 @@ class _Mandelbrot:
         )
 
 
-for _eng in (_Mandelbrot(),):
+def _hilbert_points(order: int) -> list[tuple[float, float]]:
+    """Recursive Hilbert curve in unit square [0, 1]^2."""
+    n = 2**order
+    pts: list[tuple[float, float]] = []
+
+    def walk(x0: float, y0: float, xi: float, xj: float, yi: float, yj: float, level: int) -> None:
+        if level <= 0:
+            pts.append((x0 + (xi + yi) / 2, y0 + (xj + yj) / 2))
+        else:
+            walk(x0, y0, yi / 2, yj / 2, xi / 2, xj / 2, level - 1)
+            walk(x0 + xi / 2, y0 + xj / 2, xi / 2, xj / 2, yi / 2, yj / 2, level - 1)
+            walk(x0 + xi / 2 + yi / 2, y0 + xj / 2 + yj / 2, xi / 2, xj / 2, yi / 2, yj / 2, level - 1)
+            walk(x0 + xi / 2 + yi, y0 + xj / 2 + yj, -yi / 2, -yj / 2, -xi / 2, -xj / 2, level - 1)
+
+    walk(0.0, 0.0, float(n), 0.0, 0.0, float(n), order)
+    # Normalize to [0, 1]
+    return [(x / n, y / n) for x, y in pts]
+
+
+class _HilbertCurve:
+    id = "hilbert_curve"
+    name = "Hilbert Curve"
+    category = "artistic"
+    description = "Classic space-filling Hilbert curve — single continuous black line (wall-art style)"
+
+    def render(self, *, palette, params, paper=PaperSize.A4, image_path=None, image_array=None):
+        del image_path, image_array  # pure generative geometry
+        pw, ph = page_size(paper)
+        pens = ink_pens(palette)
+        pen = pens[0]  # darkest / first ink — matches framed black-line prints
+
+        # Order 5–7: seed nudges orientation via slight margin asymmetry only
+        base = {"booth-fast": 5, "booth-balanced": 6, "studio-hq": 7}[params.quality.value]
+        order = int(np.clip(base + (1 if params.density >= 1.25 else 0), 4, 7))
+        # Seed can drop order by 0 for reproducibility of path; use seed for rotation flip
+        rng = np.random.default_rng(params.seed)
+        flip_x = bool(rng.integers(0, 2))
+        flip_y = bool(rng.integers(0, 2))
+
+        unit = _hilbert_points(order)
+        if flip_x:
+            unit = [(1.0 - x, y) for x, y in unit]
+        if flip_y:
+            unit = [(x, 1.0 - y) for x, y in unit]
+
+        # Square composition centered on page with generous mat-like margin (like the framed print)
+        side = min(pw, ph) * 0.72
+        ox = (pw - side) / 2
+        oy = (ph - side) / 2
+        page_pts = [(ox + x * side, oy + y * side) for x, y in unit]
+
+        # Single continuous polyline — the whole fractal is one stroke
+        poly = Polyline(points=page_pts, pen_id=pen.id, closed=False)
+        passes = [make_pass("hilbert-curve", f"Hilbert order-{order}", pen.id, [poly])]
+        return LayeredSVG(
+            width_mm=pw,
+            height_mm=ph,
+            passes=passes,
+            seed=params.seed,
+            meta={
+                "style": self.id,
+                "curve": "Hilbert",
+                "order": order,
+                "points": len(page_pts),
+                "equation": "space-filling recursive quadrant walk",
+            },
+        )
+
+
+for _eng in (_Mandelbrot(), _HilbertCurve()):
     register(_eng)
