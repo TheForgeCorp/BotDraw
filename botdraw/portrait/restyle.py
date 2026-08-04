@@ -44,6 +44,11 @@ def restyle_linework(pv: PortraitVector, palette, params: StyleParams) -> Layere
         for pts in pv.edge_polylines_mm
         if len(pts) >= 2
     ]
+    # Linedraw tone hatch (when ingest produced it)
+    hatch_pen = _pen_for(pv, palette, "hatch") if "hatch" in pv.pen_map else edge_pen
+    for pts in pv.hatch_polylines_mm:
+        if len(pts) >= 2:
+            polys.append(Polyline(points=pts, pen_id=hatch_pen.id))
     # Dark region outlines
     for r in pv.regions:
         mean_l = 0.299 * r.mean_rgb[0] + 0.587 * r.mean_rgb[1] + 0.114 * r.mean_rgb[2]
@@ -54,13 +59,19 @@ def restyle_linework(pv: PortraitVector, palette, params: StyleParams) -> Layere
             polys.append(Polyline(points=list(r.points_mm), pen_id=pen.id, closed=True))
     limits = QUALITY_LIMITS[params.quality]
     polys = polys[: int(limits["max_paths"])]
+    edge_ids = {edge_pen.id, hatch_pen.id}
     return LayeredSVG(
         width_mm=pv.page_w_mm,
         height_mm=pv.page_h_mm,
         passes=[make_pass("edges", "Portrait edges", edge_pen.id, [p for p in polys if p.pen_id == edge_pen.id])]
+        + (
+            [make_pass("hatch", "Portrait hatch", hatch_pen.id, [p for p in polys if p.pen_id == hatch_pen.id and p.pen_id != edge_pen.id])]
+            if hatch_pen.id != edge_pen.id and any(p.pen_id == hatch_pen.id for p in polys)
+            else []
+        )
         + [
             make_pass(f"reg-{pid}", f"Region {pid}", pid, [p for p in polys if p.pen_id == pid])
-            for pid in {p.pen_id for p in polys if p.pen_id != edge_pen.id}
+            for pid in {p.pen_id for p in polys if p.pen_id not in edge_ids}
         ],
         seed=params.seed,
         meta={"style": "portrait_linework", "quality": params.quality.value},

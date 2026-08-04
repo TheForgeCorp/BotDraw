@@ -232,6 +232,9 @@ class PortraitIngestRequest(BaseModel):
     filter_speckle: Optional[int] = None
     min_path_points: Optional[int] = None
     contrast: Optional[float] = None
+    contour_simplify: Optional[int] = None
+    hatch_size: Optional[int] = None
+    linedraw_jitter: Optional[float] = None
 
 
 def _portrait_ingest_response(pv, *, include_preview_png: bool = True) -> dict[str, Any]:
@@ -246,6 +249,9 @@ def _ingest_knobs_from_body(body: PortraitIngestRequest) -> dict[str, Any]:
         "filter_speckle": body.filter_speckle,
         "min_path_points": body.min_path_points,
         "contrast": body.contrast,
+        "contour_simplify": body.contour_simplify,
+        "hatch_size": body.hatch_size,
+        "linedraw_jitter": body.linedraw_jitter,
     }
 
 
@@ -301,6 +307,9 @@ async def api_portrait_ingest_upload(
     filter_speckle: Optional[int] = Form(None),
     min_path_points: Optional[int] = Form(None),
     contrast: Optional[float] = Form(None),
+    contour_simplify: Optional[int] = Form(None),
+    hatch_size: Optional[int] = Form(None),
+    linedraw_jitter: Optional[float] = Form(None),
     file: UploadFile = File(...),
 ):
     from uuid import uuid4
@@ -332,6 +341,9 @@ async def api_portrait_ingest_upload(
         filter_speckle=filter_speckle,
         min_path_points=min_path_points,
         contrast=contrast,
+        contour_simplify=contour_simplify,
+        hatch_size=hatch_size,
+        linedraw_jitter=linedraw_jitter,
     )
     data = _portrait_ingest_response(pv, include_preview_png=include_preview_png)
     data["cache_hit"] = hit

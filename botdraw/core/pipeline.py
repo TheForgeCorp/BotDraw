@@ -168,6 +168,9 @@ def render_job(
                 filter_speckle=extra.get("filter_speckle"),
                 min_path_points=extra.get("min_path_points"),
                 contrast=extra.get("contrast"),
+                contour_simplify=extra.get("contour_simplify"),
+                hatch_size=extra.get("hatch_size"),
+                linedraw_jitter=extra.get("linedraw_jitter"),
             )
             pv = assign_pens(pv, palette, pen_map=extra.get("pen_map"))
             ingest_id = pv.ingest_id

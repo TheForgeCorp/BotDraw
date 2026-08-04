@@ -541,8 +541,13 @@ def ingest_portrait(
     filter_speckle: int | None = None,
     min_path_points: int | None = None,
     contrast: float = 1.12,
+    contour_simplify: int | None = None,
+    hatch_size: int | None = None,
+    linedraw_jitter: float | None = None,
 ) -> PortraitVector:
     """Load/crop/preprocess image and build PortraitVector (tone + edges + regions)."""
+    from botdraw.portrait.linedraw_edges import linedraw_edges_and_hatch
+
     t0 = time.perf_counter()
     quality_enum = quality if isinstance(quality, QualityPreset) else QualityPreset(quality)
     paper_enum = paper if isinstance(paper, PaperSize) else PaperSize(paper)
@@ -554,6 +559,16 @@ def ingest_portrait(
     post_n = default_posterize_levels(quality_enum) if posterize_levels is None else int(posterize_levels)
     speckle = default_filter_speckle(quality_enum) if filter_speckle is None else int(filter_speckle)
     min_pts = default_min_path_points(quality_enum) if min_path_points is None else int(min_path_points)
+    # Linedraw defaults by quality
+    if contour_simplify is None:
+        csimp = 3 if quality_enum == QualityPreset.BOOTH_FAST else (2 if quality_enum == QualityPreset.BOOTH_BALANCED else 1)
+    else:
+        csimp = max(1, int(contour_simplify))
+    if hatch_size is None:
+        hsize = 24 if quality_enum == QualityPreset.BOOTH_FAST else (16 if quality_enum == QualityPreset.BOOTH_BALANCED else 12)
+    else:
+        hsize = int(hatch_size)
+    jitter = 0.12 if linedraw_jitter is None else float(linedraw_jitter)
 
     # Load full-res for framing
     if image_array is not None:
@@ -590,23 +605,24 @@ def ingest_portrait(
     lum = luminance(rgb)
     ink_target = np.clip(1.0 - lum / 255.0, 0.0, 1.0).astype(np.float32)
 
-    # Edge map: light blur first to reduce speckled FIND_EDGES noise
-    g = Image.fromarray(np.clip(lum, 0, 255).astype(np.uint8), mode="L")
-    g = g.filter(ImageFilter.GaussianBlur(radius=0.8))
-    edges = np.asarray(g.filter(ImageFilter.FIND_EDGES), dtype=np.float32)
-    edge_step = 4 if quality_enum == QualityPreset.BOOTH_FAST else (3 if quality_enum == QualityPreset.BOOTH_BALANCED else 2)
     edge_budget = min(
         max_paths // 2,
         400 if quality_enum == QualityPreset.BOOTH_FAST else (1200 if quality_enum == QualityPreset.BOOTH_BALANCED else 4000),
     )
-    edge_polys = _edge_polylines(
-        edges,
-        step=edge_step,
-        max_paths=edge_budget,
+    hatch_budget = min(
+        max_paths,
+        800 if quality_enum == QualityPreset.BOOTH_FAST else (2500 if quality_enum == QualityPreset.BOOTH_BALANCED else 6000),
+    )
+    edge_polys, hatch_polys, edges = linedraw_edges_and_hatch(
+        lum.astype(np.float32),
         page_w=page_w,
         page_h=page_h,
-        min_path_points=min_pts,
-        min_length_px=12.0 if quality_enum != QualityPreset.STUDIO_HQ else 8.0,
+        contour_simplify=csimp,
+        hatch_size=hsize,
+        jitter=jitter,
+        seed=0,
+        max_edge_paths=edge_budget,
+        max_hatch_paths=hatch_budget,
     )
     t_edges = time.perf_counter()
 
@@ -652,6 +668,7 @@ def ingest_portrait(
         ink_target=ink_target,
         edge_map=edges,
         edge_polylines_mm=edge_polys,
+        hatch_polylines_mm=hatch_polys,
         regions=regions,
         clusters=clusters,
         crop=crop_r,
@@ -666,6 +683,7 @@ def ingest_portrait(
                 "total": round(t_trace - t0, 4),
             },
             "edge_count": len(edge_polys),
+            "hatch_count": len(hatch_polys),
             "region_count": len(regions),
             "max_paths": max_paths,
             "auto_frame": auto_frame and (crop is None),
@@ -673,5 +691,9 @@ def ingest_portrait(
             "filter_speckle": speckle,
             "min_path_points": min_pts,
             "contrast": float(contrast),
+            "contour_simplify": csimp,
+            "hatch_size": hsize,
+            "linedraw_jitter": jitter,
+            "edge_extractor": "linedraw",
         },
     )

@@ -17,13 +17,17 @@ def portrait_vector_preview_dict(
     *,
     include_preview_png: bool = True,
     max_edge_paths: int | None = None,
+    max_hatch_paths: int | None = None,
     max_regions: int | None = None,
 ) -> dict[str, Any]:
     """Lightweight JSON for Ingest pane — polylines + crop + optional PNG."""
     edges = list(pv.edge_polylines_mm)
+    hatch = list(pv.hatch_polylines_mm)
     regions = list(pv.regions)
     if max_edge_paths is not None:
         edges = edges[: max(0, int(max_edge_paths))]
+    if max_hatch_paths is not None:
+        hatch = hatch[: max(0, int(max_hatch_paths))]
     if max_regions is not None:
         regions = regions[: max(0, int(max_regions))]
 
@@ -32,6 +36,7 @@ def portrait_vector_preview_dict(
         "crop": pv.crop.model_dump(),
         "timing_s": (pv.meta or {}).get("timing_s") or {},
         "edge_count": len(pv.edge_polylines_mm),
+        "hatch_count": len(pv.hatch_polylines_mm),
         "region_count": len(pv.regions),
         "page_mm": [pv.page_w_mm, pv.page_h_mm],
         "width_px": pv.width_px,
@@ -39,6 +44,7 @@ def portrait_vector_preview_dict(
         "image_mode": pv.image_mode,
         "quality": pv.quality,
         "edge_polylines_mm": edges,
+        "hatch_polylines_mm": hatch,
         "regions": [
             {
                 "id": r.id,
@@ -51,12 +57,17 @@ def portrait_vector_preview_dict(
         ],
         "meta": {
             "edge_count": (pv.meta or {}).get("edge_count"),
+            "hatch_count": (pv.meta or {}).get("hatch_count"),
             "region_count": (pv.meta or {}).get("region_count"),
             "auto_frame": (pv.meta or {}).get("auto_frame"),
             "posterize_levels": (pv.meta or {}).get("posterize_levels"),
             "filter_speckle": (pv.meta or {}).get("filter_speckle"),
             "min_path_points": (pv.meta or {}).get("min_path_points"),
             "contrast": (pv.meta or {}).get("contrast"),
+            "contour_simplify": (pv.meta or {}).get("contour_simplify"),
+            "hatch_size": (pv.meta or {}).get("hatch_size"),
+            "linedraw_jitter": (pv.meta or {}).get("linedraw_jitter"),
+            "edge_extractor": (pv.meta or {}).get("edge_extractor"),
         },
     }
     if include_preview_png:
@@ -85,9 +96,10 @@ def portrait_vector_raw_svg(
     *,
     paper_color_hex: str = "#f7f1e8",
     edge_color: str = "#0e7490",
+    hatch_color: str = "#c2410c",
     region_color: str = "#a21caf",
 ) -> str:
-    """Raw outline SVG: edges + region closed paths (no hatch/style)."""
+    """Raw outline SVG: hatch + edges + region closed paths (no style)."""
     w, h = pv.page_w_mm, pv.page_h_mm
 
     def path_d(pts: list[tuple[float, float]], closed: bool = False) -> str:
@@ -104,8 +116,16 @@ def portrait_vector_raw_svg(
         '<?xml version="1.0" encoding="UTF-8"?>',
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}mm" height="{h}mm" viewBox="0 0 {w} {h}">',
         f'<rect x="0" y="0" width="{w}" height="{h}" fill="{paper_color_hex}"/>',
-        f'<g id="regions" fill="none" stroke="{region_color}" stroke-width="0.35" stroke-opacity="0.85">',
+        f'<g id="hatch" fill="none" stroke="{hatch_color}" stroke-width="0.25" stroke-opacity="0.75" stroke-linecap="round">',
     ]
+    for i, pts in enumerate(pv.hatch_polylines_mm):
+        d = path_d(list(pts), closed=False)
+        if d:
+            chunks.append(f'<path d="{d}" data-hatch="{i}"/>')
+    chunks.append("</g>")
+    chunks.append(
+        f'<g id="regions" fill="none" stroke="{region_color}" stroke-width="0.35" stroke-opacity="0.85">'
+    )
     for r in pv.regions:
         d = path_d(list(r.points_mm), closed=True)
         if d:

@@ -37,6 +37,9 @@ def make_ingest_key(
     filter_speckle: int | None = None,
     min_path_points: int | None = None,
     contrast: float | None = None,
+    contour_simplify: int | None = None,
+    hatch_size: int | None = None,
+    linedraw_jitter: float | None = None,
 ) -> str:
     h = hashlib.sha256()
     if image_bytes:
@@ -48,6 +51,7 @@ def make_ingest_key(
     knobs = (
         f"|{mode}|{quality}|{paper}|{_crop_key(crop)}"
         f"|p{posterize_levels}|s{filter_speckle}|m{min_path_points}|c{contrast}"
+        f"|cs{contour_simplify}|hs{hatch_size}|lj{linedraw_jitter}"
     )
     h.update(knobs.encode())
     return h.hexdigest()[:24]
@@ -71,6 +75,7 @@ def save_portrait_vector(pv: PortraitVector, ingest_id: str | None = None) -> st
         "page_w_mm": pv.page_w_mm,
         "page_h_mm": pv.page_h_mm,
         "edge_polylines_mm": pv.edge_polylines_mm,
+        "hatch_polylines_mm": pv.hatch_polylines_mm,
         "regions": [r.model_dump() for r in pv.regions],
         "clusters": [c.model_dump() for c in pv.clusters],
         "pen_map": pv.pen_map,
@@ -107,6 +112,7 @@ def load_portrait_vector(ingest_id: str) -> PortraitVector | None:
         ink_target=data["ink_target"],
         edge_map=data["edge_map"],
         edge_polylines_mm=meta.get("edge_polylines_mm") or [],
+        hatch_polylines_mm=meta.get("hatch_polylines_mm") or [],
         regions=[RegionPoly.model_validate(r) for r in meta.get("regions") or []],
         clusters=[ColorCluster.model_validate(c) for c in meta.get("clusters") or []],
         pen_map=meta.get("pen_map") or {},
@@ -152,11 +158,23 @@ def resolve_portrait_vector(
     filter_speckle: int | None = None,
     min_path_points: int | None = None,
     contrast: float | None = None,
+    contour_simplify: int | None = None,
+    hatch_size: int | None = None,
+    linedraw_jitter: float | None = None,
 ) -> tuple[PortraitVector, bool]:
     """Return (vector, cache_hit)."""
     from botdraw.portrait.ingest import ingest_portrait
 
     contrast_v = 1.12 if contrast is None else float(contrast)
+    key_kwargs = dict(
+        posterize_levels=posterize_levels,
+        filter_speckle=filter_speckle,
+        min_path_points=min_path_points,
+        contrast=contrast_v,
+        contour_simplify=contour_simplify,
+        hatch_size=hatch_size,
+        linedraw_jitter=linedraw_jitter,
+    )
 
     if not force_reingest:
         if reuse_ingest and ingest_id:
@@ -170,10 +188,7 @@ def resolve_portrait_vector(
             quality=quality,
             crop=crop,
             paper=paper,
-            posterize_levels=posterize_levels,
-            filter_speckle=filter_speckle,
-            min_path_points=min_path_points,
-            contrast=contrast_v,
+            **key_kwargs,
         )
         pv = cache_get_by_key(key)
         if pv is not None:
@@ -186,10 +201,7 @@ def resolve_portrait_vector(
         paper=paper,
         crop=crop,
         auto_frame=auto_frame if crop is None else False,
-        posterize_levels=posterize_levels,
-        filter_speckle=filter_speckle,
-        min_path_points=min_path_points,
-        contrast=contrast_v,
+        **key_kwargs,
     )
     iid = save_portrait_vector(pv)
     key = make_ingest_key(
@@ -199,10 +211,7 @@ def resolve_portrait_vector(
         quality=quality,
         crop=crop or pv.crop,
         paper=paper,
-        posterize_levels=posterize_levels,
-        filter_speckle=filter_speckle,
-        min_path_points=min_path_points,
-        contrast=contrast_v,
+        **key_kwargs,
     )
     cache_put_key(key, iid)
     return pv, False

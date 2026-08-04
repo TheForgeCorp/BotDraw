@@ -49,6 +49,7 @@ class PortraitVector(BaseModel):
     ink_target: Any  # np.ndarray float32 HxW darkness 0..1
     edge_map: Any  # np.ndarray float32 HxW
     edge_polylines_mm: list[list[tuple[float, float]]] = Field(default_factory=list)
+    hatch_polylines_mm: list[list[tuple[float, float]]] = Field(default_factory=list)
     regions: list[RegionPoly] = Field(default_factory=list)
     clusters: list[ColorCluster] = Field(default_factory=list)
     pen_map: dict[str, str] = Field(default_factory=dict)
