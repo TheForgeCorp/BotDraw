@@ -48,6 +48,16 @@ if WEB_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")
 
 
+@app.middleware("http")
+async def _dev_lab_no_cache(request, call_next):
+    """Avoid stale Dev Lab JS/CSS when iterating on the UI behind a tunnel."""
+    response = await call_next(request)
+    path = request.url.path or ""
+    if path == "/" or path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-store, max-age=0"
+    return response
+
+
 class RenderRequest(BaseModel):
     app: str = "genartbot"
     style_id: str
