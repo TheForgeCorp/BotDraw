@@ -569,7 +569,7 @@ def ingest_portrait(
         hsize = 20 if quality_enum == QualityPreset.BOOTH_FAST else (14 if quality_enum == QualityPreset.BOOTH_BALANCED else 10)
     else:
         hsize = int(hatch_size)
-    jitter = 0.04 if linedraw_jitter is None else float(linedraw_jitter)
+    jitter = 0.02 if linedraw_jitter is None else float(linedraw_jitter)
 
     # Load full-res for framing
     if image_array is not None:
@@ -608,11 +608,11 @@ def ingest_portrait(
 
     edge_budget = min(
         max_paths // 2,
-        400 if quality_enum == QualityPreset.BOOTH_FAST else (1200 if quality_enum == QualityPreset.BOOTH_BALANCED else 4000),
+        350 if quality_enum == QualityPreset.BOOTH_FAST else (900 if quality_enum == QualityPreset.BOOTH_BALANCED else 1100),
     )
     hatch_budget = min(
         max_paths,
-        800 if quality_enum == QualityPreset.BOOTH_FAST else (2500 if quality_enum == QualityPreset.BOOTH_BALANCED else 6000),
+        800 if quality_enum == QualityPreset.BOOTH_FAST else (2000 if quality_enum == QualityPreset.BOOTH_BALANCED else 3500),
     )
     edge_polys, hatch_polys, edges = linedraw_edges_and_hatch(
         lum.astype(np.float32),

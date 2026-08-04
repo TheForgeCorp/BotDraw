@@ -49,6 +49,70 @@ def test_dark_bg_hatch_skips_flat_border():
     )
 
 
+def test_face_features_produce_interior_edges():
+    """Bright face with dark glasses + mouth marks should yield interior paths."""
+    size = 200
+    rgb = _dark_bg_bright_face(size)
+    # glasses rectangle + mouth
+    rgb[55:62, 70:130] = (25, 25, 25)
+    rgb[55:90, 70:78] = (25, 25, 25)
+    rgb[55:90, 122:130] = (25, 25, 25)
+    rgb[110:114, 85:115] = (60, 40, 40)
+    contours, _ = contours_from_lum(luminance(rgb), simplify=1, jitter=0.0, max_paths=400)
+    assert len(contours) >= 3
+    # At least one path should land in the face interior band (not only outer ring)
+    interior = 0
+    for c in contours:
+        for x, y in c:
+            if 50 < x < 150 and 50 < y < 140:
+                interior += 1
+                break
+    assert interior >= 2, f"expected interior face edges, got interior_hits={interior}"
+
+
+def test_linework_skips_region_spikes_by_default():
+    from botdraw.core.models import PaletteSet, Pen, StyleParams, QualityPreset
+    from botdraw.portrait.models import PortraitVector, RegionPoly, CropRect
+    from botdraw.portrait.restyle import restyle_linework
+
+    # Spiky page-spanning region that must be rejected
+    spike = [(0.0, 0.0), (200.0, 0.0), (5.0, 280.0), (0.0, 0.0)]
+    edge = [[(40.0, 40.0), (80.0, 40.0), (80.0, 90.0)]]
+    hatch = [[(50.0, 60.0), (90.0, 60.0)]]
+    rgb = np.ones((32, 32, 3), dtype=np.float32) * 128
+    lum = np.ones((32, 32), dtype=np.float32) * 128
+    pv = PortraitVector(
+        width_px=32,
+        height_px=32,
+        rgb=rgb,
+        lum=lum,
+        ink_target=np.clip(1.0 - lum / 255.0, 0, 1).astype(np.float32),
+        edge_map=np.zeros((32, 32), dtype=np.float32),
+        page_w_mm=210.0,
+        page_h_mm=297.0,
+        crop=CropRect(),
+        regions=[
+            RegionPoly(id="r0", points_mm=spike, mean_rgb=(80, 40, 40), area=999),
+        ],
+        edge_polylines_mm=edge,
+        hatch_polylines_mm=hatch,
+        pen_map={"edge": "black", "hatch": "navy", "r0": "crimson"},
+    )
+    palette = PaletteSet(
+        id="t",
+        name="t",
+        pens=[
+            Pen(id="black", name="Black", color_hex="#111111"),
+            Pen(id="navy", name="Navy", color_hex="#1e3a5f"),
+            Pen(id="crimson", name="Crimson", color_hex="#9b1b30"),
+        ],
+    )
+    layered = restyle_linework(pv, palette, StyleParams(quality=QualityPreset.BOOTH_BALANCED, seed=1))
+    pens = {p.pen_id for pas in layered.passes for p in pas.polylines}
+    assert "crimson" not in pens
+    assert "black" in pens
+
+
 def test_hatch_off_empty():
     lum = luminance(synthetic_portrait(96).astype(np.float32))
     assert hatch_from_lum(lum, hatch_size=0) == []

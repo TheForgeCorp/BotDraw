@@ -102,7 +102,7 @@ def autocontrast_lum(lum: np.ndarray, cutoff: float = 10.0) -> np.ndarray:
 def edge_bitmap(lum: np.ndarray, *, low: float = 42.0, high: float = 95.0) -> np.ndarray:
     """Sobel magnitude + dual-threshold (Canny-lite). Returns bool HxW mask."""
     g = Image.fromarray(np.clip(lum, 0, 255).astype(np.uint8), mode="L")
-    g = g.filter(ImageFilter.GaussianBlur(radius=0.8))
+    g = g.filter(ImageFilter.GaussianBlur(radius=1.25))
     arr = np.asarray(g, dtype=np.float32)
     kx = np.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=np.float32)
     ky = np.array([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=np.float32)
@@ -344,17 +344,13 @@ def contours_from_lum(
     max_paths: int = 2000,
 ) -> tuple[list[list[tuple[float, float]]], np.ndarray]:
     """
-    Dense edge chains from Sobel + hysteresis (portrait-friendly).
+    Portrait edge chains: silhouette structure + face-feature pass.
 
-    `simplify` controls post-trace strength (1=finest). Working resolution stays
-    high except for aggressive simplify (>=3) used by booth-fast.
+    `simplify` controls post-trace strength (1=finest).
     """
     h0, w0 = lum.shape
     strength = max(1, int(simplify))
-    if strength >= 3:
-        sc = 2
-    else:
-        sc = 1
+    sc = 2 if strength >= 3 else 1
     w_s = max(8, w0 // sc)
     h_s = max(8, int(round(h0 * (w_s / w0))))
     small = np.asarray(
@@ -363,18 +359,20 @@ def contours_from_lum(
         ),
         dtype=np.float32,
     )
-    boosted = _local_contrast_boost(small, radius=max(3, 6 // sc), amount=1.45)
-    small_u8 = autocontrast_lum(boosted, cutoff=6.0)
+    boosted = _local_contrast_boost(small, radius=max(3, 5 // sc), amount=1.55)
+    small_u8 = autocontrast_lum(boosted, cutoff=5.0)
 
-    # Structure-first edges; second pass only for faint facial features
-    mask_hi = edge_bitmap(small_u8.astype(np.float32), low=55.0, high=120.0)
-    mask_lo = edge_bitmap(small_u8.astype(np.float32), low=38.0, high=88.0)
-    # Prefer strong edges; add low-pass where it overlaps strong neighborhoods
     from numpy.lib.stride_tricks import sliding_window_view
 
-    pad_hi = np.pad(mask_hi.astype(np.uint8), 2, mode="constant")
-    near_hi = sliding_window_view(pad_hi, (5, 5)).max(axis=(2, 3)).astype(bool)
-    mask = mask_hi | (mask_lo & near_hi)
+    # Silhouette / high-contrast structure
+    mask_hi = edge_bitmap(small_u8.astype(np.float32), low=58.0, high=125.0)
+    # Face interior: bright after autocontrast (skin/glasses area)
+    face = small_u8.astype(np.float32) >= 100.0
+    pad_f = np.pad(face.astype(np.uint8), 2, mode="constant")
+    face_d = sliding_window_view(pad_f, (5, 5)).max(axis=(2, 3)).astype(bool)
+    # Soft facial features — only inside face ROI
+    mask_face = edge_bitmap(small_u8.astype(np.float32), low=28.0, high=65.0) & face_d
+    mask = mask_hi | mask_face
 
     edge_full = np.asarray(
         Image.fromarray((mask.astype(np.uint8) * 255), mode="L").resize(
@@ -383,10 +381,10 @@ def contours_from_lum(
         dtype=np.float32,
     )
 
-    min_len = 18 if strength <= 1 else (14 if strength == 2 else 10)
+    min_len = 16 if strength <= 1 else (14 if strength == 2 else 10)
     contours = _trace_edge_chains(mask, min_len=min_len)
 
-    # Classic dual-axis only for long silhouette strokes (filters short noise)
+    # Dual-axis silhouette only (long strokes) — avoids hair noise piles
     dots1 = _getdots(mask_hi)
     c1 = _connectdots(dots1)
     pil = Image.fromarray(mask_hi.astype(np.uint8) * 255, mode="L")
@@ -395,27 +393,22 @@ def contours_from_lum(
     dots2 = _getdots(mask2)
     c2 = _connectdots(dots2)
     c2_mapped: list[list[tuple[int, int]]] = [[(p[1], p[0]) for p in c] for c in c2]
-    sil_min = max(28, min_len * 2)
+    sil_min = max(36, min_len * 3)
     for c in c1 + c2_mapped:
         if len(c) >= sil_min:
             contours.append([(float(x), float(y)) for x, y in c])
 
-    contours = _merge_near_endpoints(contours, dist_thresh=5.0 if strength <= 1 else 7.0)
+    contours = _merge_near_endpoints(contours, dist_thresh=8.0 if strength <= 1 else 10.0)
+    # Try reverse-join without duplicating: reverse orphans then merge once
+    contours = [list(reversed(c)) for c in contours]
+    contours = _merge_near_endpoints(contours, dist_thresh=7.0)
 
-    if strength == 1:
-        step = 2
-    elif strength == 2:
-        step = 2
-    else:
-        step = 3
+    step = 2 if strength <= 2 else 3
     contours = _subsample(contours, step=step)
     scaled: list[list[tuple[float, float]]] = [[(x * sc, y * sc) for x, y in c] for c in contours]
 
-    tol = 0.85 if strength <= 1 else (1.2 if strength == 2 else 1.8)
+    tol = 1.35 if strength <= 1 else (1.7 if strength == 2 else 2.2)
     scaled = _dp_simplify_px(scaled, tolerance=tol * float(sc))
-
-    # Drop leftover speckles by path length in px
-    min_px = 22.0 if strength <= 1 else (16.0 if strength == 2 else 12.0)
 
     def plen(pts):
         t = 0.0
@@ -423,27 +416,56 @@ def contours_from_lum(
             t += math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1])
         return t
 
+    # Keep medium feature strokes; drop speckles
+    min_px = 24.0 if strength <= 1 else (18.0 if strength == 2 else 12.0)
     scaled = [c for c in scaled if plen(c) >= min_px]
 
-    amount = 3.0 * float(jitter)
-    scaled = _apply_jitter(scaled, amount_px=amount, seed=seed)
+    def bbox_ok(pts):
+        xs=[p[0] for p in pts]; ys=[p[1] for p in pts]
+        return (max(xs)-min(xs) >= 4.0) or (max(ys)-min(ys) >= 4.0)
 
-    scaled.sort(key=plen, reverse=True)
+    scaled = [c for c in scaled if bbox_ok(c)]
+
+    # Prefer paths that touch the face ROI (feature retention) when over budget
+    if len(scaled) > max_paths:
+        face_big = np.asarray(
+            Image.fromarray((face_d.astype(np.uint8) * 255), mode="L").resize(
+                (w0, h0), Image.Resampling.NEAREST
+            ),
+            dtype=np.uint8,
+        ) > 127
+
+        def face_score(pts):
+            hits = 0
+            for x, y in pts[:: max(1, len(pts) // 12)]:
+                ix, iy = int(round(x)), int(round(y))
+                if 0 <= iy < h0 and 0 <= ix < w0 and face_big[iy, ix]:
+                    hits += 1
+            return hits * 1000.0 + plen(pts)
+
+        scaled.sort(key=face_score, reverse=True)
+        scaled = scaled[:max_paths]
+    else:
+        scaled.sort(key=plen, reverse=True)
+
+    amount = 2.0 * float(jitter)
+    scaled = _apply_jitter(scaled, amount_px=amount, seed=seed)
     return scaled[:max_paths], edge_full
+
 
 
 def _midtone_hatch_mask(small: np.ndarray) -> np.ndarray:
     """
     True where hatch is allowed: midtones with local structure.
 
-    Skips flat near-black (dark walls). Allows softer face midtones (cheeks)
-    when local variance shows skin/hair structure.
+    Skips flat near-black walls. Includes soft face midtones (cheeks)
+    even when relatively bright after autocontrast.
     """
     arr = small.astype(np.float32)
-    lo = float(np.percentile(arr, 15))
-    hi = float(np.percentile(arr, 92))
-    lo = max(28.0, min(lo, 85.0))
-    hi = min(230.0, max(hi, 155.0))
+    lo = float(np.percentile(arr, 12))
+    hi = float(np.percentile(arr, 94))
+    lo = max(26.0, min(lo, 80.0))
+    hi = min(235.0, max(hi, 170.0))
     tone = (arr >= lo) & (arr <= hi)
 
     pad = np.pad(arr, 1, mode="edge")
@@ -451,8 +473,9 @@ def _midtone_hatch_mask(small: np.ndarray) -> np.ndarray:
 
     win = sliding_window_view(pad, (3, 3))
     local_std = win.reshape(win.shape[0], win.shape[1], -1).std(axis=2)
-    structured = local_std >= 3.2
-    not_wall = ~((arr < 45.0) & (local_std < 6.0))
+    # Softer gate on brighter cells (face skin); stricter on dark cells (walls)
+    structured = np.where(arr >= 120.0, local_std >= 2.2, local_std >= 3.5)
+    not_wall = ~((arr < 42.0) & (local_std < 7.0))
     return tone & structured & not_wall
 
 
@@ -464,7 +487,7 @@ def hatch_from_lum(
     seed: int = 1,
     max_paths: int = 4000,
 ) -> list[list[tuple[float, float]]]:
-    """Portrait midtone hatch. hatch_size<=0 → empty. Skips flat dark background."""
+    """Portrait midtone hatch with long joined strokes. hatch_size<=0 → empty."""
     sc = int(hatch_size)
     if sc <= 0:
         return []
@@ -477,7 +500,7 @@ def hatch_from_lum(
         ),
         dtype=np.uint8,
     )
-    small = autocontrast_lum(small.astype(np.float32), cutoff=8.0)
+    small = autocontrast_lum(small.astype(np.float32), cutoff=6.0)
     allow = _midtone_hatch_mask(small)
 
     lg1: list[list[tuple[float, float]]] = []
@@ -489,20 +512,21 @@ def hatch_from_lum(
             if not allow[y0, x0]:
                 continue
             v = float(vals[y0, x0])
-            x = x0 * hs + (0.25 * hs if (y0 % 2) else 0.0)
-            y = y0 * hs
-            if v > 175:
-                lg1.append([(x, y + hs / 3), (x + hs * 0.9, y + hs / 3)])
-            elif v > 115:
-                lg1.append([(x, y + hs / 4), (x + hs, y + hs / 4)])
+            x = x0 * hs
+            y = y0 * hs + (0.15 * hs if (x0 % 2) else 0.0)
+            # Long cell-spanning strokes (joinable) — avoids tiny + marks
+            if v > 180:
+                lg1.append([(x, y + hs * 0.4), (x + hs, y + hs * 0.4)])
+            elif v > 120:
+                lg1.append([(x, y + hs * 0.35), (x + hs, y + hs * 0.35)])
                 if (x0 + y0) % 2 == 0:
                     lg2.append([(x + hs, y), (x, y + hs)])
             else:
-                lg1.append([(x, y + hs / 4), (x + hs, y + hs / 4)])
-                lg1.append([(x, y + hs / 2 + hs / 4), (x + hs, y + hs / 2 + hs / 4)])
+                lg1.append([(x, y + hs * 0.25), (x + hs, y + hs * 0.25)])
+                lg1.append([(x, y + hs * 0.65), (x + hs, y + hs * 0.65)])
                 lg2.append([(x + hs, y), (x, y + hs)])
 
-    def join_collinear(lines: list[list[tuple[float, float]]]) -> list[list[tuple[float, float]]]:
+    def join_collinear(lines: list[list[tuple[float, float]]], thresh: float = 0.85) -> list[list[tuple[float, float]]]:
         lines = [list(l) for l in lines]
         changed = True
         while changed:
@@ -515,7 +539,7 @@ def hatch_from_lum(
                         continue
                     ax, ay = lines[i][-1]
                     bx, by = lines[j][0]
-                    if abs(ax - bx) < 0.6 and abs(ay - by) < 0.6:
+                    if abs(ax - bx) < thresh and abs(ay - by) < thresh:
                         lines[i] = lines[i] + lines[j][1:]
                         lines[j] = []
                         changed = True
@@ -523,8 +547,10 @@ def hatch_from_lum(
         return lines
 
     lines = join_collinear(lg1) + join_collinear(lg2)
+    # Drop tiny leftovers
+    lines = [l for l in lines if math.hypot(l[-1][0] - l[0][0], l[-1][1] - l[0][1]) >= hs * 0.6]
     table = _make_perlin_table(seed)
-    amount = float(sc) * float(jitter) * 0.35
+    amount = float(sc) * float(jitter) * 0.2
     out: list[list[tuple[float, float]]] = []
     for i, line in enumerate(lines):
         pts: list[tuple[float, float]] = []
@@ -535,6 +561,7 @@ def hatch_from_lum(
         if len(pts) >= 2:
             out.append(pts)
     return out[:max_paths]
+
 
 
 def polylines_to_mm(
