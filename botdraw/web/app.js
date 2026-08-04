@@ -29,6 +29,7 @@ let portraitShowCrop = true;
 let portraitShowHatch = true;
 let portraitHatchEnabled = true;
 let portraitIngestTimer = null;
+let portraitPenMap = null;
 const PORTRAIT_LINE_TYPES = [
   "solid", "dashed", "dotted", "dash_dot", "zigzag", "triangle", "wave", "square_wave",
   "half_circle", "scallop_alt", "beads", "double", "railroad", "stitch", "hatch_tick",
