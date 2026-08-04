@@ -41,15 +41,22 @@ def build_portrait_mesh(
     page_w_mm: float,
     page_h_mm: float,
     max_code: int = 4,
+    lum_raw: np.ndarray | None = None,
 ) -> dict[str, Any]:
     """
     Build mesh arrays + interface adjacency.
+
+    `lum_raw` (unposterized luma) feeds the focus/sharpness measures;
+    posterization fabricates hard steps that read as fake in-focus edges.
 
     Returns dict compatible with tone_grid fields plus mesh_edge / mesh_face /
     link_h (bool array for shade joins) and edge_degree (for edge prune).
     """
     sc = max(4, int(cell_px))
     h0, w0 = lum.shape
+    if lum_raw is None or np.asarray(lum_raw).shape != (h0, w0):
+        lum_raw = lum
+    lum_raw = np.asarray(lum_raw, dtype=np.float32)
     w_s = max(4, w0 // sc)
     h_s = max(4, int(round(h0 * (w_s / w0))))
 
@@ -70,6 +77,39 @@ def build_portrait_mesh(
     ink_s = np.asarray(
         Image.fromarray(np.clip(ink_soft * 255.0, 0, 255).astype(np.uint8), mode="L").resize(
             (w_s, h_s), Image.Resampling.LANCZOS
+        ),
+        dtype=np.float32,
+    ) / 255.0
+
+    # Per-cell focus measure: high-frequency energy of the source luma. Bokeh
+    # backgrounds are smooth, so their cells score low and get suppressed.
+    lum8 = np.clip(lum_raw, 0, 255).astype(np.uint8)
+    lum_blur = np.asarray(
+        Image.fromarray(lum8, mode="L").filter(
+            ImageFilter.GaussianBlur(radius=max(1.5, sc * 0.5))
+        ),
+        dtype=np.float32,
+    )
+    hf_full = np.abs(lum_raw - lum_blur)
+    hf_s = np.asarray(
+        Image.fromarray(np.clip(hf_full, 0, 255).astype(np.uint8), mode="L").resize(
+            (w_s, h_s), Image.Resampling.BOX
+        ),
+        dtype=np.float32,
+    )
+    # Absolute units (luma delta): in-focus texture measures ~4–17, bokeh ~0–4.
+    focus = hf_s.astype(np.float32)
+
+    # Boundary sharpness: peak gradient relative to local luma range (edge
+    # width). A sharp edge packs its step into 1–2 px (ratio near 1); a bokeh
+    # edge spreads the same step over many px (ratio well under 0.2).
+    gy_f, gx_f = np.gradient(lum_raw)
+    gm_max = ndimage.maximum_filter(np.hypot(gx_f, gy_f), size=sc)
+    rng = ndimage.maximum_filter(lum_raw, size=2 * sc) - ndimage.minimum_filter(lum_raw, size=2 * sc)
+    ratio_full = np.clip(gm_max / (rng + 8.0), 0.0, 1.0)
+    sharp = np.asarray(
+        Image.fromarray((ratio_full * 255.0).astype(np.uint8), mode="L").resize(
+            (w_s, h_s), Image.Resampling.BOX
         ),
         dtype=np.float32,
     ) / 255.0
@@ -117,6 +157,13 @@ def build_portrait_mesh(
             dtype=np.float32,
         ) / 255.0
 
+    # Damp edge energy in defocused regions outside the face so bokeh shapes
+    # neither become structure cells nor lend support to edge chains. Sharp
+    # boundaries (high hf) keep full energy; soft bokeh boundaries fade out.
+    defocus = (~face_s) & ((focus < 3.25) | (sharp < 0.12))
+    sharp_scale = np.clip((sharp - 0.08) / 0.15, 0.25, 1.0).astype(np.float32)
+    mesh_edge = np.where(~face_s, mesh_edge * sharp_scale, mesh_edge).astype(np.float32)
+
     # Cell-size-aware structure gate: a physical edge stroke ~4px wide gives
     # occupancy ≈ 4/cell. Fixed thresholds flood fine meshes (5px → quarter of
     # the grid went code 5), so scale by cell size instead.
@@ -131,12 +178,15 @@ def build_portrait_mesh(
     out_bins = np.array([0.18, 0.30, 0.45, 0.58, 0.72], dtype=np.float32)
     codes_face = np.digitize(ink, face_bins).astype(np.uint8)  # 0..5
     codes_out = np.digitize(ink, out_bins).astype(np.uint8)
-    # Deep face shade stays drawable
-    codes_face[codes_face == 5] = 4 if max_code >= 4 else 3
+    # Deep shade stays drawable: darkness alone never makes a structure cell
+    # (code 5 is assigned only from edge support below)
+    deep_code = 4 if max_code >= 4 else 3
+    codes_face[codes_face == 5] = deep_code
+    codes_out[codes_out == 5] = deep_code
     tone_codes = np.where(face_s, codes_face, codes_out).astype(np.uint8)
 
-    # Skips: disallowed cells, thin outside ink (walls)
-    skip = (~allow) | ((~face_s) & (ink < 0.28))
+    # Skips: disallowed cells, thin outside ink (walls), defocused background
+    skip = (~allow) | ((~face_s) & (ink < 0.28)) | defocus
     tone_codes[skip] = 0
     # Structure cells: leave to edges
     structure = edge_strong & (ink >= 0.40) & (~skip)
@@ -198,6 +248,8 @@ def build_portrait_mesh(
         "mesh_face": face_s.astype(np.uint8),
         "mesh_grad_x": grad_x,
         "mesh_grad_y": grad_y,
+        "mesh_focus": focus,
+        "mesh_sharp": sharp,
         "link_h": link_h,
         "edge_degree": edge_degree,
         "mesh_cell_px": float(sc),
@@ -501,6 +553,8 @@ def prune_edges_with_mesh(
     codes_face = np.asarray(mesh.get("mesh_face"), dtype=np.uint8)
     mesh_edge = np.asarray(mesh["mesh_edge"], dtype=np.float32)
     edge_degree = np.asarray(mesh["edge_degree"], dtype=np.uint8)
+    sharp = mesh.get("mesh_sharp")
+    sharp = np.asarray(sharp, dtype=np.float32) if sharp is not None else None
     hs = float(mesh["tone_cell_px"])
     h_s, w_s = mesh_edge.shape
     img_h, img_w = mesh["img_shape"]
@@ -520,18 +574,23 @@ def prune_edges_with_mesh(
         step = max(1, len(c) // 12)
         edge_vals = []
         deg_vals = []
+        sharp_vals = []
         face_hits = 0
         n = 0
         for x, y in c[::step]:
             cy, cx = sample_cell(x, y)
             edge_vals.append(float(mesh_edge[cy, cx]))
             deg_vals.append(int(edge_degree[cy, cx]))
+            if sharp is not None:
+                sharp_vals.append(float(sharp[cy, cx]))
             if codes_face.size and codes_face[cy, cx]:
                 face_hits += 1
             n += 1
         face_frac = face_hits / max(1, n)
         mean_edge = float(np.mean(edge_vals)) if edge_vals else 0.0
         mean_deg = float(np.mean(deg_vals)) if deg_vals else 0.0
+        # No sharpness data (cached vectors): treat as in-focus
+        mean_sharp = float(np.mean(sharp_vals)) if sharp_vals else 99.0
 
         if face_frac >= 0.35:
             if plen >= inside_min_len or mean_deg >= 1.0:
@@ -543,9 +602,9 @@ def prune_edges_with_mesh(
             bbox = max(max(xs_c) - min(xs_c), max(ys_c) - min(ys_c))
             if bbox < hs * 2.2:
                 continue
-            if plen >= outside_min_len and mean_edge >= 0.15 and mean_deg >= 0.75:
+            if plen >= outside_min_len and mean_edge >= 0.15 and mean_deg >= 0.75 and mean_sharp >= 0.13:
                 out.append(c)
-            elif plen >= outside_min_len * 1.6 and mean_edge >= 0.24:
+            elif plen >= outside_min_len * 1.6 and mean_edge >= 0.24 and mean_sharp >= 0.10:
                 out.append(c)
     return out
 

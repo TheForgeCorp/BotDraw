@@ -762,6 +762,7 @@ def ingest_portrait(
             page_w_mm=page_w,
             page_h_mm=page_h,
             max_code=max_tone_code,
+            lum_raw=luminance(rgb_cropped).astype(np.float32),
         )
         edges_px_pruned = prune_edges_with_mesh(edges_px_pending, tone_pack)
         # Re-apply face budget after prune

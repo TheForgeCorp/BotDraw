@@ -54,7 +54,7 @@ def make_ingest_key(
         f"|{mode}|{quality}|{paper}|{_crop_key(crop)}"
         f"|p{posterize_levels}|s{filter_speckle}|m{min_path_points}|c{contrast}"
         f"|cs{contour_simplify}|hs{hatch_size}|lj{linedraw_jitter}|e{ensemble}"
-        f"|sm{scan_mode}|mesh1"  # portrait mesh IR + interface walks
+        f"|sm{scan_mode}|mesh2"  # mesh IR + walks + focus-aware bg suppression
     )
     h.update(knobs.encode())
     return h.hexdigest()[:24]

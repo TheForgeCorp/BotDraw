@@ -100,6 +100,34 @@ def test_directional_strokes_follow_structure():
     assert v_dominant >= len(strokes) * 0.6
 
 
+def test_defocused_background_suppressed_but_texture_kept():
+    size = 240
+    rng = np.random.default_rng(7)
+    lum = np.full((size, size), 235.0, dtype=np.float32)
+    yy, xx = np.mgrid[0:size, 0:size]
+    # Bright face blob (establishes face ROI at center)
+    face = ((yy - size * 0.4) ** 2 + (xx - size * 0.5) ** 2) < (size * 0.2) ** 2
+    lum[face] = 170.0
+    # Left: dark bokeh bar (smooth ramp edges, no texture)
+    ramp = np.clip((np.abs(xx - 30) - 8) / 18.0, 0, 1)
+    lum = np.minimum(lum, 40.0 + 195.0 * ramp)
+    # Right: dark in-focus textured patch (sharp noise)
+    patch = (slice(150, 220), slice(180, 230))
+    lum[patch] = 60.0 + rng.integers(0, 70, (70, 50)).astype(np.float32)
+    ink = np.clip(1.0 - lum / 255.0, 0, 1).astype(np.float32)
+    mesh = build_portrait_mesh(
+        lum, ink, cell_px=6, edge_map=None, page_w_mm=100.0, page_h_mm=100.0, max_code=4
+    )
+    codes = mesh["tone_codes"]
+    hs = 240 / codes.shape[1]
+    bar = codes[:, : int(60 / hs)]
+    tex = codes[int(150 / hs) : int(220 / hs), int(180 / hs) : int(230 / hs)]
+    bar_frac = float((bar >= 1).mean())
+    tex_frac = float((tex >= 1).mean())
+    assert tex_frac > 0.4, f"textured dark patch should keep shade, got {tex_frac}"
+    assert bar_frac < tex_frac * 0.5, f"bokeh bar should be suppressed, got {bar_frac} vs {tex_frac}"
+
+
 def test_ingest_uses_mesh_walks_and_finer_default():
     rgb = _dark_bg_bright_face(160)
     rgb[40:46, 55:105] = 20
