@@ -91,9 +91,28 @@ html, body { margin: 0; min-height: 100%; color: var(--ink); font-family: var(--
 .stage { padding: 0.85rem; display: flex; flex-direction: column; min-height: 70vh; }
 .stage-head { display: flex; justify-content: space-between; gap: 0.8rem; align-items: baseline; }
 .stats { font-size: 0.8rem; opacity: 0.75; font-family: var(--font-mono); }
+.lab-emu-frame {
+  margin-top: 0.65rem;
+  flex: 1 1 auto;
+  min-height: 42vh;
+}
 #emu {
-  width: 100%; max-height: 58vh; background: linear-gradient(#f7f1e8, #efe6da);
-  border-radius: 12px; border: 1px solid var(--line); margin-top: 0.65rem;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  max-height: min(62vh, 720px);
+  aspect-ratio: 3 / 4;
+  background: #f7f1e8;
+  border-radius: 0;
+  border: 1px solid var(--line);
+  display: block;
+  object-fit: contain;
+}
+.lab-zoom { margin-top: 0.55rem; }
+.letters-zoom button.active {
+  background: var(--l-ink, #0a0a0a);
+  color: #fff;
+  border-color: var(--l-ink, #0a0a0a);
 }
 .transport, .export-bar { display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; margin-top: 0.65rem; }
 .transport label, .chk { display: flex; gap: 0.35rem; align-items: center; font-size: 0.8rem; }
@@ -572,7 +591,7 @@ body[data-app="lettersbot"] .tabs button.active, body[data-app="portraitbot"] .t
   width: 100%;
   max-width: 100%;
   height: auto;
-  max-height: min(48vh, 420px);
+  max-height: min(70vh, 780px);
   aspect-ratio: 1 / 1.414;
   background: #fff;
   border: 1px solid var(--l-line-strong);
@@ -725,7 +744,7 @@ body[data-app="lettersbot"] .tabs button.active, body[data-app="portraitbot"] .t
 #portrait-emu {
   width: 100%;
   height: auto;
-  max-height: min(48vh, 420px);
+  max-height: min(62vh, 680px);
   background: #fff;
   border: 1px solid var(--l-line-strong);
   display: block;
@@ -841,9 +860,13 @@ body[data-app="tools"] .layout.lab .panel {
   display: block;
   background: #fafafa;
 }
-.stage.compare-on > #emu {
+.stage.compare-on .lab-emu-frame {
+  min-height: 28vh;
+}
+.stage.compare-on > .lab-emu-frame #emu,
+.stage.compare-on #emu {
   width: 100%;
-  max-height: 52vh;
+  max-height: min(48vh, 560px);
 }
 .library-list {
   display: flex;

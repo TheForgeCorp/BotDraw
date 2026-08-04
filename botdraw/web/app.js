@@ -686,12 +686,14 @@ function applyLineStockToPortraitForm(root, stock) {
 function ensureLabEmuInCompare() {
   const compare = document.getElementById("lab-compare");
   const pane = document.querySelector(".lab-vector-pane");
+  const frame = document.getElementById("lab-emu-frame");
   const emu = document.getElementById("emu");
   if (!compare || !pane || !emu) return;
   compare.hidden = false;
-  const stage = emu.closest(".stage");
+  const stage = (frame || emu).closest(".stage");
   if (stage) stage.classList.add("compare-on");
-  if (emu.parentElement !== pane) pane.appendChild(emu);
+  const moveEl = frame || emu;
+  if (moveEl.parentElement !== pane) pane.appendChild(moveEl);
 }
 
 function drawLabSource(file) {
@@ -2887,8 +2889,9 @@ function wireZoomToolbar(prefix, emu) {
 
 wireZoomToolbar("letters", lettersPlayer);
 wireZoomToolbar("portrait", portraitPlayer);
-player.enableInteraction();
-player.syncSize();
+wireZoomToolbar("lab", player);
+
+setShellForApp(currentApp);
 
 renderControls().catch((e) => {
   statsEl.textContent = String(e);
