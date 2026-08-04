@@ -86,8 +86,10 @@ anti_patterns:
 |--------|------|
 | Top app tabs | BotDraw apps |
 | LETTERS identity | Static product lockup |
-| Left | Type rail + editor (layers, draft meta, palette, Vectorize) |
-| Right | Paper emulator + margins + hardware download |
+| Left (~2/3) | Type rail + editor (layers, draft meta, palette, Vectorize) |
+| Right (~1/3) | Paper emulator + margins + hardware download |
+
+Paper stage canvas is write-optimized (`getContext("2d", { willReadFrequently: false })`). Pixel-read analysis (future image vectorize) must use a separate canvas with `willReadFrequently: true`.
 
 ## Venue-facing (future)
 

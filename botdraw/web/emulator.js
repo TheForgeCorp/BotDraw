@@ -2,7 +2,9 @@
 class EmulatorPlayer {
   constructor(canvas) {
     this.canvas = canvas;
-    this.ctx = canvas.getContext("2d");
+    // Write-oriented playback; avoid willReadFrequently (readback/CPU path).
+    // https://html.spec.whatwg.org/multipage/canvas.html#concept-canvas-will-read-frequently
+    this.ctx = canvas.getContext("2d", { willReadFrequently: false, alpha: true });
     this.plan = null;
     this.index = 0;
     this.playing = false;
