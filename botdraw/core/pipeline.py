@@ -68,6 +68,15 @@ def _truthy(v: Any) -> bool:
     return str(v).strip().lower() in ("1", "true", "yes", "on")
 
 
+def _ai_review_mode(extra: dict[str, Any], *, quality: str | None = None) -> str:
+    from botdraw.portrait.claude_review import resolve_ai_review_mode
+
+    return resolve_ai_review_mode(
+        extra.get("ai_review"),
+        quality=quality or extra.get("quality"),
+    )
+
+
 def _load_rgb_for_review(image_path: str | None) -> Any:
     import numpy as np
     from PIL import Image
@@ -81,17 +90,27 @@ def _load_rgb_for_review(image_path: str | None) -> Any:
     return synthetic_portrait(512).astype(np.float32)
 
 
-def _apply_ai_scene_review(extra: dict[str, Any], *, image_path: str | None) -> dict[str, Any]:
+def _apply_ai_scene_review(
+    extra: dict[str, Any],
+    *,
+    image_path: str | None,
+    quality: str | None = None,
+) -> dict[str, Any]:
     """Merge PortraitScene knobs into extra. Fail closed on errors."""
     try:
-        from botdraw.portrait.claude_review import maybe_review_and_merge_knobs
+        from botdraw.portrait.claude_review import maybe_review_and_merge_knobs, resolve_ai_review_mode
 
+        mode = resolve_ai_review_mode(extra.get("ai_review"), quality=quality)
         rgb = _load_rgb_for_review(image_path)
-        _rgb2, merged = maybe_review_and_merge_knobs(rgb, dict(extra), enabled=True)
+        _rgb2, merged = maybe_review_and_merge_knobs(
+            rgb, dict(extra), enabled=True, mode=mode, quality=quality
+        )
         return merged
     except Exception:
         out = dict(extra)
-        out["ai_review"] = True
+        from botdraw.portrait.claude_review import resolve_ai_review_mode
+
+        out["ai_review"] = resolve_ai_review_mode(extra.get("ai_review"), quality=quality)
         out["ai_review_status"] = "scene_failed"
         return out
 
@@ -280,6 +299,10 @@ def render_job(
             decorate_layered,
             resolve_portrait_vector,
         )
+        from botdraw.portrait.claude_review import (
+            ai_review_wants_critique,
+            ai_review_wants_scene,
+        )
 
         palette = load_palette(palette_id)
         palette = apply_pen_overrides(palette, extra.get("pen_overrides"))
@@ -292,10 +315,13 @@ def render_job(
             auto_frame = extra.get("auto_frame", True)
             if isinstance(auto_frame, str):
                 auto_frame = auto_frame.lower() not in ("0", "false", "no")
-            ai_review = _truthy(extra.get("ai_review"))
-            # Pre-ingest Claude scene review → knobs (fail closed)
-            if ai_review and not extra.get("ai_critique_applied"):
-                extra = _apply_ai_scene_review(extra, image_path=image_path)
+            ai_mode = _ai_review_mode(extra, quality=quality_enum.value)
+            extra["ai_review"] = ai_mode
+            # Pre-ingest scene review → knobs (live + studio; fail closed)
+            if ai_review_wants_scene(ai_mode) and not extra.get("ai_critique_applied"):
+                extra = _apply_ai_scene_review(
+                    extra, image_path=image_path, quality=quality_enum.value
+                )
                 crop = extra.get("crop", crop)
                 auto_frame = extra.get("auto_frame", auto_frame)
                 if isinstance(auto_frame, str):
@@ -354,10 +380,10 @@ def render_job(
             image_path=image_path,
         )
 
-        # One post-render Claude critique loop (studio/dev); never unbounded
+        # One post-render critique loop (studio only); never unbounded; live skips
         if (
             (app == "portraitbot" or style_id.startswith("portrait_"))
-            and _truthy(extra.get("ai_review"))
+            and ai_review_wants_critique(_ai_review_mode(extra, quality=quality_enum.value))
             and not extra.get("ai_critique_applied")
         ):
             crit_extra = _apply_ai_critique_once(
@@ -367,6 +393,9 @@ def render_job(
                 paper_color_hex=paper_color_hex,
             )
             if crit_extra is not None:
+                # Live-safe belt: never AI-force reingest outside studio
+                if _ai_review_mode(crit_extra, quality=quality_enum.value) != "studio":
+                    crit_extra.pop("force_reingest", None)
                 redo = bool(
                     crit_extra.get("force_reingest")
                     or (
@@ -382,7 +411,12 @@ def render_job(
                         and abs(float(crit_extra["hatch_budget_mul"]) - 1.0) > 0.05
                     )
                 )
-                extra = {**crit_extra, "ai_critique_applied": True}
+                extra = {
+                    **crit_extra,
+                    "ai_critique_applied": True,
+                    "ai_review": "studio",
+                    "ai_review_status": crit_extra.get("ai_review_status") or "critique",
+                }
                 if redo:
                     extra.pop("portrait_vector", None)
                     return render_job(
@@ -418,13 +452,15 @@ def render_job(
             }
             layered = decorate_layered(layered, StrokeOrnamentParams.model_validate(orn))
 
+        ai_mode_final = _ai_review_mode(extra, quality=quality_enum.value)
         layered.meta = {
             **(layered.meta or {}),
             "paper_id": paper_id,
             "paper_color_hex": paper_color_hex,
             "ingest_cache_hit": cache_hit,
             "ingest_id": ingest_id,
-            "ai_review": bool(_truthy(extra.get("ai_review"))),
+            "ai_review": ai_mode_final,
+            "ai_review_status": extra.get("ai_review_status"),
             "ai_scene_summary": (extra.get("ai_scene") or {}).get("summary"),
             "ai_critique_summary": (extra.get("ai_critique") or {}).get("summary"),
         }
@@ -447,6 +483,20 @@ def render_job(
         (out / "layers.json").write_text(json.dumps(layers, indent=2), encoding="utf-8")
         (out / "settings.json").write_text(json.dumps(settings, indent=2), encoding="utf-8")
         (out / "palette.json").write_text(palette.model_dump_json(indent=2), encoding="utf-8")
+        if extra.get("ai_scene"):
+            try:
+                (out / "ai_scene.json").write_text(
+                    json.dumps(extra["ai_scene"], indent=2), encoding="utf-8"
+                )
+            except Exception:
+                pass
+        if extra.get("ai_critique"):
+            try:
+                (out / "ai_critique.json").write_text(
+                    json.dumps(extra["ai_critique"], indent=2), encoding="utf-8"
+                )
+            except Exception:
+                pass
         payload = plan_to_emulator_payload(plan)
         payload["layers"] = layers
         payload["settings"] = settings

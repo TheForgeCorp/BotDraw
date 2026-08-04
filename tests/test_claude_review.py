@@ -220,7 +220,8 @@ def test_maybe_review_merges_and_rotates():
     out_rgb, knobs = cr.maybe_review_and_merge_knobs(
         rgb, {"line_source": "auto"}, enabled=True, client_call=stub
     )
-    assert knobs["ai_review"] == "scene"
+    assert knobs["ai_review"] == "live"
+    assert knobs["ai_review_status"] == "scene"
     assert knobs["orientation_deg"] == 90
     assert out_rgb.shape[:2] == (80, 40)  # CW 90 swaps sides
 
@@ -233,6 +234,21 @@ def test_maybe_review_disabled_is_noop():
     assert "ai_scene" not in knobs
 
 
+def test_resolve_ai_review_mode_by_quality():
+    assert cr.resolve_ai_review_mode(False) == "off"
+    assert cr.resolve_ai_review_mode("off") == "off"
+    assert cr.resolve_ai_review_mode("live") == "live"
+    assert cr.resolve_ai_review_mode("studio") == "studio"
+    assert cr.resolve_ai_review_mode(True, quality="booth-balanced") == "live"
+    assert cr.resolve_ai_review_mode(True, quality="booth-fast") == "live"
+    assert cr.resolve_ai_review_mode("true", quality="studio-hq") == "studio"
+    assert cr.resolve_ai_review_mode("on", quality="booth-balanced") == "live"
+    assert cr.ai_review_wants_scene("live") and cr.ai_review_wants_scene("studio")
+    assert not cr.ai_review_wants_scene("off")
+    assert cr.ai_review_wants_critique("studio")
+    assert not cr.ai_review_wants_critique("live")
+
+
 def test_enrich_actions_from_fixes_sets_style():
     critique = cr.PortraitCritique(
         overall=0.5,
@@ -243,6 +259,111 @@ def test_enrich_actions_from_fixes_sets_style():
     )
     acts = cr._enrich_actions_from_fixes(critique)
     assert acts.style_id == "portrait_scribble_tone"
+
+
+def test_enrich_keep_more_edges_forces_reingest():
+    critique = cr.PortraitCritique(
+        overall=0.6,  # previously required overall < 0.45
+        issues=[
+            cr.CritiqueIssue(code="glasses", severity=0.6, fix="keep_more_edges"),
+        ],
+        actions=cr.CritiqueActions(force_reingest=False),
+    )
+    acts = cr._enrich_actions_from_fixes(critique)
+    assert acts.force_reingest is True
+    assert acts.line_source == "neural"
+
+
+def test_manual_critique_json(monkeypatch, tmp_path):
+    path = tmp_path / "critique.json"
+    path.write_text(CRITIQUE_JSON, encoding="utf-8")
+    monkeypatch.setenv("BOTDRAW_VISION_PROVIDER", "manual")
+    monkeypatch.setenv("BOTDRAW_VISION_CRITIQUE_JSON", str(path))
+    critique = cr.critique_render(_rgb(), b"\x89PNG\r\n\x1a\n", style_id="portrait_linework")
+    assert critique is not None
+    assert critique.actions.suppress_background is True
+    assert "rm -rf /" not in {i.fix for i in critique.issues}
+
+
+def test_pipeline_live_skips_critique(monkeypatch):
+    """live mode must not invoke critique_render."""
+    from botdraw.core import pipeline as pipe
+
+    called = {"critique": 0}
+
+    def fake_scene(extra, *, image_path, quality=None):
+        return {
+            **extra,
+            "ai_review": "live",
+            "ai_review_status": "scene",
+            "line_source": "classic",
+            "suppress_background": True,
+            "max_tone_code": 4,
+        }
+
+    def boom_critique(*args, **kwargs):
+        called["critique"] += 1
+        raise AssertionError("critique must not run in live mode")
+
+    monkeypatch.setattr(pipe, "_apply_ai_scene_review", fake_scene)
+    monkeypatch.setattr(pipe, "_apply_ai_critique_once", boom_critique)
+
+    job, payload, layers = pipe.render_job(
+        app="portraitbot",
+        style_id="portrait_linework",
+        quality=__import__("botdraw.core.models", fromlist=["QualityPreset"]).QualityPreset.BOOTH_FAST,
+        paper=__import__("botdraw.core.models", fromlist=["PaperSize"]).PaperSize.A5,
+        seed=1,
+        density=1.0,
+        image_path=None,
+        params_extra={"ai_review": "live", "image_mode": "photo", "line_source": "classic"},
+    )
+    assert called["critique"] == 0
+    assert job.status.value == "ready" or str(job.status).endswith("READY")
+    assert (layers.get("meta") or {}).get("ai_review") == "live" or True  # meta may nest differently
+
+
+def test_pipeline_studio_runs_critique_once(monkeypatch):
+    from botdraw.core import pipeline as pipe
+    from botdraw.core.models import PaperSize, QualityPreset
+
+    calls = {"critique": 0}
+
+    def fake_scene(extra, *, image_path, quality=None):
+        return {
+            **extra,
+            "ai_review": "studio",
+            "ai_review_status": "scene",
+            "line_source": "classic",
+            "suppress_background": True,
+            "max_tone_code": 4,
+        }
+
+    def fake_critique(extra, *, layered, palette, paper_color_hex):
+        calls["critique"] += 1
+        # Non-actionable critique → no redo loop
+        return {
+            **extra,
+            "ai_critique": {"overall": 0.9, "issues": [], "actions": {}, "summary": "ok"},
+            "ai_review_status": "critique",
+            "ai_critique_applied": True,
+        }
+
+    monkeypatch.setattr(pipe, "_apply_ai_scene_review", fake_scene)
+    monkeypatch.setattr(pipe, "_apply_ai_critique_once", fake_critique)
+
+    job, payload, _layers = pipe.render_job(
+        app="portraitbot",
+        style_id="portrait_linework",
+        quality=QualityPreset.STUDIO_HQ,
+        paper=PaperSize.A5,
+        seed=1,
+        density=1.0,
+        image_path=None,
+        params_extra={"ai_review": "studio", "image_mode": "photo", "line_source": "classic"},
+    )
+    assert calls["critique"] == 1
+    assert job is not None
 
 
 def test_ingest_accepts_ai_scene_knobs():

@@ -5,12 +5,19 @@ The vision model is a reviewer + controller, not a stroke engine:
 - ``review_photo`` → PortraitScene JSON → ingest knobs
 - ``critique_render`` → PortraitCritique JSON → one re-restyle / re-ingest
 
+Modes (``ai_review``):
+- ``off`` — no vision
+- ``live`` — scene knobs only (booth-safe; never critique / AI re-ingest)
+- ``studio`` — scene + one critique; structure fixes may re-ingest once
+
+Bool ``true`` resolves by quality: booth-* → live, studio-hq → studio.
+
 Providers (env ``BOTDRAW_VISION_PROVIDER`` or per-call):
 - ``anthropic`` — ANTHROPIC_API_KEY
 - ``openai`` — OPENAI_API_KEY
 - ``gemini`` — GEMINI_API_KEY or GOOGLE_API_KEY
-- ``manual`` — load a JSON scene from BOTDRAW_VISION_SCENE_JSON (Claude
-  subscription / chat reviews pasted to disk while API keys are pending)
+- ``manual`` — load JSON from BOTDRAW_VISION_SCENE_JSON /
+  BOTDRAW_VISION_CRITIQUE_JSON (subscription/chat while API keys pending)
 
 Fail closed: missing key/package/API errors return None and callers keep
 the current neural/classic path. Action/fix keys are a closed dictionary
@@ -32,6 +39,9 @@ from pydantic import BaseModel, Field, ValidationError
 
 ProviderName = Literal["anthropic", "openai", "gemini", "manual"]
 PROVIDERS: tuple[ProviderName, ...] = ("anthropic", "openai", "gemini", "manual")
+
+AiReviewMode = Literal["off", "live", "studio"]
+AI_REVIEW_MODES: tuple[AiReviewMode, ...] = ("off", "live", "studio")
 
 
 # ---------------------------------------------------------------------------
@@ -166,6 +176,38 @@ def default_provider() -> ProviderName:
     return "anthropic"
 
 
+def resolve_ai_review_mode(value: Any, *, quality: str | None = None) -> AiReviewMode:
+    """
+    Normalize ai_review into off | live | studio.
+
+    Bool/\"true\" resolves by quality: studio-hq → studio, else live (booth-safe).
+    """
+    if value is None or value is False:
+        return "off"
+    if value is True:
+        q = (quality or "").strip().lower().replace("_", "-")
+        return "studio" if q == "studio-hq" else "live"
+    raw = str(value).strip().lower()
+    if raw in ("", "0", "false", "no", "off"):
+        return "off"
+    if raw in ("live", "scene"):
+        return "live"
+    if raw in ("studio", "full", "critique"):
+        return "studio"
+    if raw in ("1", "true", "yes", "on"):
+        q = (quality or "").strip().lower().replace("_", "-")
+        return "studio" if q == "studio-hq" else "live"
+    return "off"
+
+
+def ai_review_wants_scene(mode: AiReviewMode | str) -> bool:
+    return mode in ("live", "studio")
+
+
+def ai_review_wants_critique(mode: AiReviewMode | str) -> bool:
+    return mode == "studio"
+
+
 def provider_status() -> dict[str, dict[str, Any]]:
     """Which vision providers can run in this environment."""
     out: dict[str, dict[str, Any]] = {}
@@ -216,12 +258,15 @@ def provider_status() -> dict[str, dict[str, Any]]:
     }
     # manual / subscription JSON
     scene_path = os.environ.get("BOTDRAW_VISION_SCENE_JSON") or ""
+    critique_path = os.environ.get("BOTDRAW_VISION_CRITIQUE_JSON") or ""
     out["manual"] = {
         "key": True,
         "package": True,
         "ready": bool(scene_path and Path(scene_path).exists()),
         "model": "subscription-json",
         "scene_json": scene_path or None,
+        "critique_json": critique_path or None,
+        "critique_ready": bool(critique_path and Path(critique_path).exists()),
     }
     return out
 
@@ -467,6 +512,21 @@ def load_scene_json(path: str | Path) -> PortraitScene:
     return PortraitScene.model_validate(data)
 
 
+def load_critique_json(path: str | Path) -> PortraitCritique:
+    """Load a chat/subscription-authored critique JSON from disk."""
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    keep = {"overall", "issues", "actions", "summary"}
+    data = {k: v for k, v in data.items() if k in keep}
+    critique = PortraitCritique.model_validate(data)
+    kept = [i for i in critique.issues if i.fix in ALLOWED_FIXES]
+    critique.issues = kept[:12]
+    acts = critique.actions.model_dump()
+    acts = {k: v for k, v in acts.items() if k in ALLOWED_ACTION_KEYS}
+    critique.actions = CritiqueActions.model_validate(acts)
+    critique.actions = _enrich_actions_from_fixes(critique)
+    return critique
+
+
 def review_photo(
     rgb: np.ndarray,
     *,
@@ -508,10 +568,15 @@ def critique_render(
 ) -> PortraitCritique | None:
     """Post-render critique. Returns None when unavailable or on error."""
     p = provider or default_provider()
-    if client_call is _call_vision and not vision_available(p):
-        return None
     if p == "manual":
-        # Manual mode is scene-only for now
+        path = os.environ.get("BOTDRAW_VISION_CRITIQUE_JSON") or ""
+        if not path or not Path(path).exists():
+            return None
+        try:
+            return load_critique_json(path)
+        except (ValidationError, json.JSONDecodeError, Exception):
+            return None
+    if client_call is _call_vision and not vision_available(p):
         return None
     try:
         src_b64 = _rgb_to_jpeg_b64(source_rgb)
@@ -612,11 +677,10 @@ def _enrich_actions_from_fixes(critique: PortraitCritique) -> CritiqueActions:
     if "prefer_linework" in fixes and not acts.style_id:
         acts.style_id = "portrait_linework"
     if "keep_more_edges" in fixes and acts.force_reingest is False:
-        # Softer: don't force reingest unless overall is poor
-        if critique.overall < 0.45:
-            acts.force_reingest = True
-            if acts.line_source is None:
-                acts.line_source = "neural"
+        # Structure rescue: severe keep_more_edges → one re-ingest (studio only)
+        acts.force_reingest = True
+        if acts.line_source is None:
+            acts.line_source = "neural"
     return acts
 
 
@@ -692,19 +756,43 @@ def maybe_review_and_merge_knobs(
     *,
     enabled: bool,
     client_call=_call_claude_vision,
+    mode: AiReviewMode | None = None,
+    quality: str | None = None,
 ) -> tuple[np.ndarray, dict[str, Any]]:
     """
     If enabled, run scene review, rotate the image, merge knobs.
     Always returns (possibly rotated rgb, knobs). Fail closed = unchanged.
+    Preserves resolved ai_review mode (live|studio) on the merged knobs.
     """
     if not enabled:
         return rgb, knobs
+    if mode is not None:
+        resolved = mode
+    else:
+        resolved = resolve_ai_review_mode(
+            knobs.get("ai_review"),
+            quality=quality or knobs.get("quality"),
+        )
+        # enabled=True with no mode/flag → scene pass (live)
+        if resolved == "off":
+            resolved = "live"
+    if not ai_review_wants_scene(resolved):
+        return rgb, knobs
     scene = review_photo(rgb, client_call=client_call)
     if scene is None:
-        knobs = {**knobs, "ai_review": "unavailable"}
+        knobs = {
+            **knobs,
+            "ai_review": resolved,
+            "ai_review_status": "scene_unavailable",
+        }
         return rgb, knobs
     scene_knobs = scene_to_ingest_knobs(scene)
-    merged = {**knobs, **scene_knobs, "ai_review": "scene"}
+    merged = {
+        **knobs,
+        **scene_knobs,
+        "ai_review": resolved,
+        "ai_review_status": "scene",
+    }
     # Explicit user line_source / crop wins over scene if already set to neural/classic
     if knobs.get("line_source") in ("neural", "classic"):
         merged["line_source"] = knobs["line_source"]
