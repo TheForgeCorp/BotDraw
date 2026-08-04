@@ -83,17 +83,16 @@ class _Mandelbrot:
                 margin + (iy / max(h - 1, 1)) * usable_h,
             )
 
-        # Contour / hatch bands by escape iteration thresholds
-        # Interior (max_iter) gets the darkest pen as sparse fill; exterior bands cycle pens
+        # Contour / hatch bands by escape iteration thresholds (exclusive iso-bands)
         n_bands = min(10, max(4, len(pens) * 2))
-        # Thresholds span low escape (near set) to higher (far exterior)
-        thresholds = np.unique(
+        mid = np.unique(
             np.clip(
-                np.linspace(max(4, max_iter // 12), max_iter - 1, n_bands).astype(int),
+                np.linspace(max(4, max_iter // 16), max_iter - 1, n_bands).astype(int),
                 1,
                 max_iter - 1,
             )
         )
+        edges = np.unique(np.concatenate(([0], mid, [max_iter - 1])))
         row_step = max(1, int(3 / max(params.density, 0.35)))
         passes: list = []
 
@@ -122,15 +121,18 @@ class _Mandelbrot:
                 make_pass("mandelbrot-interior", "Mandelbrot interior", interior_pen.id, interior_polys, kind="fill")
             )
 
-        for i, thr in enumerate(thresholds):
+        for i in range(len(edges) - 1):
+            lo, hi = int(edges[i]), int(edges[i + 1])
+            if lo >= hi:
+                continue
             pen = pens[(i + 1) % len(pens)]
             polys: list[Polyline] = []
             for y in range(0, h, row_step):
                 row = escapes[y]
                 run = None
                 for x in range(w):
-                    # Band: escaped at or before thr, but not interior
-                    in_band = (row[x] < max_iter) and (row[x] <= thr)
+                    # Exclusive iso-band: lo < escape <= hi (exterior only)
+                    in_band = (row[x] < max_iter) and (lo < row[x] <= hi)
                     if in_band and run is None:
                         run = x
                     elif not in_band and run is not None:
@@ -145,7 +147,7 @@ class _Mandelbrot:
                     )
             if polys:
                 passes.append(
-                    make_pass(f"mandelbrot-band-{i}", f"Escape ≤ {thr}", pen.id, polys)
+                    make_pass(f"mandelbrot-band-{i}", f"Escape {lo + 1}–{hi}", pen.id, polys)
                 )
 
         return LayeredSVG(
