@@ -44,3 +44,33 @@ def test_render_with_image_mode_extra():
     data = r.json()
     assert data["emulator"]["segments"]
     assert data["layers"]["pass_count"] >= 1
+
+
+def test_render_upload_with_image_mode(tmp_path: Path):
+    """Multipart upload path with image_mode.
+
+    Client-side downscale (max side ≤1280) is UI-only in botdraw/web/app.js;
+    the API still accepts any image size the server can process.
+    """
+    face = tmp_path / "face.png"
+    _tmp_face(face)
+    with face.open("rb") as fh:
+        r = client.post(
+            "/api/render/upload",
+            data={
+                "style_id": "portrait_linework",
+                "app_name": "portraitbot",
+                "palette_id": "default-6",
+                "paper": "A5",
+                "quality": "booth-fast",
+                "seed": "3",
+                "density": "0.8",
+                "image_mode": "drawing",
+                "params_extra": '{"image_mode": "drawing"}',
+            },
+            files={"file": ("face.png", fh, "image/png")},
+        )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["emulator"]["segments"]
+    assert data["layers"]["pass_count"] >= 1
