@@ -1250,6 +1250,9 @@ function collectPortraitExtra(root, { reuse = false, forceReingest = false } = {
   if (simpSel) portraitPathSimplify = Number(simpSel.value) || 2;
   extra.scan_mode = portraitScanMode;
   extra.contour_simplify = portraitPathSimplify;
+  const lineSrcSel = root.querySelector("#line-source");
+  if (lineSrcSel) portraitLineSource = lineSrcSel.value;
+  extra.line_source = portraitLineSource || "auto";
   if (portraitCrop) extra.crop = portraitCrop;
   if (portraitPenMap) extra.pen_map = portraitPenMap;
   if (reuse && portraitIngestId && !forceReingest && !portraitForceReingest) {
