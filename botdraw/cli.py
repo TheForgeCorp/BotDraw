@@ -18,6 +18,29 @@ from botdraw.styles import ensure_styles_loaded, list_styles
 app = typer.Typer(help="BotDraw software-first plotter platform")
 palette_app = typer.Typer(help="Palette set tools")
 app.add_typer(palette_app, name="palette")
+models_app = typer.Typer(help="Neural model weight management")
+app.add_typer(models_app, name="models")
+
+
+@models_app.command("status")
+def models_status() -> None:
+    """Show which neural model weights are present."""
+    from botdraw.portrait.neural import model_status, models_dir
+
+    typer.echo(f"models dir: {models_dir()}")
+    for name, present in model_status().items():
+        typer.echo(f"  {name}: {'present' if present else 'missing'}")
+
+
+@models_app.command("fetch")
+def models_fetch(
+    force: bool = typer.Option(False, help="Re-download even if present"),
+) -> None:
+    """Download neural model weights (~400 MB total, one-time)."""
+    from botdraw.portrait.neural import fetch_models
+
+    for name, result in fetch_models(force=force).items():
+        typer.echo(f"  {name}: {result}")
 
 
 @app.command("styles")

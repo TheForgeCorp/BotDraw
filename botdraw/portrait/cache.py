@@ -42,6 +42,7 @@ def make_ingest_key(
     linedraw_jitter: float | None = None,
     ensemble: bool | None = None,
     scan_mode: str | None = None,
+    line_source: str | None = None,
 ) -> str:
     h = hashlib.sha256()
     if image_bytes:
@@ -54,7 +55,7 @@ def make_ingest_key(
         f"|{mode}|{quality}|{paper}|{_crop_key(crop)}"
         f"|p{posterize_levels}|s{filter_speckle}|m{min_path_points}|c{contrast}"
         f"|cs{contour_simplify}|hs{hatch_size}|lj{linedraw_jitter}|e{ensemble}"
-        f"|sm{scan_mode}|mesh2"  # mesh IR + walks + focus-aware bg suppression
+        f"|sm{scan_mode}|ls{line_source}|mesh3"  # mesh IR + walks + neural line source
     )
     h.update(knobs.encode())
     return h.hexdigest()[:24]
@@ -180,11 +181,18 @@ def resolve_portrait_vector(
     linedraw_jitter: float | None = None,
     ensemble: bool | None = None,
     scan_mode: str | None = None,
+    line_source: str | None = None,
 ) -> tuple[PortraitVector, bool]:
     """Return (vector, cache_hit)."""
     from botdraw.portrait.ingest import ingest_portrait
 
     contrast_v = 1.12 if contrast is None else float(contrast)
+    # Resolve "auto" before keying so cache entries don't go stale when
+    # model weights are installed later.
+    if line_source in (None, "auto"):
+        from botdraw.portrait.neural import neural_available
+
+        line_source = "neural" if neural_available() else "classic"
     key_kwargs = dict(
         posterize_levels=posterize_levels,
         filter_speckle=filter_speckle,
@@ -195,6 +203,7 @@ def resolve_portrait_vector(
         linedraw_jitter=linedraw_jitter,
         ensemble=ensemble,
         scan_mode=scan_mode,
+        line_source=line_source,
     )
 
     if not force_reingest:

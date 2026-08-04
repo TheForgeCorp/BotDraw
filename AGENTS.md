@@ -19,3 +19,19 @@ Pinned product world: [`DESIGN.md`](DESIGN.md) · [`PRODUCT.md`](PRODUCT.md).
 Sources installed from:
 - https://github.com/pbakaus/impeccable
 - https://github.com/Leonxlnx/taste-skill
+
+## Neural portrait ingest (models)
+
+Portrait ingest prefers a neural detection layer (`botdraw/portrait/neural.py`)
+when onnxruntime and model weights are available; otherwise it falls back to
+the classic pipeline automatically.
+
+- Install runtime: `pip install -e ".[neural]"` (onnxruntime, CPU-only).
+- Fetch weights (~400 MB one-time): `botdraw models fetch`; check with
+  `botdraw models status`.
+- Weights cache: `~/.botdraw/models`, overridable via `BOTDRAW_MODELS_DIR`.
+- Models: U2-Net portrait (APDrawing line raster), U2-Net human seg (person
+  matte), BiSeNet face parsing (CelebAMask-HQ labels). URLs + sha256 pins in
+  `MODEL_SPECS`.
+- CI has no weights, so tests must not require them; integration tests are
+  `skipif`-gated on `neural_available()`.

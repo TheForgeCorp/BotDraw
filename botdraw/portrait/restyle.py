@@ -198,7 +198,11 @@ def restyle_linework(
     edges = _edge_polys(pv, palette, limit=limit)
     hatch: list[Polyline] = []
     if include_hatch:
-        hatch_limit = max(0, min(limit - len(edges), max(80, limit // 3)))
+        if (pv.meta or {}).get("line_source") == "neural":
+            # Neural drawings carry likeness in the shade layer — don't cap it
+            hatch_limit = max(0, limit - len(edges))
+        else:
+            hatch_limit = max(0, min(limit - len(edges), max(80, limit // 3)))
         hatch = _ingest_hatch_polys(pv, palette, limit=hatch_limit)
     regions: list[Polyline] = []
     if include_regions or (pv.meta or {}).get("scan_mode") == "color_bands":

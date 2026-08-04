@@ -330,6 +330,7 @@ class PortraitIngestRequest(BaseModel):
     linedraw_jitter: Optional[float] = None
     ensemble: Optional[bool] = None
     scan_mode: Optional[str] = None
+    line_source: Optional[str] = None
 
 
 def _portrait_ingest_response(pv, *, include_preview_png: bool = True) -> dict[str, Any]:
@@ -349,6 +350,7 @@ def _ingest_knobs_from_body(body: PortraitIngestRequest) -> dict[str, Any]:
         "linedraw_jitter": body.linedraw_jitter,
         "ensemble": body.ensemble,
         "scan_mode": body.scan_mode,
+        "line_source": body.line_source,
     }
 
 
@@ -409,6 +411,7 @@ async def api_portrait_ingest_upload(
     linedraw_jitter: Optional[float] = Form(None),
     ensemble: Optional[str] = Form(None),
     scan_mode: Optional[str] = Form(None),
+    line_source: Optional[str] = Form(None),
     file: UploadFile = File(...),
 ):
     from uuid import uuid4
@@ -448,6 +451,7 @@ async def api_portrait_ingest_upload(
         linedraw_jitter=linedraw_jitter,
         ensemble=ensemble_flag,
         scan_mode=scan_mode,
+        line_source=line_source,
     )
     data = _portrait_ingest_response(pv, include_preview_png=include_preview_png)
     data["cache_hit"] = hit

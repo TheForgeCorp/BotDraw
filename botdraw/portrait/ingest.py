@@ -560,6 +560,7 @@ def ingest_portrait(
     linedraw_jitter: float | None = None,
     ensemble: bool | None = None,
     scan_mode: str | None = None,
+    line_source: str | None = None,
 ) -> PortraitVector:
     """Load/crop/preprocess image and build PortraitVector (tone + edges + regions)."""
     from botdraw.portrait.linedraw_edges import (
@@ -638,6 +639,17 @@ def ingest_portrait(
 
     rgb_cropped = np.asarray(img, dtype=np.float32)
 
+    # Neural detection pass (artist-line raster + person matte + parse labels)
+    neural_pack = None
+    ls = (line_source or "auto").lower()
+    if ls in ("auto", "neural"):
+        from botdraw.portrait.neural import neural_portrait_pack
+
+        neural_pack = neural_portrait_pack(rgb_cropped)
+    line_source_resolved = "neural" if neural_pack is not None else "classic"
+    if neural_pack is not None:
+        use_ensemble = False
+
     ensemble_meta: dict[str, Any] = {"enabled": False}
     t_variants = 0.0
     if use_ensemble:
@@ -665,8 +677,41 @@ def ingest_portrait(
         max_paths,
         800 if quality_enum == QualityPreset.BOOTH_FAST else (2000 if quality_enum == QualityPreset.BOOTH_BALANCED else 3500),
     )
+    if neural_pack is not None:
+        # Neural drawings shade dense masses (hair, dark clothing); a starved
+        # budget leaves blank holes, which reads far worse than a longer plot.
+        hatch_budget = int(hatch_budget * 1.8)
 
-    if use_ensemble:
+    neural_ink = None
+    if neural_pack is not None:
+        from scipy import ndimage as _ndi
+
+        ink_n = neural_pack["ink"]
+        neural_ink = ink_n
+        # Solid dark masses (hair, dark clothing) are the tone channel's job;
+        # keep their boundaries as edges and hand interiors to the mesh.
+        solid = _ndi.binary_opening(ink_n > 0.62, structure=np.ones((9, 9), dtype=bool))
+        boundary = solid & ~_ndi.binary_erosion(solid, np.ones((3, 3), dtype=bool))
+        thin_lines = (ink_n > 0.45) & ~_ndi.binary_erosion(solid, np.ones((5, 5), dtype=bool))
+        edge_mask = thin_lines | boundary
+        # Cuts made by the person matte or the frame are not drawing lines
+        mask_in = _ndi.binary_erosion(
+            neural_pack["mask"] > 0.5, np.ones((7, 7), dtype=bool)
+        )
+        edge_mask &= mask_in
+        edge_mask[:3, :] = edge_mask[-3:, :] = False
+        edge_mask[:, :3] = edge_mask[:, -3:] = False
+        edges_px_pending = contours_from_edge_mask(
+            edge_mask,
+            simplify=csimp,
+            jitter=jitter,
+            seed=0,
+            max_paths=min(edge_budget * 2, edge_budget + 200),
+        )
+        edges = edge_mask.astype(np.float32) * 255.0
+        hatch_polys = []
+        ensemble_meta = {"enabled": False, "line_source": "neural"}
+    elif use_ensemble:
         assert rgb_mode is not None
         h_px, w_px = rgb.shape[:2]
         ink_maps: list[np.ndarray] = []
@@ -756,15 +801,21 @@ def ingest_portrait(
     else:
         tone_pack = build_portrait_mesh(
             lum.astype(np.float32),
-            ink_target,
+            neural_ink if neural_ink is not None else ink_target,
             cell_px=hsize,
             edge_map=np.asarray(edges, dtype=np.float32),
             page_w_mm=page_w,
             page_h_mm=page_h,
             max_code=max_tone_code,
             lum_raw=luminance(rgb_cropped).astype(np.float32),
+            subject_mask=neural_pack["mask"] if neural_pack is not None else None,
+            ink_is_authoritative=neural_ink is not None,
         )
-        edges_px_pruned = prune_edges_with_mesh(edges_px_pending, tone_pack)
+        if neural_pack is not None:
+            # The line model + person matte already did semantic pruning
+            edges_px_pruned = edges_px_pending
+        else:
+            edges_px_pruned = prune_edges_with_mesh(edges_px_pending, tone_pack)
         # Re-apply face budget after prune
         edges_px_pruned = refine_edge_polylines(
             edges_px_pruned,
@@ -788,6 +839,9 @@ def ingest_portrait(
             jitter=jitter,
             seed=1,
             max_paths=hatch_budget,
+            # Neural drawings carry large solid masses; a wider deep pitch
+            # keeps them from starving the stroke budget.
+            pitch_mm={4: 0.72} if neural_pack is not None else None,
         )
         if not hatch_polys:
             lum_fallback = autocontrast_lum(lum.astype(np.float32), cutoff=10.0).astype(np.float32)
@@ -886,7 +940,12 @@ def ingest_portrait(
             "contour_simplify": csimp,
             "hatch_size": hsize,
             "linedraw_jitter": jitter,
-            "edge_extractor": "linedraw_ensemble" if use_ensemble else "linedraw",
+            "edge_extractor": (
+                "neural_lines"
+                if line_source_resolved == "neural"
+                else ("linedraw_ensemble" if use_ensemble else "linedraw")
+            ),
+            "line_source": line_source_resolved,
             "ensemble": ensemble_meta,
             "scan_mode": scan,
             "tone_grid": {

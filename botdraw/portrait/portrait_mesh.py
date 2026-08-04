@@ -42,12 +42,20 @@ def build_portrait_mesh(
     page_h_mm: float,
     max_code: int = 4,
     lum_raw: np.ndarray | None = None,
+    subject_mask: np.ndarray | None = None,
+    shade_prior: np.ndarray | None = None,
+    ink_is_authoritative: bool = False,
 ) -> dict[str, Any]:
     """
     Build mesh arrays + interface adjacency.
 
     `lum_raw` (unposterized luma) feeds the focus/sharpness measures;
     posterization fabricates hard steps that read as fake in-focus edges.
+
+    `subject_mask` (person matte [0..1], full res) replaces the focus/bokeh
+    heuristics as the outside-subject gate when provided. `shade_prior`
+    (bool, full res) marks solid-dark regions the line model drew as fill —
+    those cells are forced to deep shade for the tone channel.
 
     Returns dict compatible with tone_grid fields plus mesh_edge / mesh_face /
     link_h (bool array for shade joins) and edge_degree (for edge prune).
@@ -120,8 +128,13 @@ def build_portrait_mesh(
     grad_x = (gx / gmag).astype(np.float32)
     grad_y = (gy / gmag).astype(np.float32)
 
-    u8 = autocontrast_lum(lum_s, cutoff=6.0)
-    allow = _midtone_hatch_mask(u8.astype(np.float32))
+    if ink_is_authoritative:
+        # Ink already encodes an artist's judgment (neural line raster):
+        # shade wherever it drew, skip only where it left paper.
+        allow = ink_s >= 0.10
+    else:
+        u8 = autocontrast_lum(lum_s, cutoff=6.0)
+        allow = _midtone_hatch_mask(u8.astype(np.float32))
     face = face_roi_mask(lum)
     face_s = np.asarray(
         Image.fromarray((face.astype(np.uint8) * 255), mode="L").resize(
@@ -130,14 +143,15 @@ def build_portrait_mesh(
         dtype=np.uint8,
     ) > 127
 
-    face_mid = (
-        face_s
-        & (lum_s >= 55.0)
-        & (lum_s <= 230.0)
-        & (ink_s >= 0.08)
-        & (ink_s <= 0.70)
-    )
-    allow = allow | face_mid
+    if not ink_is_authoritative:
+        face_mid = (
+            face_s
+            & (lum_s >= 55.0)
+            & (lum_s <= 230.0)
+            & (ink_s >= 0.08)
+            & (ink_s <= 0.70)
+        )
+        allow = allow | face_mid
 
     mesh_edge = np.zeros((h_s, w_s), dtype=np.float32)
     if edge_map is not None:
@@ -157,12 +171,25 @@ def build_portrait_mesh(
             dtype=np.float32,
         ) / 255.0
 
-    # Damp edge energy in defocused regions outside the face so bokeh shapes
-    # neither become structure cells nor lend support to edge chains. Sharp
-    # boundaries (high hf) keep full energy; soft bokeh boundaries fade out.
-    defocus = (~face_s) & ((focus < 3.25) | (sharp < 0.12))
-    sharp_scale = np.clip((sharp - 0.08) / 0.15, 0.25, 1.0).astype(np.float32)
-    mesh_edge = np.where(~face_s, mesh_edge * sharp_scale, mesh_edge).astype(np.float32)
+    # Outside-subject suppression: prefer the semantic person matte when the
+    # caller has one; otherwise fall back to focus/sharpness heuristics that
+    # damp bokeh shapes (soft boundaries, low texture) outside the face ROI.
+    subj_s = None
+    if subject_mask is not None:
+        subj_s = np.asarray(
+            Image.fromarray(
+                (np.clip(np.asarray(subject_mask, dtype=np.float32), 0, 1) * 255).astype(np.uint8),
+                mode="L",
+            ).resize((w_s, h_s), Image.Resampling.BILINEAR),
+            dtype=np.float32,
+        ) / 255.0 > 0.5
+    if subj_s is not None:
+        defocus = ~subj_s
+        mesh_edge = np.where(defocus, mesh_edge * 0.2, mesh_edge).astype(np.float32)
+    else:
+        defocus = (~face_s) & ((focus < 3.25) | (sharp < 0.12))
+        sharp_scale = np.clip((sharp - 0.08) / 0.15, 0.25, 1.0).astype(np.float32)
+        mesh_edge = np.where(~face_s, mesh_edge * sharp_scale, mesh_edge).astype(np.float32)
 
     # Cell-size-aware structure gate: a physical edge stroke ~4px wide gives
     # occupancy ≈ 4/cell. Fixed thresholds flood fine meshes (5px → quarter of
@@ -186,14 +213,33 @@ def build_portrait_mesh(
     tone_codes = np.where(face_s, codes_face, codes_out).astype(np.uint8)
 
     # Skips: disallowed cells, thin outside ink (walls), defocused background
-    skip = (~allow) | ((~face_s) & (ink < 0.28)) | defocus
+    if ink_is_authoritative:
+        skip = (~allow) | defocus
+    else:
+        skip = (~allow) | ((~face_s) & (ink < 0.28)) | defocus
     tone_codes[skip] = 0
-    # Structure cells: leave to edges
-    structure = edge_strong & (ink >= 0.40) & (~skip)
-    tone_codes[structure] = 5
+    # Structure cells: leave to edges. With authoritative ink the drawing has
+    # lines and tone coexisting, so edge cells must not punch shade holes.
+    if not ink_is_authoritative:
+        structure = edge_strong & (ink >= 0.40) & (~skip)
+        tone_codes[structure] = 5
     # Clamp shade codes to max_code (code 5 untouched)
     shade = (tone_codes >= 1) & (tone_codes <= 4)
     tone_codes[shade & (tone_codes > max_code)] = max_code
+
+    # Solid-dark prior (line model drew fill here): rescue cells the skip
+    # heuristics dropped, but keep the luminance grading so large masses read
+    # as tone, not uniform maximum density.
+    if shade_prior is not None:
+        prior_s = np.asarray(
+            Image.fromarray(
+                (np.asarray(shade_prior, dtype=bool).astype(np.uint8) * 255), mode="L"
+            ).resize((w_s, h_s), Image.Resampling.BOX),
+            dtype=np.float32,
+        ) / 255.0 > 0.5
+        boost = prior_s & (tone_codes == 0)
+        graded = np.where(ink >= 0.72, deep_code, 3).astype(np.uint8)
+        tone_codes[boost] = np.minimum(graded[boost], max_code)
 
     tone_grid = np.where(tone_codes > 0, ink, 0.0).astype(np.float32)
 
@@ -417,7 +463,9 @@ def strokes_from_mesh_walks(
             comps = []
             if nlab:
                 sizes = ndimage.sum(deep, labeled, index=np.arange(1, nlab + 1))
-                comps = [lab + 1 for lab in range(nlab) if sizes[lab] >= 6]
+                # Very large masses read as slabs under one direction; leave
+                # them to graded horizontal walks instead.
+                comps = [lab + 1 for lab in range(nlab) if 6 <= sizes[lab] <= 300]
             for lab in comps:
                 comp = labeled == lab
                 strokes = _directional_component_strokes(
