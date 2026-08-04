@@ -68,6 +68,7 @@ def portrait_vector_preview_dict(
             "hatch_size": (pv.meta or {}).get("hatch_size"),
             "linedraw_jitter": (pv.meta or {}).get("linedraw_jitter"),
             "edge_extractor": (pv.meta or {}).get("edge_extractor"),
+            "line_source": (pv.meta or {}).get("line_source"),
             "ensemble": (pv.meta or {}).get("ensemble"),
             "scan_mode": (pv.meta or {}).get("scan_mode") or "auto",
             "tone_grid": (pv.meta or {}).get("tone_grid"),
