@@ -561,6 +561,11 @@ def ingest_portrait(
     ensemble: bool | None = None,
     scan_mode: str | None = None,
     line_source: str | None = None,
+    max_tone_code: int | None = None,
+    suppress_background: bool | None = None,
+    protect_subjects: list[str] | None = None,
+    orientation_deg: int | None = None,
+    ai_scene: dict | None = None,
 ) -> PortraitVector:
     """Load/crop/preprocess image and build PortraitVector (tone + edges + regions)."""
     from botdraw.portrait.linedraw_edges import (
@@ -620,6 +625,14 @@ def ingest_portrait(
         full = np.asarray(img, dtype=np.float32)
     else:
         full = synthetic_portrait(max_side)
+        img = Image.fromarray(np.clip(full, 0, 255).astype(np.uint8), mode="RGB")
+
+    # AI scene / EXIF-style upright correction (CW degrees)
+    orient = int(orientation_deg or 0) % 360
+    if orient:
+        from botdraw.portrait.claude_review import apply_orientation
+
+        full = apply_orientation(full, orient)
         img = Image.fromarray(np.clip(full, 0, 255).astype(np.uint8), mode="RGB")
 
     # Resolve crop
@@ -776,7 +789,25 @@ def ingest_portrait(
         hatch_polys = []
 
     # Portrait mesh → coded shade walks + edge prune
-    max_tone_code = 3 if quality_enum == QualityPreset.BOOTH_FAST else 4
+    if max_tone_code is None:
+        max_tone_code = 3 if quality_enum == QualityPreset.BOOTH_FAST else 4
+    else:
+        max_tone_code = int(np.clip(int(max_tone_code), 3, 4))
+
+    # Subject matte: dilate when pets are protected so fur isn't gated as background
+    subject_mask = neural_pack["mask"] if neural_pack is not None else None
+    protect = {str(s).lower() for s in (protect_subjects or [])}
+    if subject_mask is not None and ("pet" in protect or suppress_background):
+        from scipy import ndimage as _ndi
+
+        m = subject_mask > 0.5
+        if "pet" in protect:
+            m = _ndi.binary_dilation(m, iterations=12)
+        if suppress_background:
+            # Slightly softer edge on the matte so subject isn't cut hard
+            m = _ndi.binary_dilation(m, iterations=2)
+        subject_mask = m.astype(np.float32)
+
     if hsize <= 0:
         tone_pack = {
             "tone_grid": np.zeros((1, 1), dtype=np.float32),
@@ -808,7 +839,7 @@ def ingest_portrait(
             page_h_mm=page_h,
             max_code=max_tone_code,
             lum_raw=luminance(rgb_cropped).astype(np.float32),
-            subject_mask=neural_pack["mask"] if neural_pack is not None else None,
+            subject_mask=subject_mask,
             ink_is_authoritative=neural_ink is not None,
         )
         if neural_pack is not None:
@@ -948,6 +979,11 @@ def ingest_portrait(
             "line_source": line_source_resolved,
             "ensemble": ensemble_meta,
             "scan_mode": scan,
+            "suppress_background": bool(suppress_background) if suppress_background is not None else None,
+            "protect_subjects": list(protect_subjects or []),
+            "orientation_deg": int(orient),
+            "ai_scene": ai_scene,
+            "max_tone_code": int(max_tone_code),
             "tone_grid": {
                 "cell_px": float(tone_pack["tone_cell_px"]),
                 "cell_mm": float(tone_pack["tone_cell_mm"]),

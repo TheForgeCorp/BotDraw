@@ -60,6 +60,144 @@ def layers_summary(layered: LayeredSVG, palette: PaletteSet) -> dict:
     }
 
 
+def _truthy(v: Any) -> bool:
+    if isinstance(v, bool):
+        return v
+    if v is None:
+        return False
+    return str(v).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _load_rgb_for_review(image_path: str | None) -> Any:
+    import numpy as np
+    from PIL import Image
+
+    from botdraw.styles.image_utils import synthetic_portrait
+
+    if image_path:
+        img = Image.open(image_path).convert("RGB")
+        img.thumbnail((1280, 1280), Image.Resampling.LANCZOS)
+        return np.asarray(img, dtype=np.float32)
+    return synthetic_portrait(512).astype(np.float32)
+
+
+def _apply_ai_scene_review(extra: dict[str, Any], *, image_path: str | None) -> dict[str, Any]:
+    """Merge PortraitScene knobs into extra. Fail closed on errors."""
+    try:
+        from botdraw.portrait.claude_review import maybe_review_and_merge_knobs
+
+        rgb = _load_rgb_for_review(image_path)
+        _rgb2, merged = maybe_review_and_merge_knobs(rgb, dict(extra), enabled=True)
+        return merged
+    except Exception:
+        out = dict(extra)
+        out["ai_review"] = True
+        out["ai_review_status"] = "scene_failed"
+        return out
+
+
+def _layered_preview_png(layered: LayeredSVG, palette: PaletteSet, paper_color_hex: str) -> bytes | None:
+    """Rasterize layered SVG for critique. Prefer cairosvg; else stroke raster."""
+    try:
+        from botdraw.core.svg import layered_to_svg_string
+
+        svg = layered_to_svg_string(layered, palette, paper_color_hex=paper_color_hex)
+    except Exception:
+        try:
+            from botdraw.core.svg import layered_to_svg_string
+
+            svg = layered_to_svg_string(layered, palette)
+        except Exception:
+            return None
+    try:
+        import cairosvg
+
+        return cairosvg.svg2png(bytestring=svg.encode("utf-8"), output_width=720)
+    except Exception:
+        pass
+    # Fallback: crude polyline raster
+    try:
+        import numpy as np
+        from PIL import Image, ImageDraw
+
+        w, h = 720, int(720 * layered.height_mm / max(layered.width_mm, 1e-3))
+        im = Image.new("RGB", (w, h), paper_color_hex or "#f7f1e8")
+        draw = ImageDraw.Draw(im)
+        sx = w / max(layered.width_mm, 1e-3)
+        sy = h / max(layered.height_mm, 1e-3)
+        for pas in layered.passes:
+            try:
+                pen = palette.pen_by_id(pas.pen_id)
+                color = pen.color_hex
+            except Exception:
+                color = "#222222"
+            for poly in pas.polylines:
+                if len(poly.points) < 2:
+                    continue
+                pts = [(p[0] * sx, p[1] * sy) for p in poly.points]
+                draw.line(pts, fill=color, width=1)
+        import io
+
+        buf = io.BytesIO()
+        im.save(buf, format="PNG")
+        return buf.getvalue()
+    except Exception:
+        return None
+
+
+def _apply_ai_critique_once(
+    extra: dict[str, Any],
+    *,
+    layered: LayeredSVG,
+    palette: PaletteSet,
+    paper_color_hex: str,
+) -> dict[str, Any] | None:
+    """Run one critique; return updated extra if actions warrant a redo, else None."""
+    try:
+        from botdraw.portrait.claude_review import critique_render, critique_to_render_knobs
+
+        pv = extra.get("portrait_vector")
+        if pv is None:
+            return None
+        png = _layered_preview_png(layered, palette, paper_color_hex)
+        if not png:
+            return None
+        import numpy as np
+
+        source = np.asarray(pv.rgb, dtype=np.float32)
+        style = str(extra.get("style_id") or layered.meta.get("portrait_style") or "portrait_linework")
+        critique = critique_render(source, png, style_id=style)
+        if critique is None:
+            out = dict(extra)
+            out["ai_review_status"] = "critique_unavailable"
+            out["ai_critique_applied"] = True  # don't loop
+            return out
+        knobs = critique_to_render_knobs(critique)
+        out = {**extra, **knobs, "ai_critique_applied": True}
+        # Only re-render when something actionable changed
+        actionable = any(
+            [
+                knobs.get("force_reingest"),
+                knobs.get("style_id") and knobs.get("style_id") != style,
+                knobs.get("density_mul") and abs(float(knobs["density_mul"]) - 1.0) > 0.05,
+                knobs.get("hatch_budget_mul") and abs(float(knobs["hatch_budget_mul"]) - 1.0) > 0.05,
+                knobs.get("line_source"),
+                knobs.get("max_tone_code"),
+            ]
+        )
+        if not actionable:
+            # Still persist critique on the accepted render
+            return out
+        # Reuse ingest unless critique demanded reingest
+        if not knobs.get("force_reingest"):
+            out["reuse_ingest"] = True
+            out["ingest_id"] = getattr(pv, "ingest_id", None)
+            out.pop("force_reingest", None)
+        return out
+    except Exception:
+        return None
+
+
 def _budget_block(layers: dict, plan_stats: dict, quality: QualityPreset) -> dict:
     limits = QUALITY_LIMITS[quality]
     paths = int(layers.get("path_count") or 0)
@@ -154,6 +292,14 @@ def render_job(
             auto_frame = extra.get("auto_frame", True)
             if isinstance(auto_frame, str):
                 auto_frame = auto_frame.lower() not in ("0", "false", "no")
+            ai_review = _truthy(extra.get("ai_review"))
+            # Pre-ingest Claude scene review → knobs (fail closed)
+            if ai_review and not extra.get("ai_critique_applied"):
+                extra = _apply_ai_scene_review(extra, image_path=image_path)
+                crop = extra.get("crop", crop)
+                auto_frame = extra.get("auto_frame", auto_frame)
+                if isinstance(auto_frame, str):
+                    auto_frame = auto_frame.lower() not in ("0", "false", "no")
             pv, cache_hit = resolve_portrait_vector(
                 image_path=image_path,
                 mode=mode,
@@ -174,6 +320,11 @@ def render_job(
                 ensemble=extra.get("ensemble"),
                 scan_mode=extra.get("scan_mode"),
                 line_source=extra.get("line_source"),
+                max_tone_code=extra.get("max_tone_code"),
+                suppress_background=extra.get("suppress_background"),
+                protect_subjects=extra.get("protect_subjects"),
+                orientation_deg=extra.get("orientation_deg"),
+                ai_scene=extra.get("ai_scene"),
             )
             pv = assign_pens(pv, palette, pen_map=extra.get("pen_map"))
             ingest_id = pv.ingest_id
@@ -181,23 +332,78 @@ def render_job(
             settings["ingest_id"] = ingest_id
             settings["ingest_cache_hit"] = cache_hit
             settings["crop"] = pv.crop.model_dump()
+            if extra.get("ai_scene"):
+                settings["ai_scene"] = extra["ai_scene"]
 
-        engine = get_style(style_id)
+        # Density may be nudged by critique hatch_budget_mul / density_mul
+        render_density = float(density) * float(extra.get("density_mul") or 1.0)
+        if extra.get("hatch_budget_mul"):
+            render_density *= float(extra["hatch_budget_mul"]) ** 0.5
+        active_style = str(extra.get("style_id") or style_id)
+
+        engine = get_style(active_style)
         layered = engine.render(
             palette=palette,
             params=StyleParams(
                 seed=seed,
                 quality=quality_enum,
-                density=density,
+                density=render_density,
                 extra=extra,
             ),
             paper=paper_enum,
             image_path=image_path,
         )
 
+        # One post-render Claude critique loop (studio/dev); never unbounded
+        if (
+            (app == "portraitbot" or style_id.startswith("portrait_"))
+            and _truthy(extra.get("ai_review"))
+            and not extra.get("ai_critique_applied")
+        ):
+            crit_extra = _apply_ai_critique_once(
+                extra,
+                layered=layered,
+                palette=palette,
+                paper_color_hex=paper_color_hex,
+            )
+            if crit_extra is not None:
+                redo = bool(
+                    crit_extra.get("force_reingest")
+                    or (
+                        crit_extra.get("style_id")
+                        and crit_extra.get("style_id") != (extra.get("style_id") or style_id)
+                    )
+                    or (
+                        crit_extra.get("density_mul")
+                        and abs(float(crit_extra["density_mul"]) - 1.0) > 0.05
+                    )
+                    or (
+                        crit_extra.get("hatch_budget_mul")
+                        and abs(float(crit_extra["hatch_budget_mul"]) - 1.0) > 0.05
+                    )
+                )
+                extra = {**crit_extra, "ai_critique_applied": True}
+                if redo:
+                    extra.pop("portrait_vector", None)
+                    return render_job(
+                        app=app,
+                        style_id=str(extra.get("style_id") or style_id),
+                        palette_id=palette_id,
+                        paper=paper_enum,
+                        quality=quality_enum,
+                        seed=seed,
+                        density=density,
+                        image_path=image_path,
+                        params_extra=extra,
+                        pen_up_speed_mm_s=pen_up_speed_mm_s,
+                        pen_down_speed_mm_s=pen_down_speed_mm_s,
+                    )
+
         # Drop non-serializable vector from settings copy
         settings_extra = {k: v for k, v in extra.items() if k != "portrait_vector"}
         settings["params_extra"] = settings_extra
+        if extra.get("ai_critique"):
+            settings["ai_critique"] = extra["ai_critique"]
 
         if app == "portraitbot" or style_id.startswith("portrait_"):
             orn = {
@@ -218,6 +424,9 @@ def render_job(
             "paper_color_hex": paper_color_hex,
             "ingest_cache_hit": cache_hit,
             "ingest_id": ingest_id,
+            "ai_review": bool(_truthy(extra.get("ai_review"))),
+            "ai_scene_summary": (extra.get("ai_scene") or {}).get("summary"),
+            "ai_critique_summary": (extra.get("ai_critique") or {}).get("summary"),
         }
 
         layered = optimize_layered(layered)

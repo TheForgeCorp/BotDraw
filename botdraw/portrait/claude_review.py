@@ -1,0 +1,456 @@
+"""
+Anthropic vision review for portrait ingest/output.
+
+Claude is a reviewer + controller, not a stroke engine:
+- ``review_photo`` → PortraitScene JSON → ingest knobs
+- ``critique_render`` → PortraitCritique JSON → one re-restyle / re-ingest
+
+Fail closed: missing key/package/API errors return None and callers keep
+the current neural/classic path. Action/fix keys are a closed dictionary
+mapped onto real knobs — never free-form code execution.
+"""
+from __future__ import annotations
+
+import base64
+import io
+import json
+import os
+import re
+from typing import Any, Literal
+
+import numpy as np
+from PIL import Image
+from pydantic import BaseModel, Field, ValidationError
+
+
+# ---------------------------------------------------------------------------
+# Closed action / fix dictionaries (never execute free-form model output)
+# ---------------------------------------------------------------------------
+
+ALLOWED_FIXES = frozenset(
+    {
+        "suppress_background",
+        "keep_more_edges",
+        "boost_pet_shade",
+        "boost_face_shade",
+        "reduce_background_edges",
+        "prefer_scribble",
+        "prefer_linework",
+    }
+)
+
+ALLOWED_ACTION_KEYS = frozenset(
+    {
+        "force_reingest",
+        "line_source",
+        "hatch_budget_mul",
+        "style_id",
+        "max_tone_code",
+        "suppress_background",
+        "density_mul",
+    }
+)
+
+SCENE_SYSTEM = """You review a portrait photograph for a pen-plotter pipeline.
+Return ONLY valid JSON matching this schema (no markdown):
+{
+  "orientation_deg": 0 | 90 | 180 | 270,
+  "subjects": [{"kind": "person"|"pet"|"other", "importance": 0..1}],
+  "clutter": ["wire_crate"|"blinds"|"busy_bg"|"text"|string],
+  "lighting": "normal"|"backlit_window"|"dim"|"harsh",
+  "crop_hint": {"x":0..1,"y":0..1,"w":0..1,"h":0..1} | null,
+  "ingest": {
+    "line_source": "neural"|"classic"|"auto",
+    "suppress_background": bool,
+    "protect_subjects": ["person","pet"],
+    "max_tone_code": 3|4
+  },
+  "summary": "one short sentence"
+}
+orientation_deg is the clockwise rotation needed to make subjects upright.
+Flag pets and geometric clutter (blinds, crates). Prefer neural lines +
+background suppress for multi-subject or cluttered scenes."""
+
+CRITIQUE_SYSTEM = """You critique a pen-plotter portrait preview against the source photo.
+Return ONLY valid JSON matching this schema (no markdown):
+{
+  "overall": 0..1,
+  "issues": [
+    {"code": string, "severity": 0..1, "region": string|null,
+     "fix": "suppress_background"|"keep_more_edges"|"boost_pet_shade"|
+            "boost_face_shade"|"reduce_background_edges"|"prefer_scribble"|
+            "prefer_linework"}
+  ],
+  "actions": {
+    "force_reingest": bool,
+    "line_source": "neural"|"classic"|"auto"|null,
+    "hatch_budget_mul": number|null,
+    "style_id": string|null,
+    "max_tone_code": 3|4|null,
+    "suppress_background": bool|null,
+    "density_mul": number|null
+  },
+  "summary": "one short sentence"
+}
+Only use the listed fix/action keys. Prefer the smallest change that helps likeness."""
+
+
+class SubjectInfo(BaseModel):
+    kind: Literal["person", "pet", "other"] = "person"
+    importance: float = Field(default=1.0, ge=0.0, le=1.0)
+
+
+class CropHint(BaseModel):
+    x: float = Field(default=0.0, ge=0.0, le=1.0)
+    y: float = Field(default=0.0, ge=0.0, le=1.0)
+    w: float = Field(default=1.0, ge=0.05, le=1.0)
+    h: float = Field(default=1.0, ge=0.05, le=1.0)
+
+
+class IngestHints(BaseModel):
+    line_source: Literal["neural", "classic", "auto"] = "neural"
+    suppress_background: bool = True
+    protect_subjects: list[str] = Field(default_factory=lambda: ["person"])
+    max_tone_code: int = Field(default=4, ge=3, le=4)
+
+
+class PortraitScene(BaseModel):
+    orientation_deg: Literal[0, 90, 180, 270] = 0
+    subjects: list[SubjectInfo] = Field(default_factory=list)
+    clutter: list[str] = Field(default_factory=list)
+    lighting: str = "normal"
+    crop_hint: CropHint | None = None
+    ingest: IngestHints = Field(default_factory=IngestHints)
+    summary: str = ""
+
+
+class CritiqueIssue(BaseModel):
+    code: str
+    severity: float = Field(default=0.5, ge=0.0, le=1.0)
+    region: str | None = None
+    fix: str
+
+
+class CritiqueActions(BaseModel):
+    force_reingest: bool = False
+    line_source: Literal["neural", "classic", "auto"] | None = None
+    hatch_budget_mul: float | None = Field(default=None, ge=0.5, le=3.0)
+    style_id: str | None = None
+    max_tone_code: int | None = Field(default=None, ge=3, le=4)
+    suppress_background: bool | None = None
+    density_mul: float | None = Field(default=None, ge=0.5, le=2.5)
+
+
+class PortraitCritique(BaseModel):
+    overall: float = Field(default=0.5, ge=0.0, le=1.0)
+    issues: list[CritiqueIssue] = Field(default_factory=list)
+    actions: CritiqueActions = Field(default_factory=CritiqueActions)
+    summary: str = ""
+
+
+def claude_available() -> bool:
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        return False
+    try:
+        import anthropic  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def _rgb_to_jpeg_b64(rgb: np.ndarray, *, max_side: int = 1280) -> str:
+    img = Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8))
+    img.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=85)
+    return base64.standard_b64encode(buf.getvalue()).decode("ascii")
+
+
+def _extract_json(text: str) -> dict[str, Any]:
+    text = text.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
+    return json.loads(text)
+
+
+def _call_claude_vision(
+    *,
+    system: str,
+    prompt: str,
+    image_b64: str,
+    media_type: str = "image/jpeg",
+    model: str | None = None,
+) -> str:
+    import anthropic
+
+    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    msg = client.messages.create(
+        model=model or os.environ.get("BOTDRAW_CLAUDE_MODEL", "claude-sonnet-4-20250514"),
+        max_tokens=1024,
+        system=system,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": media_type,
+                            "data": image_b64,
+                        },
+                    },
+                    {"type": "text", "text": prompt},
+                ],
+            }
+        ],
+    )
+    parts = []
+    for block in msg.content:
+        if getattr(block, "type", None) == "text":
+            parts.append(block.text)
+    return "\n".join(parts)
+
+
+def review_photo(
+    rgb: np.ndarray,
+    *,
+    client_call=_call_claude_vision,
+) -> PortraitScene | None:
+    """Pre-ingest scene review. Returns None when unavailable or on error."""
+    if not claude_available() and client_call is _call_claude_vision:
+        return None
+    try:
+        raw = client_call(
+            system=SCENE_SYSTEM,
+            prompt="Analyze this portrait photo for pen-plotter ingest. JSON only.",
+            image_b64=_rgb_to_jpeg_b64(rgb),
+        )
+        data = _extract_json(raw)
+        scene = PortraitScene.model_validate(data)
+        # Drop unknown fixes later; clamp clutter to strings
+        scene.clutter = [str(c) for c in scene.clutter][:12]
+        return scene
+    except (ValidationError, json.JSONDecodeError, Exception):
+        return None
+
+
+def critique_render(
+    source_rgb: np.ndarray,
+    preview_png: bytes,
+    *,
+    style_id: str,
+    client_call=_call_claude_vision,
+) -> PortraitCritique | None:
+    """Post-render critique. Returns None when unavailable or on error."""
+    if not claude_available() and client_call is _call_claude_vision:
+        return None
+    try:
+        src_b64 = _rgb_to_jpeg_b64(source_rgb)
+        prev_b64 = base64.standard_b64encode(preview_png).decode("ascii")
+        # Two-image call: encode source + preview in one user message via a
+        # thin wrapper — client_call takes one image; for the default path we
+        # use a dedicated multi-image helper.
+        raw = _critique_two_images(
+            source_b64=src_b64,
+            preview_b64=prev_b64,
+            style_id=style_id,
+            client_call=client_call,
+        )
+        data = _extract_json(raw)
+        critique = PortraitCritique.model_validate(data)
+        # Filter to closed dictionaries
+        kept = []
+        for issue in critique.issues:
+            if issue.fix in ALLOWED_FIXES:
+                kept.append(issue)
+        critique.issues = kept[:12]
+        # Strip unknown action keys by re-validating through model
+        acts = critique.actions.model_dump()
+        acts = {k: v for k, v in acts.items() if k in ALLOWED_ACTION_KEYS}
+        critique.actions = CritiqueActions.model_validate(acts)
+        # Map fix hints into actions when model left actions sparse
+        critique.actions = _enrich_actions_from_fixes(critique)
+        return critique
+    except (ValidationError, json.JSONDecodeError, Exception):
+        return None
+
+
+def _critique_two_images(
+    *,
+    source_b64: str,
+    preview_b64: str,
+    style_id: str,
+    client_call,
+) -> str:
+    if client_call is not _call_claude_vision:
+        # Tests inject a single-image stub; pass preview only with style context.
+        return client_call(
+            system=CRITIQUE_SYSTEM,
+            prompt=f"Style={style_id}. Critique this plotter preview vs a source portrait. JSON only.",
+            image_b64=preview_b64,
+            media_type="image/png",
+        )
+    import anthropic
+
+    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    msg = client.messages.create(
+        model=os.environ.get("BOTDRAW_CLAUDE_MODEL", "claude-sonnet-4-20250514"),
+        max_tokens=1024,
+        system=CRITIQUE_SYSTEM,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/jpeg",
+                            "data": source_b64,
+                        },
+                    },
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": preview_b64,
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": (
+                            f"Image 1 = source photo. Image 2 = plotter preview "
+                            f"(style={style_id}). Critique likeness. JSON only."
+                        ),
+                    },
+                ],
+            }
+        ],
+    )
+    parts = []
+    for block in msg.content:
+        if getattr(block, "type", None) == "text":
+            parts.append(block.text)
+    return "\n".join(parts)
+
+
+def _enrich_actions_from_fixes(critique: PortraitCritique) -> CritiqueActions:
+    acts = critique.actions
+    fixes = {i.fix for i in critique.issues if i.severity >= 0.55}
+    if "suppress_background" in fixes or "reduce_background_edges" in fixes:
+        if acts.suppress_background is None:
+            acts.suppress_background = True
+    if "boost_pet_shade" in fixes or "boost_face_shade" in fixes:
+        if acts.hatch_budget_mul is None:
+            acts.hatch_budget_mul = 1.3
+        if acts.density_mul is None:
+            acts.density_mul = 1.15
+    if "prefer_scribble" in fixes and not acts.style_id:
+        acts.style_id = "portrait_scribble_tone"
+    if "prefer_linework" in fixes and not acts.style_id:
+        acts.style_id = "portrait_linework"
+    if "keep_more_edges" in fixes and acts.force_reingest is False:
+        # Softer: don't force reingest unless overall is poor
+        if critique.overall < 0.45:
+            acts.force_reingest = True
+            if acts.line_source is None:
+                acts.line_source = "neural"
+    return acts
+
+
+def apply_orientation(rgb: np.ndarray, orientation_deg: int) -> np.ndarray:
+    """Rotate image so subjects are upright. orientation_deg = CW correction."""
+    deg = int(orientation_deg) % 360
+    if deg == 0:
+        return rgb
+    img = Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8))
+    # PIL rotate is CCW; CW correction = CCW of (360-deg)
+    out = img.rotate(360 - deg, expand=True)
+    return np.asarray(out, dtype=np.float32)
+
+
+def scene_to_ingest_knobs(scene: PortraitScene) -> dict[str, Any]:
+    """Map PortraitScene onto real ingest/resolve knobs (closed dictionary)."""
+    knobs: dict[str, Any] = {
+        "line_source": scene.ingest.line_source,
+        "suppress_background": bool(scene.ingest.suppress_background),
+        "max_tone_code": int(scene.ingest.max_tone_code),
+        "protect_subjects": list(scene.ingest.protect_subjects),
+        "orientation_deg": int(scene.orientation_deg),
+        "ai_scene": scene.model_dump(),
+    }
+    # Stronger suppress when geometric clutter present
+    clutter = {c.lower() for c in scene.clutter}
+    if clutter & {"wire_crate", "blinds", "busy_bg"}:
+        knobs["suppress_background"] = True
+        if knobs["line_source"] == "auto":
+            knobs["line_source"] = "neural"
+    # Pet protection → expand subject matte later in ingest
+    kinds = {s.kind for s in scene.subjects}
+    if "pet" in kinds and "pet" not in knobs["protect_subjects"]:
+        knobs["protect_subjects"].append("pet")
+    if scene.crop_hint is not None:
+        ch = scene.crop_hint
+        # Clamp crop inside unit square
+        x = float(np.clip(ch.x, 0, 0.95))
+        y = float(np.clip(ch.y, 0, 0.95))
+        w = float(np.clip(ch.w, 0.05, 1.0 - x))
+        h = float(np.clip(ch.h, 0.05, 1.0 - y))
+        knobs["crop"] = {"x": x, "y": y, "w": w, "h": h, "source": "ai_scene"}
+        knobs["auto_frame"] = False
+    return knobs
+
+
+def critique_to_render_knobs(critique: PortraitCritique) -> dict[str, Any]:
+    """Map PortraitCritique actions onto render/ingest knobs."""
+    a = critique.actions
+    out: dict[str, Any] = {
+        "ai_critique": critique.model_dump(),
+    }
+    if a.force_reingest:
+        out["force_reingest"] = True
+    if a.line_source:
+        out["line_source"] = a.line_source
+    if a.style_id:
+        out["style_id"] = a.style_id
+    if a.max_tone_code is not None:
+        out["max_tone_code"] = a.max_tone_code
+    if a.suppress_background is not None:
+        out["suppress_background"] = a.suppress_background
+    if a.hatch_budget_mul is not None:
+        out["hatch_budget_mul"] = float(a.hatch_budget_mul)
+    if a.density_mul is not None:
+        out["density_mul"] = float(a.density_mul)
+    return out
+
+
+def maybe_review_and_merge_knobs(
+    rgb: np.ndarray,
+    knobs: dict[str, Any],
+    *,
+    enabled: bool,
+    client_call=_call_claude_vision,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """
+    If enabled, run scene review, rotate the image, merge knobs.
+    Always returns (possibly rotated rgb, knobs). Fail closed = unchanged.
+    """
+    if not enabled:
+        return rgb, knobs
+    scene = review_photo(rgb, client_call=client_call)
+    if scene is None:
+        knobs = {**knobs, "ai_review": "unavailable"}
+        return rgb, knobs
+    scene_knobs = scene_to_ingest_knobs(scene)
+    merged = {**knobs, **scene_knobs, "ai_review": "scene"}
+    # Explicit user line_source / crop wins over scene if already set to neural/classic
+    if knobs.get("line_source") in ("neural", "classic"):
+        merged["line_source"] = knobs["line_source"]
+    if knobs.get("crop") is not None and knobs.get("crop_locked"):
+        merged["crop"] = knobs["crop"]
+        merged["auto_frame"] = knobs.get("auto_frame", False)
+    rgb2 = apply_orientation(rgb, int(merged.get("orientation_deg") or 0))
+    return rgb2, merged

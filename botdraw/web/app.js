@@ -36,6 +36,7 @@ let portraitEnsemble = null; // null = auto (studio-hq photo on); bool overrides
 let portraitScanMode = "auto"; // Inkscape Trace Bitmap–inspired filter
 let portraitPathSimplify = 2; // contour_simplify / Path→Simplify strength (1=finest)
 let portraitLineSource = "auto"; // auto | neural | classic
+let portraitAiReview = false; // Claude vision scene + one critique loop
 let portraitIngestUnderlay = "scan"; // scan | tone | photo | none
 let portraitIngestTimer = null;
 let portraitPenMap = null;
@@ -863,6 +864,13 @@ function renderPortrait() {
           <option value="classic"${portraitLineSource === "classic" ? " selected" : ""}>Classic</option>
         </select>`
       )}
+      ${field(
+        "AI review",
+        `<label style="display:flex;align-items:center;gap:0.4rem;margin:0">
+          <input type="checkbox" id="ai-review" ${portraitAiReview ? "checked" : ""} title="Claude vision: scene knobs before ingest + one post-render critique (needs ANTHROPIC_API_KEY)" />
+          <span class="muted">Studio (Claude)</span>
+        </label>`
+      )}
     </div>
     <p class="muted" style="margin-top:0.2rem">Lighter intermediates first — Brightness / Edges / Centerline map to linedraw knobs (no Potrace).</p>
     <h4>Portrait style</h4>
@@ -1144,6 +1152,9 @@ async function runPortraitIngest(opts = {}) {
   knobs.scan_mode = root.querySelector("#scan-mode")?.value || portraitScanMode;
   knobs.contour_simplify = Number(root.querySelector("#path-simplify")?.value || portraitPathSimplify);
   knobs.line_source = root.querySelector("#line-source")?.value || portraitLineSource;
+  const aiEl = root.querySelector("#ai-review");
+  if (aiEl) portraitAiReview = !!aiEl.checked;
+  knobs.ai_review = portraitAiReview;
   portraitScanMode = knobs.scan_mode;
   portraitPathSimplify = knobs.contour_simplify;
   portraitLineSource = knobs.line_source;
@@ -1163,6 +1174,7 @@ async function runPortraitIngest(opts = {}) {
     fd.append("scan_mode", knobs.scan_mode);
     fd.append("contour_simplify", String(knobs.contour_simplify));
     fd.append("line_source", knobs.line_source);
+    if (knobs.ai_review) fd.append("ai_review", "true");
     fd.append("file", uploadFile, uploadFile.name || "portrait.jpg");
     data = await api("/api/portrait/ingest/upload", { method: "POST", body: fd });
   } else {
@@ -1198,6 +1210,7 @@ async function runPortraitIngest(opts = {}) {
       (portraitHatchEnabled ? "" : " · hatch off") +
       (meta.ensemble?.enabled ? " · ensemble 5+1" : "") +
       (meta.line_source ? ` · ${meta.line_source}` : "") +
+      (data.ai_scene || meta.ai_scene ? " · ai-scene" : "") +
       (data.scan_mode || meta.scan_mode ? ` · scan ${data.scan_mode || meta.scan_mode}` : "") +
       ` · id ${portraitIngestId || "?"}`;
   }
@@ -1253,6 +1266,9 @@ function collectPortraitExtra(root, { reuse = false, forceReingest = false } = {
   const lineSrcSel = root.querySelector("#line-source");
   if (lineSrcSel) portraitLineSource = lineSrcSel.value;
   extra.line_source = portraitLineSource || "auto";
+  const aiEl = root.querySelector("#ai-review");
+  if (aiEl) portraitAiReview = !!aiEl.checked;
+  if (portraitAiReview) extra.ai_review = true;
   if (portraitCrop) extra.crop = portraitCrop;
   if (portraitPenMap) extra.pen_map = portraitPenMap;
   if (reuse && portraitIngestId && !forceReingest && !portraitForceReingest) {
