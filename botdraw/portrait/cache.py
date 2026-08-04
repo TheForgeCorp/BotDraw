@@ -33,6 +33,10 @@ def make_ingest_key(
     quality: str,
     crop: CropRect | dict | None,
     paper: str,
+    posterize_levels: int | None = None,
+    filter_speckle: int | None = None,
+    min_path_points: int | None = None,
+    contrast: float | None = None,
 ) -> str:
     h = hashlib.sha256()
     if image_bytes:
@@ -41,7 +45,11 @@ def make_ingest_key(
         h.update(Path(image_path).read_bytes())
     else:
         h.update(b"synthetic")
-    h.update(f"|{mode}|{quality}|{paper}|{_crop_key(crop)}".encode())
+    knobs = (
+        f"|{mode}|{quality}|{paper}|{_crop_key(crop)}"
+        f"|p{posterize_levels}|s{filter_speckle}|m{min_path_points}|c{contrast}"
+    )
+    h.update(knobs.encode())
     return h.hexdigest()[:24]
 
 
@@ -140,9 +148,15 @@ def resolve_portrait_vector(
     force_reingest: bool = False,
     auto_frame: bool = True,
     image_bytes: bytes | None = None,
+    posterize_levels: int | None = None,
+    filter_speckle: int | None = None,
+    min_path_points: int | None = None,
+    contrast: float | None = None,
 ) -> tuple[PortraitVector, bool]:
     """Return (vector, cache_hit)."""
     from botdraw.portrait.ingest import ingest_portrait
+
+    contrast_v = 1.12 if contrast is None else float(contrast)
 
     if not force_reingest:
         if reuse_ingest and ingest_id:
@@ -156,6 +170,10 @@ def resolve_portrait_vector(
             quality=quality,
             crop=crop,
             paper=paper,
+            posterize_levels=posterize_levels,
+            filter_speckle=filter_speckle,
+            min_path_points=min_path_points,
+            contrast=contrast_v,
         )
         pv = cache_get_by_key(key)
         if pv is not None:
@@ -168,6 +186,10 @@ def resolve_portrait_vector(
         paper=paper,
         crop=crop,
         auto_frame=auto_frame if crop is None else False,
+        posterize_levels=posterize_levels,
+        filter_speckle=filter_speckle,
+        min_path_points=min_path_points,
+        contrast=contrast_v,
     )
     iid = save_portrait_vector(pv)
     key = make_ingest_key(
@@ -177,6 +199,10 @@ def resolve_portrait_vector(
         quality=quality,
         crop=crop or pv.crop,
         paper=paper,
+        posterize_levels=posterize_levels,
+        filter_speckle=filter_speckle,
+        min_path_points=min_path_points,
+        contrast=contrast_v,
     )
     cache_put_key(key, iid)
     return pv, False

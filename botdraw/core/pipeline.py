@@ -164,6 +164,10 @@ def render_job(
                 ingest_id=extra.get("ingest_id"),
                 force_reingest=bool(extra.get("force_reingest")),
                 auto_frame=bool(auto_frame) if crop is None else False,
+                posterize_levels=extra.get("posterize_levels"),
+                filter_speckle=extra.get("filter_speckle"),
+                min_path_points=extra.get("min_path_points"),
+                contrast=extra.get("contrast"),
             )
             pv = assign_pens(pv, palette, pen_map=extra.get("pen_map"))
             ingest_id = pv.ingest_id

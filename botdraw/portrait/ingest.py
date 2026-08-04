@@ -23,25 +23,112 @@ from botdraw.styles.image_utils import luminance, map_to_page, synthetic_portrai
 _PATH_CMD = re.compile(
     r"([MmLlHhVvCcSsQqTtAaZz])|([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)"
 )
+_TRANSLATE_RE = re.compile(
+    r"translate\(\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)\s*[,\s]\s*"
+    r"([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)\s*\)",
+    re.I,
+)
+_HEX_RE = re.compile(r"^#([0-9a-fA-F]{6})$")
 
 
-def _parse_svg_paths(svg_text: str) -> list[list[tuple[float, float]]]:
-    """Extract polygon-ish polylines from vtracer SVG path data (M/L/Z focus)."""
+def default_posterize_levels(quality: QualityPreset) -> int:
+    if quality == QualityPreset.BOOTH_FAST:
+        return 4
+    if quality == QualityPreset.STUDIO_HQ:
+        return 8
+    return 6
+
+
+def default_filter_speckle(quality: QualityPreset) -> int:
+    if quality == QualityPreset.BOOTH_FAST:
+        return 12
+    if quality == QualityPreset.STUDIO_HQ:
+        return 4
+    return 8
+
+
+def default_min_path_points(quality: QualityPreset) -> int:
+    if quality == QualityPreset.BOOTH_FAST:
+        return 8
+    if quality == QualityPreset.STUDIO_HQ:
+        return 5
+    return 6
+
+
+def _posterize_rgb(rgb: np.ndarray, levels: int) -> np.ndarray:
+    """Quantize each channel to `levels` steps (0 = off). SVGcode-inspired."""
+    n = int(levels)
+    if n <= 0:
+        return rgb
+    n = max(2, min(32, n))
+    step = 255.0 / (n - 1)
+    return np.clip(np.round(np.asarray(rgb, dtype=np.float32) / step) * step, 0, 255)
+
+
+def _contrast_boost(rgb: np.ndarray, amount: float) -> np.ndarray:
+    if amount is None or abs(float(amount) - 1.0) < 1e-3:
+        return rgb
+    a = float(amount)
+    mid = 128.0
+    return np.clip((np.asarray(rgb, dtype=np.float32) - mid) * a + mid, 0, 255)
+
+
+def _parse_hex_rgb(fill: str | None) -> tuple[float, float, float] | None:
+    if not fill:
+        return None
+    m = _HEX_RE.match(fill.strip())
+    if not m:
+        return None
+    h = m.group(1)
+    return (float(int(h[0:2], 16)), float(int(h[2:4], 16)), float(int(h[4:6], 16)))
+
+
+def _cubic(
+    p0: tuple[float, float],
+    p1: tuple[float, float],
+    p2: tuple[float, float],
+    p3: tuple[float, float],
+    steps: int = 6,
+) -> list[tuple[float, float]]:
+    out: list[tuple[float, float]] = []
+    for i in range(1, steps + 1):
+        t = i / steps
+        u = 1.0 - t
+        x = u**3 * p0[0] + 3 * u**2 * t * p1[0] + 3 * u * t**2 * p2[0] + t**3 * p3[0]
+        y = u**3 * p0[1] + 3 * u**2 * t * p1[1] + 3 * u * t**2 * p2[1] + t**3 * p3[1]
+        out.append((float(x), float(y)))
+    return out
+
+
+def _parse_svg_paths(svg_text: str) -> list[tuple[list[tuple[float, float]], str | None]]:
+    """
+    Extract polylines from vtracer SVG.
+
+    VTracer emits path `d` in local coords plus transform=\"translate(tx,ty)\".
+    Ignoring translate produced page-frame boxes and long travel diagonals.
+    """
     root = ET.fromstring(svg_text)
     ns = ""
     if root.tag.startswith("{"):
         ns = root.tag.split("}")[0] + "}"
-    out: list[list[tuple[float, float]]] = []
+    out: list[tuple[list[tuple[float, float]], str | None]] = []
     for el in root.iter(f"{ns}path"):
         d = el.attrib.get("d") or ""
+        fill = el.attrib.get("fill")
+        tx, ty = 0.0, 0.0
+        tr = el.attrib.get("transform") or ""
+        m = _TRANSLATE_RE.search(tr)
+        if m:
+            tx, ty = float(m.group(1)), float(m.group(2))
+
         pts: list[tuple[float, float]] = []
         nums: list[float] = []
         cmd = "M"
-        tokens = _PATH_CMD.findall(d)
         flat: list[str] = []
-        for a, b in tokens:
+        for a, b in _PATH_CMD.findall(d):
             flat.append(a or b)
         i = 0
+        cx, cy = 0.0, 0.0
         while i < len(flat):
             t = flat[i]
             if re.match(r"^[A-Za-z]$", t):
@@ -53,35 +140,67 @@ def _parse_svg_paths(svg_text: str) -> list[list[tuple[float, float]]]:
             except ValueError:
                 pass
             i += 1
-            if cmd in ("M", "L", "m", "l") and len(nums) >= 2:
-                x, y = nums[0], nums[1]
-                nums = nums[2:]
-                if cmd in ("m", "l") and pts:
-                    x += pts[-1][0]
-                    y += pts[-1][1]
-                pts.append((x, y))
+
+            def _take(n: int) -> list[float] | None:
+                nonlocal nums
+                if len(nums) < n:
+                    return None
+                chunk, nums = nums[:n], nums[n:]
+                return chunk
+
+            if cmd in ("M", "L", "m", "l"):
+                chunk = _take(2)
+                if not chunk:
+                    continue
+                x, y = chunk
+                if cmd in ("m", "l"):
+                    x += cx
+                    y += cy
+                cx, cy = x, y
+                pts.append((x + tx, y + ty))
                 if cmd == "M":
                     cmd = "L"
                 elif cmd == "m":
                     cmd = "l"
-            elif cmd in ("H", "h") and len(nums) >= 1:
-                x = nums.pop(0)
-                y = pts[-1][1] if pts else 0.0
-                if cmd == "h" and pts:
-                    x += pts[-1][0]
-                pts.append((x, y))
-            elif cmd in ("V", "v") and len(nums) >= 1:
-                y = nums.pop(0)
-                x = pts[-1][0] if pts else 0.0
-                if cmd == "v" and pts:
-                    y += pts[-1][1]
-                pts.append((x, y))
+            elif cmd in ("H", "h"):
+                chunk = _take(1)
+                if not chunk:
+                    continue
+                x = chunk[0] + (cx if cmd == "h" else 0.0)
+                y = cy
+                cx = x
+                pts.append((x + tx, y + ty))
+            elif cmd in ("V", "v"):
+                chunk = _take(1)
+                if not chunk:
+                    continue
+                y = chunk[0] + (cy if cmd == "v" else 0.0)
+                x = cx
+                cy = y
+                pts.append((x + tx, y + ty))
+            elif cmd in ("C", "c"):
+                chunk = _take(6)
+                if not chunk:
+                    continue
+                x1, y1, x2, y2, x, y = chunk
+                if cmd == "c":
+                    x1, y1 = x1 + cx, y1 + cy
+                    x2, y2 = x2 + cx, y2 + cy
+                    x, y = x + cx, y + cy
+                p0 = (cx, cy)
+                for px, py in _cubic(p0, (x1, y1), (x2, y2), (x, y)):
+                    pts.append((px + tx, py + ty))
+                cx, cy = x, y
             elif cmd in ("Z", "z"):
-                if pts and pts[0] != pts[-1]:
-                    pts.append(pts[0])
+                if pts:
+                    # close in local space already translated
+                    first = pts[0]
+                    if abs(first[0] - (cx + tx)) > 1e-3 or abs(first[1] - (cy + ty)) > 1e-3:
+                        pts.append(first)
+                    cx, cy = first[0] - tx, first[1] - ty
                 nums.clear()
         if len(pts) >= 3:
-            out.append(pts)
+            out.append((pts, fill))
     return out
 
 
@@ -118,6 +237,27 @@ def _polyline_length(pts: list[tuple[float, float]]) -> float:
     return total
 
 
+def _split_on_jumps(
+    pts: list[tuple[float, float]],
+    max_jump: float,
+) -> list[list[tuple[float, float]]]:
+    """Break polylines at absurd gaps (travel artifacts)."""
+    if len(pts) < 2:
+        return []
+    chunks: list[list[tuple[float, float]]] = []
+    cur: list[tuple[float, float]] = [pts[0]]
+    for i in range(1, len(pts)):
+        d = float(np.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]))
+        if d > max_jump and len(cur) >= 2:
+            chunks.append(cur)
+            cur = [pts[i]]
+        else:
+            cur.append(pts[i])
+    if len(cur) >= 2:
+        chunks.append(cur)
+    return chunks
+
+
 def _trace_contour_from(
     mask: np.ndarray,
     visited: np.ndarray,
@@ -125,17 +265,13 @@ def _trace_contour_from(
 ) -> list[tuple[float, float]]:
     """Moore-neighborhood boundary walk starting at an on-pixel."""
     h, w = mask.shape
-    # Clockwise neighbors relative to incoming direction index
-    # N, NE, E, SE, S, SW, W, NW
     deltas = [(-1, 0), (-1, 1), (0, 1), (1, 1), (1, 0), (1, -1), (0, -1), (-1, -1)]
     y, x = start
     pts: list[tuple[float, float]] = [(float(x), float(y))]
     visited[y, x] = True
-    # Start looking from West so first step prefers Eastward along edge
     back_dir = 6
     for _ in range(h * w * 2):
         found = None
-        # Start search from back_dir + 6 (one past left of incoming) per Moore
         for k in range(8):
             d = (back_dir + 6 + k) % 8
             ny, nx = y + deltas[d][0], x + deltas[d][1]
@@ -155,6 +291,21 @@ def _trace_contour_from(
     return pts
 
 
+def _is_page_frame_polyline(
+    pts: list[tuple[float, float]],
+    page_w: float,
+    page_h: float,
+) -> bool:
+    """True if polyline is essentially the paper/image border rectangle."""
+    if len(pts) < 4:
+        return False
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    bw = max(xs) - min(xs)
+    bh = max(ys) - min(ys)
+    return bw >= 0.82 * page_w and bh >= 0.82 * page_h
+
+
 def _edge_polylines(
     edge_map: np.ndarray,
     *,
@@ -162,29 +313,46 @@ def _edge_polylines(
     max_paths: int,
     page_w: float,
     page_h: float,
+    min_path_points: int = 6,
+    min_length_px: float = 10.0,
 ) -> list[list[tuple[float, float]]]:
     """
     Connected edge contours from edge_map (not horizontal-only runs).
 
-    Threshold → binary → Moore boundary traces → simplify → budget by length×ink.
+    Threshold → binary → Moore boundary traces → jump-split → simplify → budget.
     """
     h, w = edge_map.shape
-    thr = max(18.0, float(np.percentile(edge_map, 82)))
+    thr = max(28.0, float(np.percentile(edge_map, 90)))
     mask = edge_map >= thr
-    # Thin-ish: keep boundary-ish pixels (on and has off neighbor) to reduce fill blobs
+    # Ignore image-border pixels (common FIND_EDGES frame artifact)
+    margin = 2
+    mask[:margin, :] = False
+    mask[-margin:, :] = False
+    mask[:, :margin] = False
+    mask[:, -margin:] = False
+    # Despeckle: keep pixels with at least 2 on-neighbors
     padded = np.pad(mask.astype(np.uint8), 1, mode="constant")
-    boundary = np.zeros_like(mask, dtype=bool)
+    neigh = np.zeros((h, w), dtype=np.int16)
     for dy in (-1, 0, 1):
         for dx in (-1, 0, 1):
             if dy == 0 and dx == 0:
                 continue
-            neighbor = padded[1 + dy : 1 + dy + h, 1 + dx : 1 + dx + w].astype(bool)
+            neigh += padded[1 + dy : 1 + dy + h, 1 + dx : 1 + dx + w]
+    mask = mask & (neigh >= 2)
+
+    # Prefer true boundary pixels
+    boundary = np.zeros_like(mask, dtype=bool)
+    padded2 = np.pad(mask.astype(np.uint8), 1, mode="constant")
+    for dy in (-1, 0, 1):
+        for dx in (-1, 0, 1):
+            if dy == 0 and dx == 0:
+                continue
+            neighbor = padded2[1 + dy : 1 + dy + h, 1 + dx : 1 + dx + w].astype(bool)
             boundary |= mask & (~neighbor)
     if not np.any(boundary):
         boundary = mask
 
     visited = np.zeros_like(boundary, dtype=bool)
-    # Subsample seed scan by step for booth speed
     seeds: list[tuple[int, int]] = []
     for y in range(0, h, max(1, step)):
         row = boundary[y]
@@ -193,35 +361,47 @@ def _edge_polylines(
                 seeds.append((y, x))
 
     scored: list[tuple[float, list[tuple[float, float]]]] = []
+    max_jump_px = max(6.0, min(w, h) * 0.04)
     for sy, sx in seeds:
         if visited[sy, sx] or not boundary[sy, sx]:
             continue
         pts_px = _trace_contour_from(boundary, visited, (sy, sx))
-        if len(pts_px) < 4:
-            continue
-        # Score: geometric length × mean edge strength along path
-        ink_vals = []
-        for x, y in pts_px:
-            ix, iy = int(np.clip(x, 0, w - 1)), int(np.clip(y, 0, h - 1))
-            ink_vals.append(float(edge_map[iy, ix]))
-        mean_ink = float(np.mean(ink_vals)) if ink_vals else 0.0
-        length = _polyline_length(pts_px)
-        if length < 3.0:
-            continue
-        scored.append((length * (0.25 + mean_ink / 255.0), pts_px))
+        for chunk in _split_on_jumps(pts_px, max_jump_px):
+            if len(chunk) < max(4, int(min_path_points)):
+                continue
+            ink_vals = []
+            for x, y in chunk:
+                ix, iy = int(np.clip(x, 0, w - 1)), int(np.clip(y, 0, h - 1))
+                ink_vals.append(float(edge_map[iy, ix]))
+            mean_ink = float(np.mean(ink_vals)) if ink_vals else 0.0
+            length = _polyline_length(chunk)
+            if length < float(min_length_px):
+                continue
+            scored.append((length * (0.25 + mean_ink / 255.0), chunk))
 
     scored.sort(key=lambda t: -t[0])
     out: list[list[tuple[float, float]]] = []
-    for _, pts_px in scored[:max_paths]:
+    max_jump_mm = max(4.0, min(page_w, page_h) * 0.05)
+    for _, pts_px in scored[: max_paths * 2]:
         mm = [map_to_page(x, y, img_w=w, img_h=h, page_w=page_w, page_h=page_h) for x, y in pts_px]
-        try:
-            simple = list(LineString(mm).simplify(0.2, preserve_topology=False).coords)
-            if len(simple) >= 2:
-                out.append([(float(a), float(b)) for a, b in simple])
-        except Exception:
-            if len(mm) >= 2:
-                out.append(mm)
-    return out
+        for piece in _split_on_jumps(mm, max_jump_mm):
+            if len(piece) < max(2, int(min_path_points) // 2):
+                continue
+            if _is_page_frame_polyline(piece, page_w, page_h):
+                continue
+            try:
+                simple = list(LineString(piece).simplify(0.45, preserve_topology=False).coords)
+                cleaned = [(float(a), float(b)) for a, b in simple]
+                if len(cleaned) >= 2 and _polyline_length(cleaned) >= 1.5:
+                    if _is_page_frame_polyline(cleaned, page_w, page_h):
+                        continue
+                    out.append(cleaned)
+            except Exception:
+                if len(piece) >= 2:
+                    out.append(piece)
+        if len(out) >= max_paths:
+            break
+    return out[:max_paths]
 
 
 def _vtracer_regions(
@@ -232,6 +412,9 @@ def _vtracer_regions(
     page_w: float,
     page_h: float,
     max_regions: int,
+    filter_speckle: int | None = None,
+    min_path_points: int = 6,
+    min_area_px: float = 64.0,
 ) -> list[RegionPoly]:
     h, w = rgb.shape[:2]
     img = Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8), mode="RGB")
@@ -241,8 +424,8 @@ def _vtracer_regions(
         return []
 
     binary = mode in ("drawing", "lineart") or quality == QualityPreset.BOOTH_FAST
-    filter_speckle = 8 if quality == QualityPreset.BOOTH_FAST else (4 if quality == QualityPreset.BOOTH_BALANCED else 2)
-    layer_diff = 32 if quality == QualityPreset.BOOTH_FAST else (20 if quality == QualityPreset.BOOTH_BALANCED else 12)
+    speckle = int(filter_speckle) if filter_speckle is not None else default_filter_speckle(quality)
+    layer_diff = 40 if quality == QualityPreset.BOOTH_FAST else (28 if quality == QualityPreset.BOOTH_BALANCED else 16)
 
     with TemporaryDirectory() as td:
         inp = Path(td) / "in.png"
@@ -251,14 +434,14 @@ def _vtracer_regions(
         kwargs: dict[str, Any] = {
             "colormode": "binary" if binary else "color",
             "mode": "polygon",
-            "filter_speckle": filter_speckle,
+            "filter_speckle": max(0, speckle),
             "corner_threshold": 60,
             "path_precision": 2,
         }
         if not binary:
             kwargs["hierarchical"] = "stacked"
             kwargs["layer_difference"] = layer_diff
-            kwargs["color_precision"] = 6 if quality != QualityPreset.STUDIO_HQ else 8
+            kwargs["color_precision"] = 5 if quality != QualityPreset.STUDIO_HQ else 7
         try:
             vtracer.convert_image_to_svg_py(str(inp), str(outp), **kwargs)
             svg = outp.read_text(encoding="utf-8")
@@ -266,25 +449,41 @@ def _vtracer_regions(
             return []
 
     paths = _parse_svg_paths(svg)
-    # Sort by area descending, budget trim
-    scored: list[tuple[float, list[tuple[float, float]]]] = []
-    for pts in paths:
-        a = _poly_area(pts)
-        if a < 4:
+    img_area = float(w * h)
+    max_jump_px = max(8.0, min(w, h) * 0.06)
+    scored: list[tuple[float, list[tuple[float, float]], tuple[float, float, float]]] = []
+    for pts, fill in paths:
+        # Drop full-frame / near-full background shells (common vtracer first path)
+        area = _poly_area(pts)
+        if area < float(min_area_px):
             continue
-        scored.append((a, pts))
-    scored.sort(key=lambda t: -t[0])
+        if area >= 0.82 * img_area:
+            continue
+        # Reject paths that still contain huge jumps after transform fix
+        clean_chunks = _split_on_jumps(pts, max_jump_px)
+        if not clean_chunks:
+            continue
+        # Prefer the largest contiguous chunk for closed regions
+        pts_clean = max(clean_chunks, key=lambda c: _poly_area(c) if len(c) >= 3 else _polyline_length(c))
+        if len(pts_clean) < max(3, int(min_path_points)):
+            continue
+        area = _poly_area(pts_clean)
+        if area < float(min_area_px):
+            continue
+        if area >= 0.82 * img_area:
+            continue
+        mean = _parse_hex_rgb(fill) or _mean_rgb_in_poly(rgb, pts_clean)
+        scored.append((area, pts_clean, mean))
 
+    scored.sort(key=lambda t: -t[0])
     regions: list[RegionPoly] = []
-    for i, (area, pts_px) in enumerate(scored[:max_regions]):
-        mean = _mean_rgb_in_poly(rgb, pts_px)
+    for i, (area, pts_px, mean) in enumerate(scored[:max_regions]):
         pts_mm = [
             map_to_page(x, y, img_w=w, img_h=h, page_w=page_w, page_h=page_h) for x, y in pts_px
         ]
-        # Resample / simplify
         try:
             if len(pts_mm) >= 3:
-                pts_mm = [(float(a), float(b)) for a, b in LineString(pts_mm).simplify(0.25).coords]
+                pts_mm = [(float(a), float(b)) for a, b in LineString(pts_mm).simplify(0.35).coords]
         except Exception:
             pass
         if len(pts_mm) < 3:
@@ -300,24 +499,33 @@ def _vtracer_regions(
     return regions
 
 
-def _preprocess_array(rgb: np.ndarray, mode: str) -> np.ndarray:
-    """Apply image_mode transforms on an already-loaded RGB array."""
+def _preprocess_array(
+    rgb: np.ndarray,
+    mode: str,
+    *,
+    posterize_levels: int = 0,
+    contrast: float = 1.0,
+) -> np.ndarray:
+    """Apply image_mode transforms, optional contrast + posterize."""
     m = (mode or "photo").lower()
-    if m == "photo":
-        return rgb
-    img = Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8), mode="RGB")
-    if m == "sketch":
-        g = ImageOps.autocontrast(ImageOps.grayscale(img))
-        img = Image.merge("RGB", (g, g, g))
-    elif m == "lineart":
-        g = ImageOps.grayscale(img)
-        edges = ImageOps.invert(ImageOps.autocontrast(g.filter(ImageFilter.FIND_EDGES)))
-        img = Image.merge("RGB", (edges, edges, edges))
-    elif m == "drawing":
-        g = ImageOps.grayscale(img)
-        bw = g.point(lambda x: 255 if x > 160 else 0)
-        img = Image.merge("RGB", (bw, bw, bw))
-    return np.asarray(img, dtype=np.float32)
+    out = np.asarray(rgb, dtype=np.float32)
+    if m != "photo":
+        img = Image.fromarray(np.clip(out, 0, 255).astype(np.uint8), mode="RGB")
+        if m == "sketch":
+            g = ImageOps.autocontrast(ImageOps.grayscale(img))
+            img = Image.merge("RGB", (g, g, g))
+        elif m == "lineart":
+            g = ImageOps.grayscale(img)
+            edges = ImageOps.invert(ImageOps.autocontrast(g.filter(ImageFilter.FIND_EDGES)))
+            img = Image.merge("RGB", (edges, edges, edges))
+        elif m == "drawing":
+            g = ImageOps.grayscale(img)
+            bw = g.point(lambda x: 255 if x > 160 else 0)
+            img = Image.merge("RGB", (bw, bw, bw))
+        out = np.asarray(img, dtype=np.float32)
+    out = _contrast_boost(out, contrast)
+    out = _posterize_rgb(out, posterize_levels)
+    return out
 
 
 def ingest_portrait(
@@ -329,6 +537,10 @@ def ingest_portrait(
     paper: PaperSize | str = PaperSize.A4,
     crop: CropRect | dict | None = None,
     auto_frame: bool = True,
+    posterize_levels: int | None = None,
+    filter_speckle: int | None = None,
+    min_path_points: int | None = None,
+    contrast: float = 1.12,
 ) -> PortraitVector:
     """Load/crop/preprocess image and build PortraitVector (tone + edges + regions)."""
     t0 = time.perf_counter()
@@ -338,6 +550,10 @@ def ingest_portrait(
     max_side = int(limits["image_max"])
     max_paths = int(limits["max_paths"])
     page_w, page_h = PAPER_MM[paper_enum]
+
+    post_n = default_posterize_levels(quality_enum) if posterize_levels is None else int(posterize_levels)
+    speckle = default_filter_speckle(quality_enum) if filter_speckle is None else int(filter_speckle)
+    min_pts = default_min_path_points(quality_enum) if min_path_points is None else int(min_path_points)
 
     # Load full-res for framing
     if image_array is not None:
@@ -368,21 +584,36 @@ def ingest_portrait(
         img = img.resize((max(1, int(w0 * scale)), max(1, int(h0 * scale))), Image.Resampling.LANCZOS)
 
     rgb = np.asarray(img, dtype=np.float32)
-    rgb = _preprocess_array(rgb, mode)
+    rgb = _preprocess_array(rgb, mode, posterize_levels=post_n, contrast=float(contrast))
     t_pre = time.perf_counter()
 
     lum = luminance(rgb)
     ink_target = np.clip(1.0 - lum / 255.0, 0.0, 1.0).astype(np.float32)
 
-    # Edge map
+    # Edge map: light blur first to reduce speckled FIND_EDGES noise
     g = Image.fromarray(np.clip(lum, 0, 255).astype(np.uint8), mode="L")
+    g = g.filter(ImageFilter.GaussianBlur(radius=0.8))
     edges = np.asarray(g.filter(ImageFilter.FIND_EDGES), dtype=np.float32)
     edge_step = 4 if quality_enum == QualityPreset.BOOTH_FAST else (3 if quality_enum == QualityPreset.BOOTH_BALANCED else 2)
-    edge_budget = min(max_paths // 2, 400 if quality_enum == QualityPreset.BOOTH_FAST else (1200 if quality_enum == QualityPreset.BOOTH_BALANCED else 4000))
-    edge_polys = _edge_polylines(edges, step=edge_step, max_paths=edge_budget, page_w=page_w, page_h=page_h)
+    edge_budget = min(
+        max_paths // 2,
+        400 if quality_enum == QualityPreset.BOOTH_FAST else (1200 if quality_enum == QualityPreset.BOOTH_BALANCED else 4000),
+    )
+    edge_polys = _edge_polylines(
+        edges,
+        step=edge_step,
+        max_paths=edge_budget,
+        page_w=page_w,
+        page_h=page_h,
+        min_path_points=min_pts,
+        min_length_px=12.0 if quality_enum != QualityPreset.STUDIO_HQ else 8.0,
+    )
     t_edges = time.perf_counter()
 
-    region_budget = min(max_paths // 3, 80 if quality_enum == QualityPreset.BOOTH_FAST else (200 if quality_enum == QualityPreset.BOOTH_BALANCED else 500))
+    region_budget = min(
+        max_paths // 3,
+        80 if quality_enum == QualityPreset.BOOTH_FAST else (200 if quality_enum == QualityPreset.BOOTH_BALANCED else 500),
+    )
     regions = _vtracer_regions(
         rgb,
         mode=mode,
@@ -390,6 +621,9 @@ def ingest_portrait(
         page_w=page_w,
         page_h=page_h,
         max_regions=region_budget,
+        filter_speckle=speckle,
+        min_path_points=min_pts,
+        min_area_px=80.0 if quality_enum == QualityPreset.BOOTH_FAST else 48.0,
     )
     t_trace = time.perf_counter()
 
@@ -397,9 +631,7 @@ def ingest_portrait(
     clusters: list[ColorCluster] = []
     if regions:
         for r in regions[:24]:
-            clusters.append(
-                ColorCluster(id=r.id, mean_rgb=r.mean_rgb, area=r.area)
-            )
+            clusters.append(ColorCluster(id=r.id, mean_rgb=r.mean_rgb, area=r.area))
     else:
         for i, q in enumerate((20, 40, 60, 80)):
             mask = lum <= np.percentile(lum, q)
@@ -437,5 +669,9 @@ def ingest_portrait(
             "region_count": len(regions),
             "max_paths": max_paths,
             "auto_frame": auto_frame and (crop is None),
+            "posterize_levels": post_n,
+            "filter_speckle": speckle,
+            "min_path_points": min_pts,
+            "contrast": float(contrast),
         },
     )

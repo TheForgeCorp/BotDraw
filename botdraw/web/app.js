@@ -26,6 +26,10 @@ let portraitIngestPreview = null; // last ingest API payload
 let portraitShowEdges = true;
 let portraitShowRegions = true;
 let portraitShowCrop = true;
+let portraitPosterizeLevels = 6;
+let portraitFilterSpeckle = 8;
+let portraitMinPathPoints = 6;
+let portraitContrast = 1.12;
 const PORTRAIT_LINE_TYPES = [
   "solid", "dashed", "dotted", "dash_dot", "zigzag", "triangle", "wave", "square_wave",
   "half_circle", "scallop_alt", "beads", "double", "railroad", "stitch", "hatch_tick",
@@ -657,6 +661,16 @@ function renderPortrait() {
         </button>`
       ).join("")}
     </div>
+    <h4>Ingest (SVGcode-style cleanup)</h4>
+    <div class="grid-2">
+      ${field("Posterize levels", `<input id="posterize-levels" type="range" min="0" max="16" step="1" value="${portraitPosterizeLevels}" /><span id="posterize-levels-val">${portraitPosterizeLevels}</span>`)}
+      ${field("Filter speckle", `<input id="filter-speckle" type="range" min="0" max="40" step="1" value="${portraitFilterSpeckle}" /><span id="filter-speckle-val">${portraitFilterSpeckle}</span>`)}
+    </div>
+    <div class="grid-2">
+      ${field("Min path points", `<input id="min-path-points" type="range" min="0" max="30" step="1" value="${portraitMinPathPoints}" /><span id="min-path-points-val">${portraitMinPathPoints}</span>`)}
+      ${field("Contrast", `<input id="ingest-contrast" type="range" min="0.8" max="1.6" step="0.02" value="${portraitContrast}" /><span id="ingest-contrast-val">${Number(portraitContrast).toFixed(2)}</span>`)}
+    </div>
+    <p class="muted" style="margin-top:0.2rem">0 posterize = off. Speckle ≈ turdsize; min points drops short fragments.</p>
     <h4>Portrait style</h4>
     ${styleButtons(list)}
     <h4>Paper</h4>
@@ -708,6 +722,24 @@ function renderPortrait() {
   bindRange("pattern-amp", "pattern-amp-val");
   bindRange("dash-mm", "dash-mm-val");
   bindRange("gap-mm", "gap-mm-val");
+  const bindIntRange = (id, labelId, setter) => {
+    const el = root.querySelector(`#${id}`);
+    const lab = root.querySelector(`#${labelId}`);
+    if (!el || !lab) return;
+    const sync = () => {
+      const v = Number(el.value);
+      lab.textContent = Number.isInteger(v) || id !== "ingest-contrast" ? String(Math.round(v * (id === "ingest-contrast" ? 100 : 1)) / (id === "ingest-contrast" ? 100 : 1)) : String(v);
+      if (id === "ingest-contrast") lab.textContent = v.toFixed(2);
+      else lab.textContent = String(Math.round(v));
+      setter(id === "ingest-contrast" ? v : Math.round(v));
+    };
+    el.oninput = sync;
+    sync();
+  };
+  bindIntRange("posterize-levels", "posterize-levels-val", (v) => { portraitPosterizeLevels = v; });
+  bindIntRange("filter-speckle", "filter-speckle-val", (v) => { portraitFilterSpeckle = v; });
+  bindIntRange("min-path-points", "min-path-points-val", (v) => { portraitMinPathPoints = v; });
+  bindIntRange("ingest-contrast", "ingest-contrast-val", (v) => { portraitContrast = v; });
 
   root.querySelectorAll("[data-style]").forEach((btn) => {
     btn.onclick = () => {
@@ -826,10 +858,20 @@ async function runPortraitIngest(opts = {}) {
   state.quality = root.querySelector("#quality")?.value || state.quality;
   portraitPaperId = root.querySelector("#paper-color")?.value || portraitPaperId;
   portraitAutoFrame = !!root.querySelector("#auto-frame")?.checked;
+  if (root.querySelector("#posterize-levels")) portraitPosterizeLevels = Number(root.querySelector("#posterize-levels").value);
+  if (root.querySelector("#filter-speckle")) portraitFilterSpeckle = Number(root.querySelector("#filter-speckle").value);
+  if (root.querySelector("#min-path-points")) portraitMinPathPoints = Number(root.querySelector("#min-path-points").value);
+  if (root.querySelector("#ingest-contrast")) portraitContrast = Number(root.querySelector("#ingest-contrast").value);
   if (portraitStatsEl) portraitStatsEl.textContent = "Ingesting (no style)…";
   const t0 = performance.now();
   let data;
   const cropJson = portraitCrop ? JSON.stringify(portraitCrop) : null;
+  const knobs = {
+    posterize_levels: portraitPosterizeLevels,
+    filter_speckle: portraitFilterSpeckle,
+    min_path_points: portraitMinPathPoints,
+    contrast: portraitContrast,
+  };
   if (portraitFile) {
     const uploadFile = await downscalePortraitForUpload(portraitFile, 1280);
     const fd = new FormData();
@@ -840,6 +882,10 @@ async function runPortraitIngest(opts = {}) {
     if (opts.forceReingest || portraitForceReingest) fd.append("force_reingest", "true");
     if (cropJson) fd.append("crop", cropJson);
     fd.append("include_preview_png", "true");
+    fd.append("posterize_levels", String(knobs.posterize_levels));
+    fd.append("filter_speckle", String(knobs.filter_speckle));
+    fd.append("min_path_points", String(knobs.min_path_points));
+    fd.append("contrast", String(knobs.contrast));
     fd.append("file", uploadFile, uploadFile.name || "portrait.jpg");
     data = await api("/api/portrait/ingest/upload", { method: "POST", body: fd });
   } else {
@@ -854,6 +900,7 @@ async function runPortraitIngest(opts = {}) {
         force_reingest: !!(opts.forceReingest || portraitForceReingest),
         crop: portraitCrop || undefined,
         include_preview_png: true,
+        ...knobs,
       }),
     });
   }
@@ -865,11 +912,14 @@ async function runPortraitIngest(opts = {}) {
   drawPortraitIngestPreview(data);
   const wall = ((performance.now() - t0) / 1000).toFixed(2);
   const timing = data.timing_s || {};
+  const meta = data.meta || {};
   if (portraitStatsEl) {
     portraitStatsEl.textContent =
       `Ingest ready · edges ${data.edge_count} · regions ${data.region_count} · wall ${wall}s` +
       (timing.total != null ? ` · trace ${timing.total}s` : "") +
       (data.cache_hit ? " · cache" : "") +
+      ` · post ${meta.posterize_levels ?? knobs.posterize_levels}` +
+      ` · speck ${meta.filter_speckle ?? knobs.filter_speckle}` +
       ` · id ${portraitIngestId || "?"}`;
   }
   // Enable Apply after ingest
@@ -881,6 +931,10 @@ async function runPortraitIngest(opts = {}) {
 function collectPortraitExtra(root, { reuse = false, forceReingest = false } = {}) {
   portraitPaperId = root.querySelector("#paper-color")?.value || portraitPaperId;
   portraitLineType = root.querySelector("#line-type")?.value || portraitLineType;
+  if (root.querySelector("#posterize-levels")) portraitPosterizeLevels = Number(root.querySelector("#posterize-levels").value);
+  if (root.querySelector("#filter-speckle")) portraitFilterSpeckle = Number(root.querySelector("#filter-speckle").value);
+  if (root.querySelector("#min-path-points")) portraitMinPathPoints = Number(root.querySelector("#min-path-points").value);
+  if (root.querySelector("#ingest-contrast")) portraitContrast = Number(root.querySelector("#ingest-contrast").value);
   const extra = {
     image_mode: portraitImageMode,
     paper_id: portraitPaperId,
@@ -892,6 +946,10 @@ function collectPortraitExtra(root, { reuse = false, forceReingest = false } = {
     gap_mm: Number(root.querySelector("#gap-mm")?.value || 1.2),
     ornament_target: "all",
     auto_frame: portraitAutoFrame,
+    posterize_levels: portraitPosterizeLevels,
+    filter_speckle: portraitFilterSpeckle,
+    min_path_points: portraitMinPathPoints,
+    contrast: portraitContrast,
   };
   if (portraitCrop) extra.crop = portraitCrop;
   if (portraitPenMap) extra.pen_map = portraitPenMap;

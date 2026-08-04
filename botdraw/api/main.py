@@ -228,6 +228,10 @@ class PortraitIngestRequest(BaseModel):
     ingest_id: Optional[str] = None
     reuse_ingest: bool = False
     include_preview_png: bool = True
+    posterize_levels: Optional[int] = None
+    filter_speckle: Optional[int] = None
+    min_path_points: Optional[int] = None
+    contrast: Optional[float] = None
 
 
 def _portrait_ingest_response(pv, *, include_preview_png: bool = True) -> dict[str, Any]:
@@ -236,11 +240,21 @@ def _portrait_ingest_response(pv, *, include_preview_png: bool = True) -> dict[s
     return portrait_vector_preview_dict(pv, include_preview_png=include_preview_png)
 
 
+def _ingest_knobs_from_body(body: PortraitIngestRequest) -> dict[str, Any]:
+    return {
+        "posterize_levels": body.posterize_levels,
+        "filter_speckle": body.filter_speckle,
+        "min_path_points": body.min_path_points,
+        "contrast": body.contrast,
+    }
+
+
 @app.post("/api/portrait/ingest")
 def api_portrait_ingest_json(body: PortraitIngestRequest):
     """Ingest only (no style/ornament) — synthetic face when no upload."""
     from botdraw.portrait import resolve_portrait_vector
 
+    knobs = _ingest_knobs_from_body(body)
     if body.reuse_ingest and body.ingest_id and not body.force_reingest:
         pv, hit = resolve_portrait_vector(
             image_path=None,
@@ -252,6 +266,7 @@ def api_portrait_ingest_json(body: PortraitIngestRequest):
             ingest_id=body.ingest_id,
             force_reingest=False,
             auto_frame=body.auto_frame if body.crop is None else False,
+            **knobs,
         )
     else:
         pv, hit = resolve_portrait_vector(
@@ -264,6 +279,7 @@ def api_portrait_ingest_json(body: PortraitIngestRequest):
             ingest_id=None,
             force_reingest=body.force_reingest,
             auto_frame=body.auto_frame if body.crop is None else False,
+            **knobs,
         )
     data = _portrait_ingest_response(pv, include_preview_png=body.include_preview_png)
     data["cache_hit"] = hit
@@ -281,6 +297,10 @@ async def api_portrait_ingest_upload(
     ingest_id: Optional[str] = Form(None),
     reuse_ingest: bool = Form(False),
     include_preview_png: bool = Form(True),
+    posterize_levels: Optional[int] = Form(None),
+    filter_speckle: Optional[int] = Form(None),
+    min_path_points: Optional[int] = Form(None),
+    contrast: Optional[float] = Form(None),
     file: UploadFile = File(...),
 ):
     from uuid import uuid4
@@ -308,6 +328,10 @@ async def api_portrait_ingest_upload(
         force_reingest=force_reingest,
         auto_frame=auto_frame if crop_obj is None else False,
         image_bytes=raw,
+        posterize_levels=posterize_levels,
+        filter_speckle=filter_speckle,
+        min_path_points=min_path_points,
+        contrast=contrast,
     )
     data = _portrait_ingest_response(pv, include_preview_png=include_preview_png)
     data["cache_hit"] = hit

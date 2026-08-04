@@ -53,6 +53,10 @@ def portrait_vector_preview_dict(
             "edge_count": (pv.meta or {}).get("edge_count"),
             "region_count": (pv.meta or {}).get("region_count"),
             "auto_frame": (pv.meta or {}).get("auto_frame"),
+            "posterize_levels": (pv.meta or {}).get("posterize_levels"),
+            "filter_speckle": (pv.meta or {}).get("filter_speckle"),
+            "min_path_points": (pv.meta or {}).get("min_path_points"),
+            "contrast": (pv.meta or {}).get("contrast"),
         },
     }
     if include_preview_png:
