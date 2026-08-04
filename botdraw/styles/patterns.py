@@ -6,7 +6,7 @@ import math
 
 import numpy as np
 
-from botdraw.core.models import QUALITY_LIMITS, LayeredSVG, PaperSize, Polyline, StyleParams
+from botdraw.core.models import QUALITY_LIMITS, LayeredSVG, Orientation, PaperSize, Polyline, StyleParams
 from botdraw.core.svg import make_pass
 from botdraw.palettes import ink_pens, nearest_pen
 from botdraw.styles import page_size, register
@@ -28,10 +28,10 @@ class _Brick:
     category = "pattern"
     description = "Image quantized into multicolor brick courses"
 
-    def render(self, *, palette, params, paper=PaperSize.A4, image_path=None, image_array=None):
+    def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
         rgb = _img(params, image_path, image_array)
         h, w = rgb.shape[:2]
-        pw, ph = page_size(paper)
+        pw, ph = page_size(paper, orientation)
         pens = ink_pens(palette)
         bw, bh = max(6, int(14 / params.density)), max(4, int(8 / params.density))
         mortar = pens[0]
@@ -71,10 +71,10 @@ class _Weave:
     category = "pattern"
     description = "Warp and weft threads colored from image"
 
-    def render(self, *, palette, params, paper=PaperSize.A4, image_path=None, image_array=None):
+    def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
         rgb = _img(params, image_path, image_array)
         h, w = rgb.shape[:2]
-        pw, ph = page_size(paper)
+        pw, ph = page_size(paper, orientation)
         pens = ink_pens(palette)
         step = max(2, int(5 / params.density))
         buckets: dict[str, list[Polyline]] = {p.id: [] for p in pens}
@@ -107,11 +107,11 @@ class _Spiral:
     category = "pattern"
     description = "Archimedean spiral sampling image colors"
 
-    def render(self, *, palette, params, paper=PaperSize.A4, image_path=None, image_array=None):
+    def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
         rgb = _img(params, image_path, image_array)
         lum = luminance(rgb)
         h, w = rgb.shape[:2]
-        pw, ph = page_size(paper)
+        pw, ph = page_size(paper, orientation)
         pens = ink_pens(palette)
         limits = QUALITY_LIMITS[params.quality]
         turns = int(limits["spiral_turns"] * params.density)

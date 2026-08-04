@@ -10,7 +10,7 @@ from typing import Optional
 import typer
 from rich import print
 
-from botdraw.core.models import PaperSize, QualityPreset
+from botdraw.core.models import Orientation, PaperSize, QualityPreset
 from botdraw.core.pipeline import render_job
 from botdraw.palettes import calibrate_pen, create_palette, list_palette_ids, load_palette
 from botdraw.styles import ensure_styles_loaded, list_styles
@@ -33,6 +33,7 @@ def render_cmd(
     out: Path = typer.Option(Path("jobs/artifacts/cli"), help="Output directory root ignored; uses job store"),
     palette: str = "default-6",
     paper: PaperSize = PaperSize.A4,
+    orientation: Orientation = Orientation.PORTRAIT,
     quality: QualityPreset = QualityPreset.BOOTH_BALANCED,
     seed: int = 42,
     density: float = 1.0,
@@ -44,6 +45,7 @@ def render_cmd(
         style_id=style,
         palette_id=palette,
         paper=paper,
+        orientation=orientation,
         quality=quality,
         seed=seed,
         density=density,

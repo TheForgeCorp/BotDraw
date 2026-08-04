@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from typing import Callable, Protocol
 
-from botdraw.core.models import LayeredSVG, PAPER_MM, PaperSize, PaletteSet, StyleParams
+from botdraw.core.models import (
+    LayeredSVG,
+    Orientation,
+    PaperSize,
+    PaletteSet,
+    StyleParams,
+    paper_dims,
+)
 
 
 class StyleEngine(Protocol):
@@ -19,6 +26,7 @@ class StyleEngine(Protocol):
         palette: PaletteSet,
         params: StyleParams,
         paper: PaperSize = PaperSize.A4,
+        orientation: Orientation = Orientation.PORTRAIT,
         image_path: str | None = None,
         image_array=None,
     ) -> LayeredSVG: ...
@@ -54,8 +62,10 @@ def list_styles(category: str | None = None) -> list[dict]:
     return sorted(items, key=lambda x: (x["category"], x["name"]))
 
 
-def page_size(paper: PaperSize) -> tuple[float, float]:
-    return PAPER_MM[paper]
+def page_size(
+    paper: PaperSize, orientation: Orientation = Orientation.PORTRAIT
+) -> tuple[float, float]:
+    return paper_dims(paper, orientation)
 
 
 def ensure_styles_loaded() -> None:

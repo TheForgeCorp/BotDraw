@@ -3,20 +3,17 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark" />
   <title>BotDraw Dev Lab</title>
   <link rel="stylesheet" href="/static/styles.css" />
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,600&display=swap" rel="stylesheet" />
 </head>
 <body>
-  <div class="bg"></div>
   <header class="top">
     <div class="brand">
       <span class="mark">BotDraw</span>
-      <span class="tag">dev lab · vectorization / color layers / JSON export</span>
+      <span class="tag">Dev Lab</span>
     </div>
-    <nav class="tabs" id="tabs">
+    <nav class="seg-control tabs" id="tabs" aria-label="Apps">
       <button data-app="genartbot" class="active">GenArt</button>
       <button data-app="fractalbot">Fractal</button>
       <button data-app="portraitbot">Portrait</button>
@@ -25,6 +22,7 @@
       <button data-app="palettes">Palettes</button>
       <button data-app="tools">Tools</button>
     </nav>
+    <div class="top-status" id="stats">Ready</div>
   </header>
 
   <main class="layout lab">
@@ -33,29 +31,55 @@
     <section class="panel stage">
       <div class="stage-head">
         <h2 id="stage-title">Emulator</h2>
-        <div class="stats" id="stats">Ready</div>
+        <div class="stage-actions">
+          <a id="download-svg" class="link" href="#" hidden>Download SVG</a>
+          <button id="fit" class="ghost-btn" title="Fit paper to view">Fit</button>
+        </div>
       </div>
-      <canvas id="emu" width="900" height="1200"></canvas>
-      <div class="transport">
-        <button id="play">Play</button>
-        <button id="pause">Pause</button>
-        <button id="skip">Skip end</button>
-        <label>Speed <input id="speed" type="range" min="1" max="60" value="16" /></label>
-        <label class="chk"><input id="ghost" type="checkbox" checked /> pen-up ghost</label>
-        <a id="download-svg" class="link" href="#" hidden>SVG</a>
+      <div class="stage-canvas" id="stage-canvas">
+        <canvas id="emu" aria-label="Plotter emulator"></canvas>
+        <div class="transport" id="transport">
+          <button id="play-toggle" class="icon-btn" aria-label="Play" title="Play / Pause (Space)">
+            <svg class="i-play" width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M3 1.6v10.8c0 .5.55.8.97.53l8.3-5.4a.63.63 0 0 0 0-1.06l-8.3-5.4A.63.63 0 0 0 3 1.6z" fill="currentColor"/></svg>
+            <svg class="i-pause" width="14" height="14" viewBox="0 0 14 14" aria-hidden="true" hidden><rect x="2.5" y="1.5" width="3.4" height="11" rx="1" fill="currentColor"/><rect x="8.1" y="1.5" width="3.4" height="11" rx="1" fill="currentColor"/></svg>
+          </button>
+          <button id="skip" class="icon-btn" aria-label="Skip to end" title="Skip to end">
+            <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 1.9v10.2c0 .5.55.8.97.53l7-4.57V11.5a1 1 0 0 0 1 1h.5a1 1 0 0 0 1-1v-9a1 1 0 0 0-1-1h-.5a1 1 0 0 0-1 1v3.44l-7-4.57A.63.63 0 0 0 2 1.9z" fill="currentColor"/></svg>
+          </button>
+          <span class="time" id="time-now">0:00</span>
+          <input id="scrub" type="range" min="0" max="1000" value="0" step="1" aria-label="Timeline" disabled />
+          <span class="time" id="time-total">0:00</span>
+          <div class="seg-control mini" id="speed-seg" role="group" aria-label="Playback speed">
+            <button data-speed="1">1×</button>
+            <button data-speed="4">4×</button>
+            <button data-speed="16" class="active">16×</button>
+            <button data-speed="60">60×</button>
+          </div>
+          <button id="ghost-btn" class="icon-btn active" aria-pressed="true" aria-label="Toggle pen-up ghost" title="Pen-up ghost (G)">
+            <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M1.5 12.5 12.5 1.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="2.6 2.8" fill="none"/></svg>
+          </button>
+        </div>
       </div>
       <div class="export-bar">
-        <button id="export-pack" disabled>Export pack JSON</button>
-        <button id="export-settings" disabled>Settings JSON</button>
-        <button id="export-layers" disabled>Layers JSON</button>
-        <button id="export-motion" disabled>Motion JSON</button>
-        <button id="export-palette" disabled>Palette JSON</button>
-        <button id="copy-json" disabled>Copy inspector JSON</button>
+        <button id="export-pack" class="primary" disabled>Export pack</button>
+        <div class="menu-wrap">
+          <button id="export-more" class="ghost-btn" disabled aria-haspopup="true" aria-expanded="false">
+            More
+            <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M1.8 3.5 5 6.8l3.2-3.3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+          </button>
+          <div class="menu" id="export-menu" hidden>
+            <button id="export-settings">Settings JSON</button>
+            <button id="export-layers">Layers JSON</button>
+            <button id="export-motion">Motion JSON</button>
+            <button id="export-palette">Palette JSON</button>
+            <button id="copy-json">Copy inspector JSON</button>
+          </div>
+        </div>
       </div>
     </section>
 
     <section class="panel inspector">
-      <div class="insp-tabs">
+      <div class="seg-control insp-tabs" aria-label="Inspector">
         <button data-insp="layers" class="active">Layers</button>
         <button data-insp="json">JSON</button>
         <button data-insp="job">Job</button>

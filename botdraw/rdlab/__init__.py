@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from botdraw.core.models import PaperSize, QualityPreset, StyleParams
+from botdraw.core.models import Orientation, PaperSize, QualityPreset, StyleParams
 from botdraw.core.motion_plan import compile_motion_plan
 from botdraw.core.optimize import optimize_layered
 from botdraw.palettes import load_palette
@@ -19,6 +19,7 @@ def render_experimental(
     image_path: str | None = None,
     quality: QualityPreset = QualityPreset.BOOTH_BALANCED,
     density: float = 1.0,
+    orientation: Orientation = Orientation.PORTRAIT,
 ):
     ensure_styles_loaded()
     palette = load_palette(palette_id)
@@ -27,6 +28,7 @@ def render_experimental(
         palette=palette,
         params=StyleParams(seed=seed, quality=quality, density=density),
         paper=PaperSize.A4,
+        orientation=orientation,
         image_path=image_path,
     )
     layered = optimize_layered(layered)

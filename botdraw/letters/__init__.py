@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from botdraw.core.models import LayeredSVG, PAPER_MM, PaperSize, Polyline, StyleParams
+from botdraw.core.models import LayeredSVG, Orientation, PaperSize, Polyline, StyleParams, paper_dims
 from botdraw.core.overlays import OverlayPassComposer
 from botdraw.core.svg import make_pass
 from botdraw.palettes import load_palette
@@ -131,6 +131,7 @@ def render_letter(
     *,
     palette_id: str = "wedding-highlight",
     paper: PaperSize = PaperSize.A5,
+    orientation: Orientation = Orientation.PORTRAIT,
     language: str = "en",
     highlight_words: list[str] | None = None,
     guest_quote: str | None = None,
@@ -139,7 +140,7 @@ def render_letter(
     palette = load_palette(palette_id)
     ink = next((p for p in palette.pens if p.profile.nib_type.value != "highlighter"), palette.pens[0])
     high = next((p for p in palette.pens if p.profile.nib_type.value == "highlighter"), None)
-    pw, ph = PAPER_MM[paper]
+    pw, ph = paper_dims(paper, orientation)
     text = body.strip()
     if guest_quote:
         text = f'{text}\n\n"{guest_quote}"'

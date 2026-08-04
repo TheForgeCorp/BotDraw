@@ -6,7 +6,7 @@ import math
 
 import numpy as np
 
-from botdraw.core.models import LayeredSVG, PaperSize, Polyline, StyleParams
+from botdraw.core.models import LayeredSVG, Orientation, PaperSize, Polyline, StyleParams
 from botdraw.core.svg import make_pass
 from botdraw.palettes import ink_pens, nearest_pen
 from botdraw.styles import page_size, register
@@ -27,11 +27,11 @@ class _Hilbert:
     category = "backlog"
     description = "Space-filling curve modulated by tone"
 
-    def render(self, *, palette, params, paper=PaperSize.A4, image_path=None, image_array=None):
+    def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
         rgb = _img(params, image_path, image_array)
         lum = luminance(rgb)
         h, w = lum.shape
-        pw, ph = page_size(paper)
+        pw, ph = page_size(paper, orientation)
         pens = ink_pens(palette)
         # Simple recursive Hilbert order-4
         order = 5
@@ -83,8 +83,8 @@ class _Truchet:
     category = "backlog"
     description = "Arc tile field from noise"
 
-    def render(self, *, palette, params, paper=PaperSize.A4, image_path=None, image_array=None):
-        pw, ph = page_size(paper)
+    def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
+        pw, ph = page_size(paper, orientation)
         pens = ink_pens(palette)
         rng = np.random.default_rng(params.seed)
         cell = 12
@@ -107,8 +107,8 @@ class _Phyllotaxis:
     category = "backlog"
     description = "Sunflower packing dots"
 
-    def render(self, *, palette, params, paper=PaperSize.A4, image_path=None, image_array=None):
-        pw, ph = page_size(paper)
+    def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
+        pw, ph = page_size(paper, orientation)
         pens = ink_pens(palette)
         cx, cy = pw / 2, ph / 2
         golden = math.pi * (3 - math.sqrt(5))
@@ -136,8 +136,8 @@ class _Mandala:
     category = "backlog"
     description = "Radial burst sectors"
 
-    def render(self, *, palette, params, paper=PaperSize.A4, image_path=None, image_array=None):
-        pw, ph = page_size(paper)
+    def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
+        pw, ph = page_size(paper, orientation)
         pens = ink_pens(palette)
         cx, cy = pw / 2, ph / 2
         buckets: dict[str, list[Polyline]] = {p.id: [] for p in pens}
@@ -166,8 +166,8 @@ class _StringArt:
     category = "backlog"
     description = "Chord envelope around a circle"
 
-    def render(self, *, palette, params, paper=PaperSize.A4, image_path=None, image_array=None):
-        pw, ph = page_size(paper)
+    def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
+        pw, ph = page_size(paper, orientation)
         pens = ink_pens(palette)
         cx, cy, r = pw / 2, ph / 2, min(pw, ph) * 0.35
         n = 72
@@ -191,11 +191,11 @@ class _Seismograph:
     category = "backlog"
     description = "Stacked waveforms from row scans"
 
-    def render(self, *, palette, params, paper=PaperSize.A4, image_path=None, image_array=None):
+    def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
         rgb = _img(params, image_path, image_array)
         lum = luminance(rgb)
         h, w = lum.shape
-        pw, ph = page_size(paper)
+        pw, ph = page_size(paper, orientation)
         pens = ink_pens(palette)
         buckets: dict[str, list[Polyline]] = {p.id: [] for p in pens}
         for yi, y in enumerate(range(0, h, 4)):

@@ -6,7 +6,7 @@ import math
 
 import numpy as np
 
-from botdraw.core.models import QUALITY_LIMITS, LayeredSVG, PaperSize, Polyline, StyleParams
+from botdraw.core.models import QUALITY_LIMITS, LayeredSVG, Orientation, PaperSize, Polyline, StyleParams
 from botdraw.core.svg import make_pass
 from botdraw.palettes import ink_pens
 from botdraw.styles import page_size, register
@@ -51,9 +51,9 @@ class _Mandelbrot:
     category = "fractal"
     description = "Escape-time Mandelbrot bands as multicolor hatch strokes (z <- z^2 + c)"
 
-    def render(self, *, palette, params, paper=PaperSize.A4, image_path=None, image_array=None):
+    def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
         del image_path, image_array
-        pw, ph = page_size(paper)
+        pw, ph = page_size(paper, orientation)
         pens = ink_pens(palette)
         limits = QUALITY_LIMITS[params.quality]
         rng = np.random.default_rng(params.seed)
@@ -241,13 +241,14 @@ def _compose_square_stroke(
     palette,
     params: StyleParams,
     paper: PaperSize,
+    orientation: Orientation = Orientation.PORTRAIT,
     style_id: str,
     curve_name: str,
     pass_name: str,
     meta_extra: dict | None = None,
     fill_ratio: float = 0.72,
 ) -> LayeredSVG:
-    pw, ph = page_size(paper)
+    pw, ph = page_size(paper, orientation)
     pen = ink_pens(palette)[0]
     rng = np.random.default_rng(params.seed)
     flip_x = bool(rng.integers(0, 2))
@@ -297,7 +298,7 @@ class _HilbertCurve:
     category = "fractal"
     description = "Classic space-filling Hilbert curve — single continuous line"
 
-    def render(self, *, palette, params, paper=PaperSize.A4, image_path=None, image_array=None):
+    def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
         del image_path, image_array
         order = int(np.clip(_iters({"booth-fast": 5, "booth-balanced": 6, "studio-hq": 7}, params), 4, 7))
         return _compose_square_stroke(
@@ -305,6 +306,7 @@ class _HilbertCurve:
             palette=palette,
             params=params,
             paper=paper,
+            orientation=orientation,
             style_id=self.id,
             curve_name="Hilbert",
             pass_name=f"Hilbert order-{order}",
@@ -318,7 +320,7 @@ class _PeanoCurve:
     category = "fractal"
     description = "Space-filling Peano curve — dense woven single stroke"
 
-    def render(self, *, palette, params, paper=PaperSize.A4, image_path=None, image_array=None):
+    def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
         del image_path, image_array
         order = int(np.clip(_iters({"booth-fast": 2, "booth-balanced": 3, "studio-hq": 4}, params), 1, 4))
         s = _lsystem(
@@ -335,6 +337,7 @@ class _PeanoCurve:
             palette=palette,
             params=params,
             paper=paper,
+            orientation=orientation,
             style_id=self.id,
             curve_name="Peano",
             pass_name=f"Peano order-{order}",
@@ -348,7 +351,7 @@ class _MooreCurve:
     category = "fractal"
     description = "Closed Hilbert variant — maze-like loop in one stroke"
 
-    def render(self, *, palette, params, paper=PaperSize.A4, image_path=None, image_array=None):
+    def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
         del image_path, image_array
         order = int(np.clip(_iters({"booth-fast": 3, "booth-balanced": 4, "studio-hq": 5}, params), 2, 5))
         s = _lsystem(
@@ -365,6 +368,7 @@ class _MooreCurve:
             palette=palette,
             params=params,
             paper=paper,
+            orientation=orientation,
             style_id=self.id,
             curve_name="Moore",
             pass_name=f"Moore order-{order}",
@@ -378,7 +382,7 @@ class _GosperCurve:
     category = "fractal"
     description = "Flowsnake / Gosper curve — hexagonal single stroke"
 
-    def render(self, *, palette, params, paper=PaperSize.A4, image_path=None, image_array=None):
+    def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
         del image_path, image_array
         order = int(np.clip(_iters({"booth-fast": 2, "booth-balanced": 3, "studio-hq": 4}, params), 1, 4))
         s = _lsystem(
@@ -395,6 +399,7 @@ class _GosperCurve:
             palette=palette,
             params=params,
             paper=paper,
+            orientation=orientation,
             style_id=self.id,
             curve_name="Gosper",
             pass_name=f"Gosper order-{order}",
@@ -409,7 +414,7 @@ class _DragonCurve:
     category = "fractal"
     description = "Heighway dragon — folded ribbon in one continuous stroke"
 
-    def render(self, *, palette, params, paper=PaperSize.A4, image_path=None, image_array=None):
+    def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
         del image_path, image_array
         order = int(np.clip(_iters({"booth-fast": 9, "booth-balanced": 11, "studio-hq": 13}, params), 6, 14))
         s = _lsystem("FX", {"X": "X+YF+", "Y": "-FX-Y"}, order)
@@ -419,6 +424,7 @@ class _DragonCurve:
             palette=palette,
             params=params,
             paper=paper,
+            orientation=orientation,
             style_id=self.id,
             curve_name="Dragon",
             pass_name=f"Dragon order-{order}",
@@ -433,7 +439,7 @@ class _LevyC:
     category = "fractal"
     description = "Lévy C curve — self-similar C-shaped cloud stroke"
 
-    def render(self, *, palette, params, paper=PaperSize.A4, image_path=None, image_array=None):
+    def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
         del image_path, image_array
         order = int(np.clip(_iters({"booth-fast": 9, "booth-balanced": 11, "studio-hq": 13}, params), 6, 14))
         s = _lsystem("F", {"F": "+F--F+"}, order)
@@ -443,6 +449,7 @@ class _LevyC:
             palette=palette,
             params=params,
             paper=paper,
+            orientation=orientation,
             style_id=self.id,
             curve_name="Lévy C",
             pass_name=f"Lévy C order-{order}",
@@ -457,7 +464,7 @@ class _SierpinskiArrowhead:
     category = "fractal"
     description = "Sierpinski arrowhead curve — triangular lace, one stroke"
 
-    def render(self, *, palette, params, paper=PaperSize.A4, image_path=None, image_array=None):
+    def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
         del image_path, image_array
         order = int(np.clip(_iters({"booth-fast": 5, "booth-balanced": 6, "studio-hq": 7}, params), 3, 8))
         s = _lsystem("XF", {"X": "YF+XF+Y", "Y": "XF-YF-X"}, order)
@@ -467,6 +474,7 @@ class _SierpinskiArrowhead:
             palette=palette,
             params=params,
             paper=paper,
+            orientation=orientation,
             style_id=self.id,
             curve_name="Sierpinski arrowhead",
             pass_name=f"Arrowhead order-{order}",
@@ -481,7 +489,7 @@ class _KochCurve:
     category = "fractal"
     description = "Koch curve — classic snowflake edge as one open path"
 
-    def render(self, *, palette, params, paper=PaperSize.A4, image_path=None, image_array=None):
+    def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
         del image_path, image_array
         order = int(np.clip(_iters({"booth-fast": 3, "booth-balanced": 4, "studio-hq": 5}, params), 2, 5))
         s = _lsystem("F", {"F": "F+F--F+F"}, order)
@@ -491,6 +499,7 @@ class _KochCurve:
             palette=palette,
             params=params,
             paper=paper,
+            orientation=orientation,
             style_id=self.id,
             curve_name="Koch",
             pass_name=f"Koch order-{order}",
@@ -505,7 +514,7 @@ class _FibonacciWord:
     category = "fractal"
     description = "Fibonacci word fractal — irregular meander from the Fib binary word"
 
-    def render(self, *, palette, params, paper=PaperSize.A4, image_path=None, image_array=None):
+    def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
         del image_path, image_array
         order = int(np.clip(_iters({"booth-fast": 11, "booth-balanced": 13, "studio-hq": 15}, params), 8, 16))
         a, b = "0", "01"
@@ -530,6 +539,7 @@ class _FibonacciWord:
             palette=palette,
             params=params,
             paper=paper,
+            orientation=orientation,
             style_id=self.id,
             curve_name="Fibonacci word",
             pass_name=f"Fibonacci word n={order}",
@@ -543,7 +553,7 @@ class _QuadraticKoch:
     category = "fractal"
     description = "Minkowski sausage / quadratic Koch — blocky shoreline stroke"
 
-    def render(self, *, palette, params, paper=PaperSize.A4, image_path=None, image_array=None):
+    def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
         del image_path, image_array
         order = int(np.clip(_iters({"booth-fast": 2, "booth-balanced": 3, "studio-hq": 4}, params), 1, 4))
         s = _lsystem("F", {"F": "F+F-F-FF+F+F-F"}, order)
@@ -553,6 +563,7 @@ class _QuadraticKoch:
             palette=palette,
             params=params,
             paper=paper,
+            orientation=orientation,
             style_id=self.id,
             curve_name="Quadratic Koch",
             pass_name=f"Quadratic Koch order-{order}",
@@ -567,7 +578,7 @@ class _Terdragon:
     category = "fractal"
     description = "Terdragon curve — 3-fold dragon ribbon, one stroke"
 
-    def render(self, *, palette, params, paper=PaperSize.A4, image_path=None, image_array=None):
+    def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
         del image_path, image_array
         order = int(np.clip(_iters({"booth-fast": 6, "booth-balanced": 7, "studio-hq": 9}, params), 4, 10))
         s = _lsystem("F", {"F": "F+F-F"}, order)
@@ -577,6 +588,7 @@ class _Terdragon:
             palette=palette,
             params=params,
             paper=paper,
+            orientation=orientation,
             style_id=self.id,
             curve_name="Terdragon",
             pass_name=f"Terdragon order-{order}",
