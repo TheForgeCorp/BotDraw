@@ -59,6 +59,12 @@ class RenderRequest(BaseModel):
     pen_up_speed_mm_s: float = 100.0
     pen_down_speed_mm_s: float = 25.0
     params_extra: dict[str, Any] = {}
+    paper_id: Optional[str] = None
+    paper_color_hex: Optional[str] = None
+    reuse_ingest: bool = False
+    ingest_id: Optional[str] = None
+    force_reingest: bool = False
+    crop: Optional[dict[str, Any]] = None
 
 
 class PaletteSaveRequest(BaseModel):
@@ -198,6 +204,20 @@ def api_calibrate(body: CalibrateRequest):
     )
 
 
+@app.get("/api/papers")
+def api_papers():
+    from botdraw.paper import list_papers
+
+    return list_papers()
+
+
+@app.get("/api/portrait/line-types")
+def api_portrait_line_types():
+    from botdraw.portrait.ornament import LINE_TYPES
+
+    return {"line_types": LINE_TYPES}
+
+
 @app.post("/api/palettes/save")
 def api_palette_save(body: PaletteSaveRequest):
     palette = create_palette(
@@ -211,6 +231,19 @@ def api_palette_save(body: PaletteSaveRequest):
 
 @app.post("/api/render")
 def api_render(body: RenderRequest):
+    extra = dict(body.params_extra or {})
+    if body.paper_id:
+        extra["paper_id"] = body.paper_id
+    if body.paper_color_hex:
+        extra["paper_color_hex"] = body.paper_color_hex
+    if body.reuse_ingest:
+        extra["reuse_ingest"] = True
+    if body.ingest_id:
+        extra["ingest_id"] = body.ingest_id
+    if body.force_reingest:
+        extra["force_reingest"] = True
+    if body.crop:
+        extra["crop"] = body.crop
     job, payload, layers = render_job(
         app=body.app,
         style_id=body.style_id,
@@ -219,7 +252,7 @@ def api_render(body: RenderRequest):
         quality=body.quality,
         seed=body.seed,
         density=body.density,
-        params_extra=body.params_extra,
+        params_extra=extra,
         pen_up_speed_mm_s=body.pen_up_speed_mm_s,
         pen_down_speed_mm_s=body.pen_down_speed_mm_s,
     )
@@ -239,6 +272,12 @@ async def api_render_upload(
     pen_down_speed_mm_s: float = Form(25.0),
     image_mode: str = Form("photo"),
     params_extra: Optional[str] = Form(None),
+    paper_id: Optional[str] = Form(None),
+    paper_color_hex: Optional[str] = Form(None),
+    reuse_ingest: bool = Form(False),
+    ingest_id: Optional[str] = Form(None),
+    force_reingest: bool = Form(False),
+    crop: Optional[str] = Form(None),
     file: UploadFile = File(...),
 ):
     from botdraw.core.jobs import artifact_dir
@@ -250,6 +289,21 @@ async def api_render_upload(
             parsed = json.loads(params_extra)
             if isinstance(parsed, dict):
                 extra.update(parsed)
+        except json.JSONDecodeError:
+            pass
+    if paper_id:
+        extra["paper_id"] = paper_id
+    if paper_color_hex:
+        extra["paper_color_hex"] = paper_color_hex
+    if reuse_ingest:
+        extra["reuse_ingest"] = True
+    if ingest_id:
+        extra["ingest_id"] = ingest_id
+    if force_reingest:
+        extra["force_reingest"] = True
+    if crop:
+        try:
+            extra["crop"] = json.loads(crop)
         except json.JSONDecodeError:
             pass
     tmp = artifact_dir(uuid4().hex[:8]) / (file.filename or "upload.png")

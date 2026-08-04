@@ -15,6 +15,19 @@ lettersPlayer.onStats = (m) => { if (lettersStatsEl) lettersStatsEl.textContent 
 portraitPlayer.onStats = (m) => { if (portraitStatsEl) portraitStatsEl.textContent = m; };
 let portraitImageMode = "photo";
 let portraitFile = null;
+let portraitIngestId = null;
+let portraitPaperId = "natural-cream";
+let papers = [];
+let portraitLineType = "solid";
+let portraitForceReingest = false;
+let portraitAutoFrame = true;
+let portraitCrop = null; // {x,y,w,h,source} normalized or null
+let portraitPenMap = null;
+const PORTRAIT_LINE_TYPES = [
+  "solid", "dashed", "dotted", "dash_dot", "zigzag", "triangle", "wave", "square_wave",
+  "half_circle", "scallop_alt", "beads", "double", "railroad", "stitch", "hatch_tick",
+  "chevron", "spring", "bounce", "wobble", "ladder",
+];
 
 let currentApp = "genartbot";
 let inspTab = "layers";
@@ -305,7 +318,14 @@ function loadResult(data, opts = {}) {
     density: data.job?.params?.density,
   };
   const pl = stagePlayer();
-  pl.load(lastPayload, { preserveVisibility: currentApp === "lettersbot" });
+  const paperHex = data.emulator?.paper_color_hex || data.layers?.meta?.paper_color_hex || lastSettings?.paper_color_hex;
+  pl.load(lastPayload, {
+    preserveVisibility: currentApp === "lettersbot",
+    paperColor: paperHex,
+  });
+  if (paperHex) pl.setPaperColor(paperHex);
+  if (data.emulator?.settings?.ingest_id) portraitIngestId = data.emulator.settings.ingest_id;
+  if (data.job?.params?.ingest_id) portraitIngestId = data.job.params.ingest_id;
   if (lastJob?.id && downloadSvg) {
     downloadSvg.hidden = currentApp === "portraitbot" || currentApp === "lettersbot";
     downloadSvg.href = `/api/jobs/${lastJob.id}/svg`;
@@ -446,6 +466,21 @@ function ensurePortraitStyleSelected(list) {
   return selectedStyle;
 }
 
+function paperSelectHtml(selectedId) {
+  const opts = (papers.length ? papers : [{ id: "natural-cream", name: "Natural Cream", color_hex: "#f7f1e8" }])
+    .map((p) => `<option value="${p.id}" ${p.id === selectedId ? "selected" : ""}>${p.name}</option>`)
+    .join("");
+  return `<select id="paper-color">${opts}</select>`;
+}
+
+function portraitOrnamentNeedsDash(lt) {
+  return ["dashed", "dotted", "dash_dot", "stitch"].includes(lt);
+}
+
+function portraitOrnamentNeedsAmp(lt) {
+  return !["solid", "dashed", "dotted", "dash_dot"].includes(lt);
+}
+
 function renderPortrait() {
   setShellForApp("portraitbot");
   const list = styles.filter((s) => s.category === "portrait");
@@ -459,13 +494,31 @@ function renderPortrait() {
     ["lineart", "Line art", "Edges"],
     ["drawing", "Drawing", "Black / white"],
   ];
+  const ltOpts = PORTRAIT_LINE_TYPES.map(
+    (t) => `<option value="${t}" ${t === portraitLineType ? "selected" : ""}>${t.replace(/_/g, " ")}</option>`
+  ).join("");
+  const needsDash = portraitOrnamentNeedsDash(portraitLineType);
+  const needsAmp = portraitOrnamentNeedsAmp(portraitLineType);
+  const penList = (currentPalette()?.pens || [])
+    .map(
+      (pen) =>
+        `<div class="pen-chip" title="${pen.profile?.nib_type || ""}">
+          <span class="swatch" style="background:${pen.color_hex}"></span>
+          ${pen.name} · ${pen.profile?.width_mm ?? "?"}mm · ${pen.profile?.nib_type || ""}
+        </div>`
+    )
+    .join("");
   root.innerHTML = `
     <h3>Portrait</h3>
-    <p class="muted">Upload → image mode → style → vector preview.</p>
+    <p class="muted">Ingest → pens → style → ornament. Restyle reuses ingest when possible.</p>
     <h4>Image</h4>
     <div class="portrait-drop ${portraitFile ? "has-file" : ""}" id="portrait-drop">
       ${portraitFile ? portraitFile.name : "Drop a photo or choose a file"}
       <div style="margin-top:0.45rem"><input id="portrait-photo" type="file" accept="image/*" /></div>
+    </div>
+    <div class="row" style="margin-top:0.35rem">
+      <label><input type="checkbox" id="auto-frame" ${portraitAutoFrame ? "checked" : ""}/> Auto frame subject</label>
+      <button type="button" id="reset-frame">Reset frame</button>
     </div>
     <h4>Image type</h4>
     <div class="image-mode-grid" id="image-mode-grid">
@@ -477,20 +530,54 @@ function renderPortrait() {
     </div>
     <h4>Portrait style</h4>
     ${styleButtons(list)}
+    <h4>Paper</h4>
+    <div class="grid-2">
+      ${field("Size", `<select id="paper"><option>A4</option><option>Letter</option><option>A3</option><option>A5</option><option>Card</option></select>`)}
+      ${field("Color (Paper Library)", paperSelectHtml(portraitPaperId))}
+    </div>
     <h4>Render settings</h4>
     <div class="grid-2">
-      ${field("Paper", `<select id="paper"><option>A4</option><option>Letter</option><option>A3</option><option>A5</option><option>Card</option></select>`)}
       ${field("Quality", `<select id="quality"><option value="booth-fast">booth-fast</option><option value="booth-balanced">booth-balanced</option><option value="studio-hq">studio-hq</option></select>`)}
+      ${field("Density", `<input id="density" type="number" step="0.1" value="${state.density}" />`)}
     </div>
     <div class="grid-2">
       ${field("Seed", `<input id="seed" type="number" value="${state.seed}" />`)}
-      ${field("Density", `<input id="density" type="number" step="0.1" value="${state.density}" />`)}
+      ${field("Line type", `<select id="line-type">${ltOpts}</select>`)}
     </div>
-    <h4>Palette</h4>
+    <h4>Stroke ornament</h4>
+    ${field("Line spacing mm", `<input id="line-spacing" type="range" min="0.4" max="4" step="0.1" value="1.2" /><span id="line-spacing-val">1.2</span>`)}
+    <div id="ornament-amp" style="${needsAmp ? "" : "display:none"}">
+      ${field("Period mm", `<input id="pattern-period" type="range" min="0.4" max="8" step="0.1" value="2" /><span id="pattern-period-val">2.0</span>`)}
+      ${field("Amplitude mm", `<input id="pattern-amp" type="range" min="0" max="4" step="0.1" value="0.8" /><span id="pattern-amp-val">0.8</span>`)}
+    </div>
+    <div id="ornament-dash" style="${needsDash ? "" : "display:none"}">
+      ${field("Dash mm", `<input id="dash-mm" type="range" min="0.2" max="8" step="0.1" value="2" /><span id="dash-mm-val">2.0</span>`)}
+      ${field("Gap mm", `<input id="gap-mm" type="range" min="0.1" max="6" step="0.1" value="1.2" /><span id="gap-mm-val">1.2</span>`)}
+    </div>
+    <h4>Palette / pens</h4>
     ${field("Palette", paletteSelectHtml())}
-    ${penChipsHtml(currentPalette())}
-    <div class="row"><button class="primary" id="portrait-go">Vectorize</button></div>
+    <div class="pen-chips">${penList}</div>
+    <div class="row" style="margin-top:0.55rem; gap:0.35rem; flex-wrap:wrap">
+      <button class="primary" id="portrait-go">Vectorize</button>
+      <button type="button" id="portrait-apply" ${portraitIngestId ? "" : "disabled"}>Apply (restyle)</button>
+      <button type="button" id="portrait-reingest">Re-ingest</button>
+      <button type="button" id="reset-pen-map">Reset pen map</button>
+    </div>
   `;
+
+  const bindRange = (id, labelId) => {
+    const el = root.querySelector(`#${id}`);
+    const lab = root.querySelector(`#${labelId}`);
+    if (!el || !lab) return;
+    const sync = () => { lab.textContent = Number(el.value).toFixed(1); };
+    el.oninput = sync;
+    sync();
+  };
+  bindRange("line-spacing", "line-spacing-val");
+  bindRange("pattern-period", "pattern-period-val");
+  bindRange("pattern-amp", "pattern-amp-val");
+  bindRange("dash-mm", "dash-mm-val");
+  bindRange("gap-mm", "gap-mm-val");
 
   root.querySelectorAll("[data-style]").forEach((btn) => {
     btn.onclick = () => {
@@ -505,9 +592,32 @@ function renderPortrait() {
     selectedPaletteId = root.querySelector("#palette").value;
     renderPortrait();
   };
+  root.querySelector("#paper-color").onchange = () => {
+    portraitPaperId = root.querySelector("#paper-color").value;
+    const stock = papers.find((p) => p.id === portraitPaperId);
+    if (stock) portraitPlayer.setPaperColor(stock.color_hex);
+  };
+  root.querySelector("#line-type").onchange = () => {
+    portraitLineType = root.querySelector("#line-type").value;
+    renderPortrait();
+  };
+  root.querySelector("#auto-frame").onchange = (e) => {
+    portraitAutoFrame = !!e.target.checked;
+  };
+  root.querySelector("#reset-frame").onclick = () => {
+    portraitCrop = null;
+    portraitAutoFrame = true;
+    portraitForceReingest = true;
+    if (portraitStatsEl) portraitStatsEl.textContent = "Frame reset — next Vectorize will re-ingest";
+  };
+  root.querySelector("#reset-pen-map").onclick = () => {
+    portraitPenMap = null;
+    if (portraitStatsEl) portraitStatsEl.textContent = "Pen map cleared (auto on next render)";
+  };
   root.querySelectorAll("#image-mode-grid button").forEach((btn) => {
     btn.onclick = () => {
       portraitImageMode = btn.dataset.mode;
+      portraitForceReingest = true;
       renderPortrait();
     };
   });
@@ -516,6 +626,9 @@ function renderPortrait() {
     const raw = fileInput.files?.[0] || null;
     try {
       portraitFile = raw ? await snapshotPortraitFile(raw) : null;
+      portraitIngestId = null;
+      portraitForceReingest = true;
+      portraitCrop = null;
     } catch (e) {
       portraitFile = null;
       if (portraitStatsEl) portraitStatsEl.textContent = portraitNetworkErrorMessage(e);
@@ -531,14 +644,44 @@ function renderPortrait() {
   };
   drawPortraitSourcePreview(portraitFile);
   setPortraitDownloads(!!lastJob?.id && lastJob?.app === "portraitbot", lastJob?.id);
-  root.querySelector("#portrait-go").onclick = () =>
-    renderPortraitJob().catch((e) => {
+  const run = (opts) =>
+    renderPortraitJob(opts).catch((e) => {
       if (portraitStatsEl) portraitStatsEl.textContent = portraitNetworkErrorMessage(e);
       console.error(e);
     });
+  root.querySelector("#portrait-go").onclick = () => run({});
+  root.querySelector("#portrait-apply").onclick = () => run({ reuse: true });
+  root.querySelector("#portrait-reingest").onclick = () => run({ forceReingest: true });
 }
 
-async function renderPortraitJob() {
+function collectPortraitExtra(root, { reuse = false, forceReingest = false } = {}) {
+  portraitPaperId = root.querySelector("#paper-color")?.value || portraitPaperId;
+  portraitLineType = root.querySelector("#line-type")?.value || portraitLineType;
+  const extra = {
+    image_mode: portraitImageMode,
+    paper_id: portraitPaperId,
+    line_type: portraitLineType,
+    line_spacing_mm: Number(root.querySelector("#line-spacing")?.value || 1.2),
+    pattern_period_mm: Number(root.querySelector("#pattern-period")?.value || 2),
+    pattern_amplitude_mm: Number(root.querySelector("#pattern-amp")?.value || 0.8),
+    dash_mm: Number(root.querySelector("#dash-mm")?.value || 2),
+    gap_mm: Number(root.querySelector("#gap-mm")?.value || 1.2),
+    ornament_target: "all",
+    auto_frame: portraitAutoFrame,
+  };
+  if (portraitCrop) extra.crop = portraitCrop;
+  if (portraitPenMap) extra.pen_map = portraitPenMap;
+  if (reuse && portraitIngestId && !forceReingest && !portraitForceReingest) {
+    extra.reuse_ingest = true;
+    extra.ingest_id = portraitIngestId;
+  }
+  if (forceReingest || portraitForceReingest) {
+    extra.force_reingest = true;
+  }
+  return extra;
+}
+
+async function renderPortraitJob(opts = {}) {
   const root = portraitContentRoot();
   const list = styles.filter((s) => s.category === "portrait");
   ensurePortraitStyleSelected(list);
@@ -547,15 +690,19 @@ async function renderPortraitJob() {
   state.seed = Number(root.querySelector("#seed")?.value || state.seed);
   state.density = Number(root.querySelector("#density")?.value || state.density);
   selectedPaletteId = root.querySelector("#palette")?.value || selectedPaletteId;
-  if (portraitStatsEl) portraitStatsEl.textContent = "Vectorizing portrait…";
+  const extra = collectPortraitExtra(root, opts);
+  if (portraitStatsEl) {
+    portraitStatsEl.textContent = extra.reuse_ingest ? "Restyling (cached ingest)…" : "Vectorizing portrait…";
+  }
   const t0 = performance.now();
-  const extra = { image_mode: portraitImageMode };
   let data;
   try {
     if (portraitFile) {
-      if (portraitStatsEl) portraitStatsEl.textContent = "Preparing image…";
+      if (portraitStatsEl && !extra.reuse_ingest) portraitStatsEl.textContent = "Preparing image…";
       const uploadFile = await downscalePortraitForUpload(portraitFile, 1280);
-      if (portraitStatsEl) portraitStatsEl.textContent = "Vectorizing portrait…";
+      if (portraitStatsEl) {
+        portraitStatsEl.textContent = extra.reuse_ingest ? "Restyling…" : "Ingest + vectorize…";
+      }
       const fd = new FormData();
       fd.append("style_id", selectedStyle);
       fd.append("app_name", "portraitbot");
@@ -568,6 +715,11 @@ async function renderPortraitJob() {
       fd.append("pen_down_speed_mm_s", String(state.pen_down_speed_mm_s));
       fd.append("params_extra", JSON.stringify(extra));
       fd.append("image_mode", portraitImageMode);
+      fd.append("paper_id", portraitPaperId);
+      if (extra.reuse_ingest) fd.append("reuse_ingest", "true");
+      if (extra.ingest_id) fd.append("ingest_id", extra.ingest_id);
+      if (extra.force_reingest) fd.append("force_reingest", "true");
+      if (extra.crop) fd.append("crop", JSON.stringify(extra.crop));
       fd.append("file", uploadFile, uploadFile.name || "portrait.jpg");
       data = await api("/api/render/upload", { method: "POST", body: fd });
     } else {
@@ -584,6 +736,11 @@ async function renderPortraitJob() {
           density: state.density,
           pen_up_speed_mm_s: state.pen_up_speed_mm_s,
           pen_down_speed_mm_s: state.pen_down_speed_mm_s,
+          paper_id: portraitPaperId,
+          reuse_ingest: !!extra.reuse_ingest,
+          ingest_id: extra.ingest_id,
+          force_reingest: !!extra.force_reingest,
+          crop: extra.crop,
           params_extra: extra,
         }),
       });
@@ -591,12 +748,25 @@ async function renderPortraitJob() {
   } catch (e) {
     throw new Error(portraitNetworkErrorMessage(e));
   }
+  portraitForceReingest = false;
+  const ingestId =
+    data.emulator?.settings?.ingest_id ||
+    data.layers?.meta?.ingest_id ||
+    data.job?.params?.ingest_id;
+  if (ingestId) portraitIngestId = ingestId;
   currentApp = "portraitbot";
   loadResult(data, { autoplay: false });
   const wall = ((performance.now() - t0) / 1000).toFixed(2);
+  const budget = data.layers?.budget || data.emulator?.budget;
+  const cacheHit = data.emulator?.settings?.ingest_cache_hit;
   if (portraitStatsEl) {
+    const budgetLabel = budget?.label || `passes ${data.layers?.pass_count ?? "?"}`;
+    const warn = budget?.over_budget ? " · over budget" : "";
     portraitStatsEl.textContent =
-      `Ready · ${selectedStyle} · ${portraitImageMode} · wall ${wall}s · passes ${data.layers?.pass_count ?? "?"}`;
+      `Ready · ${selectedStyle} · ${portraitImageMode} · wall ${wall}s · ${budgetLabel}${warn}` +
+      (cacheHit ? " · cache hit" : " · ingest");
+    if (budget?.over_budget) portraitStatsEl.style.color = "#b45309";
+    else portraitStatsEl.style.color = "";
   }
 }
 
@@ -1675,6 +1845,9 @@ function renderInspector() {
 async function renderControls() {
   if (!styles.length) styles = await api("/api/styles");
   if (!palettes.length) palettes = await api("/api/palettes");
+  if (!papers.length) {
+    try { papers = await api("/api/papers"); } catch (_) { papers = []; }
+  }
   if (currentApp === "genartbot") return renderGenArt();
   if (currentApp === "portraitbot") return renderPortrait();
   if (currentApp === "lettersbot") return renderLetters();
@@ -1714,6 +1887,29 @@ document.getElementById("copy-json").onclick = async () => {
   await navigator.clipboard.writeText(text);
   statsEl.textContent = "Copied inspector JSON";
 };
+
+function wireZoomToolbar(prefix, emu) {
+  const zin = document.getElementById(`${prefix}-zoom-in`);
+  const zout = document.getElementById(`${prefix}-zoom-out`);
+  const zfit = document.getElementById(`${prefix}-zoom-fit`);
+  const loupe = document.getElementById(`${prefix}-loupe`);
+  const zl = document.getElementById(`${prefix}-zoom-label`);
+  emu.onZoomChange = (z) => { if (zl) zl.textContent = `${z.toFixed(2)}×`; };
+  if (zin) zin.onclick = () => emu.zoomBy(1.15);
+  if (zout) zout.onclick = () => emu.zoomBy(1 / 1.15);
+  if (zfit) zfit.onclick = () => emu.fitZoom();
+  if (loupe) loupe.onclick = () => {
+    emu.toggleLoupe();
+    loupe.classList.toggle("active", emu.loupeOn);
+  };
+  emu.enableInteraction();
+  emu.syncSize();
+}
+
+wireZoomToolbar("letters", lettersPlayer);
+wireZoomToolbar("portrait", portraitPlayer);
+player.enableInteraction();
+player.syncSize();
 
 renderControls().catch((e) => {
   statsEl.textContent = String(e);

@@ -19,7 +19,12 @@ def _poly_to_d(points: list[tuple[float, float]], closed: bool = False) -> str:
     return " ".join(parts)
 
 
-def layered_to_svg_string(layered: LayeredSVG, palette: PaletteSet) -> str:
+def layered_to_svg_string(
+    layered: LayeredSVG,
+    palette: PaletteSet,
+    *,
+    paper_color_hex: str | None = None,
+) -> str:
     root = ET.Element(
         "svg",
         {
@@ -27,6 +32,18 @@ def layered_to_svg_string(layered: LayeredSVG, palette: PaletteSet) -> str:
             "width": f"{layered.width_mm}mm",
             "height": f"{layered.height_mm}mm",
             "viewBox": f"0 0 {layered.width_mm} {layered.height_mm}",
+        },
+    )
+    fill = paper_color_hex or (layered.meta or {}).get("paper_color_hex") or "#f7f1e8"
+    ET.SubElement(
+        root,
+        "rect",
+        {
+            "x": "0",
+            "y": "0",
+            "width": str(layered.width_mm),
+            "height": str(layered.height_mm),
+            "fill": fill,
         },
     )
     for idx, pass_layer in enumerate(layered.passes, start=1):
@@ -65,10 +82,19 @@ def layered_to_svg_string(layered: LayeredSVG, palette: PaletteSet) -> str:
     return ET.tostring(root, encoding="unicode")
 
 
-def save_svg(layered: LayeredSVG, palette: PaletteSet, path: str | Path) -> Path:
+def save_svg(
+    layered: LayeredSVG,
+    palette: PaletteSet,
+    path: str | Path,
+    *,
+    paper_color_hex: str | None = None,
+) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(layered_to_svg_string(layered, palette), encoding="utf-8")
+    path.write_text(
+        layered_to_svg_string(layered, palette, paper_color_hex=paper_color_hex),
+        encoding="utf-8",
+    )
     return path
 
 

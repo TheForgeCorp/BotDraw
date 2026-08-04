@@ -218,9 +218,11 @@ body[data-app="lettersbot"] .tabs button.active, body[data-app="portraitbot"] .t
 
 .letters-grid {
   display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(240px, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 0.65rem;
   align-items: stretch;
+  min-height: 0;
+  flex: 1;
 }
 @media (max-width: 900px) {
   .letters-grid { grid-template-columns: 1fr; }

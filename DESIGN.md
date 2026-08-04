@@ -86,8 +86,10 @@ anti_patterns:
 |--------|------|
 | Top app tabs | BotDraw apps |
 | LETTERS identity | Static product lockup |
-| Left (~2/3) | Type rail + editor (layers, draft meta, palette, Vectorize) |
-| Right (~1/3) | Paper emulator + margins + hardware download |
+| Left (~1/2) | Type rail + editor (layers, draft meta, palette, Vectorize) |
+| Right (~1/2) | Shared HiDPI EmulatorPlayer (zoom, pan, loupe) + downloads |
+
+Upcoming Operate tabs (not built yet): **Paper Library**, **Pen Library**. Paper color uses `GET /api/papers` presets.
 
 Paper stage canvas is write-optimized (`getContext("2d", { willReadFrequently: false })`). Pixel-read analysis (future image vectorize) must use a separate canvas with `willReadFrequently: true`.
 
@@ -95,8 +97,8 @@ Paper stage canvas is write-optimized (`getContext("2d", { willReadFrequently: f
 
 | Region | Role |
 |--------|------|
-| Left (~2/3) | Upload, image type (photo/sketch/lineart/drawing), style, render settings |
-| Right (~1/3) | Source preview + vector emulator + hardware download |
+| Left (~1/2) | Upload, image type, style, paper color, ornament, palette, Vectorize / Apply / Re-ingest |
+| Right (~1/2) | Source preview + HiDPI vector emulator (zoom, loupe) + downloads |
 
 Source preview uses a readback-friendly canvas (`willReadFrequently: true`); vector emu stays write-optimized.
 

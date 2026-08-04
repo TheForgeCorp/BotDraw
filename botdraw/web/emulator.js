@@ -1,9 +1,8 @@
-/* BotDraw emulator canvas player with layer / pen filters, zoom, line handles */
+/* BotDraw emulator canvas player — HiDPI, zoom-to-cursor, pan, loupe */
 class EmulatorPlayer {
   constructor(canvas) {
     this.canvas = canvas;
-    // Write-oriented playback; avoid willReadFrequently (readback/CPU path).
-    // https://html.spec.whatwg.org/multipage/canvas.html#concept-canvas-will-read-frequently
+    // Write-oriented playback; avoid willReadFrequently (DESIGN.md).
     this.ctx = canvas.getContext("2d", { willReadFrequently: false, alpha: true });
     this.plan = null;
     this.index = 0;
@@ -21,11 +20,41 @@ class EmulatorPlayer {
     this.zoom = 1;
     this.panX = 0;
     this.panY = 0;
-    this.editLine = null; // { x0_mm, y0_mm, x1_mm, y1_mm }
-    this.snapGhost = null; // { x, y, w, h }
-    this.onLineEdit = null; // (line) => void while dragging / after
-    this._drag = null; // { end: 'a'|'b' }
+    this.paperColor = "#f7f1e8";
+    this.loupeOn = false;
+    this.loupeFactor = 4;
+    this.loupeRadiusCss = 72;
+    this._pointerCss = null;
+    this.editLine = null;
+    this.snapGhost = null;
+    this.onLineEdit = null;
+    this.onZoomChange = null;
+    this._drag = null;
+    this._panDrag = null;
+    this._spaceDown = false;
     this._bound = false;
+    this._dpr = 1;
+    this._cssW = 0;
+    this._cssH = 0;
+    this.syncSize();
+  }
+
+  syncSize() {
+    const c = this.canvas;
+    const rect = c.getBoundingClientRect();
+    const cssW = Math.max(1, Math.round(rect.width || c.clientWidth || 640));
+    const cssH = Math.max(1, Math.round(rect.height || c.clientHeight || 480));
+    const dpr = Math.min(3, window.devicePixelRatio || 1);
+    if (cssW === this._cssW && cssH === this._cssH && dpr === this._dpr) return;
+    this._cssW = cssW;
+    this._cssH = cssH;
+    this._dpr = dpr;
+    c.width = Math.round(cssW * dpr);
+    c.height = Math.round(cssH * dpr);
+    c.style.width = `${cssW}px`;
+    c.style.height = `${cssH}px`;
+    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.drawFrame();
   }
 
   load(plan, opts = {}) {
@@ -34,6 +63,8 @@ class EmulatorPlayer {
     const savedHiddenPen = preserve ? new Set(this.hiddenPenIds) : null;
     const savedSolo = preserve ? this.soloPassId : null;
     this.plan = plan;
+    if (plan?.paper_color_hex) this.paperColor = plan.paper_color_hex;
+    if (opts.paperColor) this.paperColor = opts.paperColor;
     this.index = 0;
     this.ink = [];
     this.playing = false;
@@ -46,21 +77,40 @@ class EmulatorPlayer {
       this.hiddenPenIds = savedHiddenPen;
       this.soloPassId = savedSolo;
     }
+    this.syncSize();
     this.drawFrame();
     this._stats("Loaded");
+  }
+
+  setPaperColor(hex) {
+    this.paperColor = hex || "#f7f1e8";
+    this.drawFrame();
   }
 
   setSpeed(v) { this.speed = Number(v) || 1; }
   setGhost(v) { this.showGhost = !!v; this.drawFrame(); }
 
-  setZoom(z) {
-    this.zoom = Math.max(0.5, Math.min(3, Number(z) || 1));
+  setZoom(z, anchorCss = null) {
+    const next = Math.max(0.25, Math.min(16, Number(z) || 1));
+    if (anchorCss && this._cssW) {
+      // Zoom toward cursor (CSS px space)
+      const { w, h } = this._paperScaleCss();
+      const ax = anchorCss.x;
+      const ay = anchorCss.y;
+      const worldX = (ax - (w / 2 + this.panX)) / this.zoom + w / 2;
+      const worldY = (ay - (h / 2 + this.panY)) / this.zoom + h / 2;
+      this.zoom = next;
+      this.panX = ax - w / 2 - (worldX - w / 2) * this.zoom;
+      this.panY = ay - h / 2 - (worldY - h / 2) * this.zoom;
+    } else {
+      this.zoom = next;
+    }
     this.drawFrame();
     if (this.onZoomChange) this.onZoomChange(this.zoom);
   }
 
-  zoomBy(factor) {
-    this.setZoom(this.zoom * factor);
+  zoomBy(factor, anchorCss = null) {
+    this.setZoom(this.zoom * factor, anchorCss);
   }
 
   fitZoom() {
@@ -68,6 +118,16 @@ class EmulatorPlayer {
     this.panX = 0;
     this.panY = 0;
     this.drawFrame();
+    if (this.onZoomChange) this.onZoomChange(this.zoom);
+  }
+
+  setLoupe(on) {
+    this.loupeOn = !!on;
+    this.drawFrame();
+  }
+
+  toggleLoupe() {
+    this.setLoupe(!this.loupeOn);
   }
 
   setEditLine(line) {
@@ -90,10 +150,20 @@ class EmulatorPlayer {
     c.addEventListener("pointerup", (e) => this._onPointerUp(e));
     c.addEventListener("pointerleave", (e) => this._onPointerUp(e));
     c.addEventListener("wheel", (e) => {
-      if (!e.ctrlKey && !e.metaKey) return;
       e.preventDefault();
-      this.zoomBy(e.deltaY < 0 ? 1.08 : 1 / 1.08);
+      const rect = c.getBoundingClientRect();
+      const anchor = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+      const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+      this.zoomBy(factor, anchor);
     }, { passive: false });
+    window.addEventListener("keydown", (e) => {
+      if (e.code === "Space") this._spaceDown = true;
+      if (e.key === "l" || e.key === "L") this.toggleLoupe();
+    });
+    window.addEventListener("keyup", (e) => {
+      if (e.code === "Space") this._spaceDown = false;
+    });
+    window.addEventListener("resize", () => this.syncSize());
   }
 
   setPassVisible(passId, visible) {
@@ -166,38 +236,36 @@ class EmulatorPlayer {
     if (seg.kind === "pen_change") this._stats(`Pen change → ${seg.pen_id || "?"}`);
   }
 
-  _paperScale() {
-    if (!this.plan) return { sx: 1, sy: 1, w: this.canvas.width, h: this.canvas.height };
-    const w = this.canvas.width;
-    const h = this.canvas.height;
+  /** CSS-pixel paper scale (after ctx DPR transform). */
+  _paperScaleCss() {
+    if (!this.plan) return { sx: 1, sy: 1, w: this._cssW || 1, h: this._cssH || 1 };
+    const w = this._cssW || this.canvas.clientWidth || 1;
+    const h = this._cssH || this.canvas.clientHeight || 1;
     return { sx: w / this.plan.width_mm, sy: h / this.plan.height_mm, w, h };
   }
 
-  /** Apply zoom/pan about paper center. */
   _applyViewTransform(ctx) {
-    const { w, h } = this._paperScale();
+    const { w, h } = this._paperScaleCss();
     ctx.translate(w / 2 + this.panX, h / 2 + this.panY);
     ctx.scale(this.zoom, this.zoom);
     ctx.translate(-w / 2, -h / 2);
   }
 
-  canvasToMm(clientX, clientY) {
+  _cssFromClient(clientX, clientY) {
     const rect = this.canvas.getBoundingClientRect();
-    const cssX = clientX - rect.left;
-    const cssY = clientY - rect.top;
-    const scaleX = this.canvas.width / rect.width;
-    const scaleY = this.canvas.height / rect.height;
-    let x = cssX * scaleX;
-    let y = cssY * scaleY;
-    const { sx, sy, w, h } = this._paperScale();
-    // Inverse of view transform
-    x = (x - (w / 2 + this.panX)) / this.zoom + w / 2;
-    y = (y - (h / 2 + this.panY)) / this.zoom + h / 2;
+    return { x: clientX - rect.left, y: clientY - rect.top };
+  }
+
+  canvasToMm(clientX, clientY) {
+    const { x: cssX, y: cssY } = this._cssFromClient(clientX, clientY);
+    const { sx, sy, w, h } = this._paperScaleCss();
+    let x = (cssX - (w / 2 + this.panX)) / this.zoom + w / 2;
+    let y = (cssY - (h / 2 + this.panY)) / this.zoom + h / 2;
     return { x_mm: x / sx, y_mm: y / sy };
   }
 
   _handleScreen(x_mm, y_mm) {
-    const { sx, sy, w, h } = this._paperScale();
+    const { sx, sy, w, h } = this._paperScaleCss();
     let x = x_mm * sx;
     let y = y_mm * sy;
     x = (x - w / 2) * this.zoom + w / 2 + this.panX;
@@ -209,11 +277,7 @@ class EmulatorPlayer {
     if (!this.editLine) return null;
     const a = this._handleScreen(this.editLine.x0_mm, this.editLine.y0_mm);
     const b = this._handleScreen(this.editLine.x1_mm, this.editLine.y1_mm);
-    const rect = this.canvas.getBoundingClientRect();
-    const scaleX = this.canvas.width / rect.width;
-    const scaleY = this.canvas.height / rect.height;
-    const x = (clientX - rect.left) * scaleX;
-    const y = (clientY - rect.top) * scaleY;
+    const { x, y } = this._cssFromClient(clientX, clientY);
     const r = 10;
     if (Math.hypot(x - a.x, y - a.y) <= r) return "a";
     if (Math.hypot(x - b.x, y - b.y) <= r) return "b";
@@ -221,14 +285,30 @@ class EmulatorPlayer {
   }
 
   _onPointerDown(e) {
+    this._pointerCss = this._cssFromClient(e.clientX, e.clientY);
     const hit = this._hitHandle(e.clientX, e.clientY);
-    if (!hit || !this.editLine) return;
-    this._drag = { end: hit };
-    this.canvas.setPointerCapture?.(e.pointerId);
-    e.preventDefault();
+    if (hit && this.editLine) {
+      this._drag = { end: hit };
+      this.canvas.setPointerCapture?.(e.pointerId);
+      e.preventDefault();
+      return;
+    }
+    if (this._spaceDown || e.button === 1 || e.buttons === 4) {
+      this._panDrag = { x: e.clientX, y: e.clientY, panX: this.panX, panY: this.panY };
+      this.canvas.setPointerCapture?.(e.pointerId);
+      e.preventDefault();
+    }
   }
 
   _onPointerMove(e) {
+    this._pointerCss = this._cssFromClient(e.clientX, e.clientY);
+    if (this.loupeOn) this.drawFrame();
+    if (this._panDrag) {
+      this.panX = this._panDrag.panX + (e.clientX - this._panDrag.x);
+      this.panY = this._panDrag.panY + (e.clientY - this._panDrag.y);
+      this.drawFrame();
+      return;
+    }
     if (!this._drag || !this.editLine) return;
     const mm = this.canvasToMm(e.clientX, e.clientY);
     if (this._drag.end === "a") {
@@ -243,20 +323,42 @@ class EmulatorPlayer {
   }
 
   _onPointerUp(e) {
+    if (this._panDrag) {
+      this._panDrag = null;
+      return;
+    }
     if (!this._drag) return;
     this._drag = null;
     if (this.onLineEdit && this.editLine) this.onLineEdit({ ...this.editLine }, { live: false });
   }
 
+  _drawInk(ctx, sx, sy) {
+    for (const seg of this.ink) {
+      if (!this._visible(seg)) continue;
+      ctx.beginPath();
+      ctx.strokeStyle = this._color(seg.color_hex || "#111", seg.opacity ?? 1);
+      ctx.lineWidth = Math.max(0.5, (seg.width_mm || 0.4) * sx);
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.moveTo(seg.x0 * sx, seg.y0 * sy);
+      ctx.lineTo(seg.x1 * sx, seg.y1 * sy);
+      ctx.stroke();
+    }
+  }
+
   drawFrame() {
+    this.syncSize();
     const ctx = this.ctx;
-    const w = this.canvas.width;
-    const h = this.canvas.height;
+    const { w, h, sx, sy } = this._paperScaleCss();
+    ctx.save();
+    ctx.setTransform(this._dpr, 0, 0, this._dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = "#f7f1e8";
+    ctx.fillStyle = this.paperColor || "#f7f1e8";
     ctx.fillRect(0, 0, w, h);
-    if (!this.plan) return;
-    const { sx, sy } = this._paperScale();
+    if (!this.plan) {
+      ctx.restore();
+      return;
+    }
 
     const current = this.plan.segments[Math.min(this.index, this.plan.segments.length - 1)];
     const theta = current && current.base_theta_rad ? current.base_theta_rad : 0;
@@ -281,17 +383,7 @@ class EmulatorPlayer {
       ctx.strokeRect(g.x * sx, g.y * sy, g.w * sx, g.h * sy);
     }
 
-    for (const seg of this.ink) {
-      if (!this._visible(seg)) continue;
-      ctx.beginPath();
-      ctx.strokeStyle = this._color(seg.color_hex || "#111", seg.opacity ?? 1);
-      ctx.lineWidth = Math.max(1, (seg.width_mm || 0.4) * sx);
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-      ctx.moveTo(seg.x0 * sx, seg.y0 * sy);
-      ctx.lineTo(seg.x1 * sx, seg.y1 * sy);
-      ctx.stroke();
-    }
+    this._drawInk(ctx, sx, sy);
 
     if (current) {
       ctx.fillStyle = "#9b3b2e";
@@ -310,7 +402,6 @@ class EmulatorPlayer {
     }
     ctx.restore();
 
-    // Handles in screen space (after view restore) so size stays constant
     if (this.editLine) {
       const a = this._handleScreen(this.editLine.x0_mm, this.editLine.y0_mm);
       const b = this._handleScreen(this.editLine.x1_mm, this.editLine.y1_mm);
@@ -335,13 +426,63 @@ class EmulatorPlayer {
       ctx.restore();
     }
 
+    if (this.loupeOn && this._pointerCss) {
+      this._drawLoupe(ctx, sx, sy);
+    }
+
     if (this.plan.stats) {
       const s = this.plan.stats;
       const visibleInk = this.ink.filter((seg) => this._visible(seg)).length;
+      const mm = this._pointerCss
+        ? this.canvasToMm(
+            this.canvas.getBoundingClientRect().left + this._pointerCss.x,
+            this.canvas.getBoundingClientRect().top + this._pointerCss.y
+          )
+        : null;
+      const mmLabel = mm ? ` · ${mm.x_mm.toFixed(1)},${mm.y_mm.toFixed(1)}mm` : "";
       this._stats(
-        `ink segs ${visibleInk}/${this.ink.length} · paths ${s.stroke_count} · pens ${s.pen_ids.length} · ETA ${s.estimated_time_s.toFixed(1)}s · zoom ${this.zoom.toFixed(2)}×`
+        `ink ${visibleInk}/${this.ink.length} · paths ${s.stroke_count} · pens ${s.pen_ids.length} · ETA ${s.estimated_time_s.toFixed(1)}s · zoom ${this.zoom.toFixed(2)}×${this.loupeOn ? " · loupe" : ""}${mmLabel}`
       );
     }
+    ctx.restore();
+  }
+
+  _drawLoupe(ctx, sx, sy) {
+    const p = this._pointerCss;
+    const r = this.loupeRadiusCss;
+    const factor = this.loupeFactor;
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+    ctx.clip();
+    // Fill paper in loupe
+    ctx.fillStyle = this.paperColor || "#f7f1e8";
+    ctx.fillRect(p.x - r, p.y - r, r * 2, r * 2);
+    ctx.save();
+    // Map: zoom extra around pointer in CSS space
+    const { w, h } = this._paperScaleCss();
+    ctx.translate(p.x, p.y);
+    ctx.scale(factor, factor);
+    ctx.translate(-p.x, -p.y);
+    ctx.translate(w / 2 + this.panX, h / 2 + this.panY);
+    ctx.scale(this.zoom, this.zoom);
+    ctx.translate(-w / 2, -h / 2);
+    this._drawInk(ctx, sx, sy);
+    ctx.restore();
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+    ctx.strokeStyle = "rgba(17,17,17,0.55)";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(p.x - 8, p.y);
+    ctx.lineTo(p.x + 8, p.y);
+    ctx.moveTo(p.x, p.y - 8);
+    ctx.lineTo(p.x, p.y + 8);
+    ctx.strokeStyle = "rgba(17,17,17,0.35)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.restore();
   }
 
   _color(hex, opacity) {

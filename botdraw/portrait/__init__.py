@@ -1,4 +1,4 @@
-"""PortraitBot image preprocessing helpers."""
+"""PortraitBot: preprocess, ingest, pen assign, restyle, ornament."""
 
 from __future__ import annotations
 
@@ -6,6 +6,14 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image, ImageFilter, ImageOps
+
+from botdraw.portrait.cache import load_portrait_vector, resolve_portrait_vector, save_portrait_vector
+from botdraw.portrait.frame import auto_frame_rgb, normalize_crop
+from botdraw.portrait.ingest import ingest_portrait
+from botdraw.portrait.models import CropRect, PortraitVector
+from botdraw.portrait.ornament import LINE_TYPES, StrokeOrnamentParams, decorate_layered
+from botdraw.portrait.pens import apply_pen_overrides, assign_pens
+from botdraw.portrait.restyle import render_from_vector
 
 
 def preprocess_portrait_image(
@@ -37,12 +45,29 @@ def preprocess_portrait_image(
         g = ImageOps.grayscale(img)
         edges = g.filter(ImageFilter.FIND_EDGES)
         edges = ImageOps.invert(ImageOps.autocontrast(edges))
-        # Keep soft paper background with dark strokes
         img = Image.merge("RGB", (edges, edges, edges))
     elif m == "drawing":
         g = ImageOps.grayscale(img)
         bw = g.point(lambda x: 255 if x > 160 else 0)
         img = Image.merge("RGB", (bw, bw, bw))
-    # photo: leave RGB
 
     return np.asarray(img, dtype=np.float32)
+
+
+__all__ = [
+    "CropRect",
+    "LINE_TYPES",
+    "PortraitVector",
+    "StrokeOrnamentParams",
+    "apply_pen_overrides",
+    "assign_pens",
+    "auto_frame_rgb",
+    "decorate_layered",
+    "ingest_portrait",
+    "load_portrait_vector",
+    "normalize_crop",
+    "preprocess_portrait_image",
+    "render_from_vector",
+    "resolve_portrait_vector",
+    "save_portrait_vector",
+]
