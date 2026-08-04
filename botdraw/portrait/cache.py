@@ -41,6 +41,7 @@ def make_ingest_key(
     hatch_size: int | None = None,
     linedraw_jitter: float | None = None,
     ensemble: bool | None = None,
+    scan_mode: str | None = None,
 ) -> str:
     h = hashlib.sha256()
     if image_bytes:
@@ -53,6 +54,7 @@ def make_ingest_key(
         f"|{mode}|{quality}|{paper}|{_crop_key(crop)}"
         f"|p{posterize_levels}|s{filter_speckle}|m{min_path_points}|c{contrast}"
         f"|cs{contour_simplify}|hs{hatch_size}|lj{linedraw_jitter}|e{ensemble}"
+        f"|sm{scan_mode}"
     )
     h.update(knobs.encode())
     return h.hexdigest()[:24]
@@ -163,6 +165,7 @@ def resolve_portrait_vector(
     hatch_size: int | None = None,
     linedraw_jitter: float | None = None,
     ensemble: bool | None = None,
+    scan_mode: str | None = None,
 ) -> tuple[PortraitVector, bool]:
     """Return (vector, cache_hit)."""
     from botdraw.portrait.ingest import ingest_portrait
@@ -177,6 +180,7 @@ def resolve_portrait_vector(
         hatch_size=hatch_size,
         linedraw_jitter=linedraw_jitter,
         ensemble=ensemble,
+        scan_mode=scan_mode,
     )
 
     if not force_reingest:

@@ -500,11 +500,17 @@ def contours_from_lum(
     jitter: float = 0.04,
     seed: int = 0,
     max_paths: int = 2000,
+    prefer_silhouette: bool = True,
+    prefer_skeleton: bool = True,
+    soft_face_edges: bool = True,
+    edge_low: float | None = None,
+    edge_high: float | None = None,
 ) -> tuple[list[list[tuple[float, float]]], np.ndarray]:
     """
     Portrait edge chains: silhouette structure + face-feature pass.
 
     `simplify` controls post-trace strength (1=finest).
+    Scan-mode knobs (Inkscape Trace Bitmap analogues) tune which passes run.
     """
     h0, w0 = lum.shape
     strength = max(1, int(simplify))
@@ -522,14 +528,19 @@ def contours_from_lum(
 
     from numpy.lib.stride_tricks import sliding_window_view
 
+    hi_lo = 58.0 if edge_low is None else float(edge_low)
+    hi_hi = 125.0 if edge_high is None else float(edge_high)
     # Silhouette / high-contrast structure
-    mask_hi = edge_bitmap(small_u8.astype(np.float32), low=58.0, high=125.0)
+    mask_hi = edge_bitmap(small_u8.astype(np.float32), low=hi_lo, high=hi_hi)
     # Face interior: bright after autocontrast (skin/glasses area)
     face = small_u8.astype(np.float32) >= 100.0
     pad_f = np.pad(face.astype(np.uint8), 2, mode="constant")
     face_d = sliding_window_view(pad_f, (5, 5)).max(axis=(2, 3)).astype(bool)
     # Soft facial features — only inside face ROI
-    mask_face = edge_bitmap(small_u8.astype(np.float32), low=28.0, high=65.0) & face_d
+    if soft_face_edges:
+        mask_face = edge_bitmap(small_u8.astype(np.float32), low=28.0, high=65.0) & face_d
+    else:
+        mask_face = np.zeros_like(mask_hi, dtype=bool)
     mask = mask_hi | mask_face
 
     edge_full = np.asarray(
@@ -558,40 +569,47 @@ def contours_from_lum(
         ) > 127
     else:
         mask_s, face_s = mask, mask_face
-    skel_s = _zhang_suen_thin(mask_s, max_iter=14 if strength <= 2 else 10)
-    skel_s = _spur_prune(skel_s, min_spur=6 if strength <= 1 else 5)
-    if th_sc > 1:
-        skel = np.asarray(
-            Image.fromarray((skel_s.astype(np.uint8) * 255), mode="L").resize(
-                (w_s, h_s), Image.Resampling.NEAREST
-            ),
-            dtype=np.uint8,
-        ) > 127
+    if prefer_skeleton:
+        skel_s = _zhang_suen_thin(mask_s, max_iter=14 if strength <= 2 else 10)
+        skel_s = _spur_prune(skel_s, min_spur=6 if strength <= 1 else 5)
+        if th_sc > 1:
+            skel = np.asarray(
+                Image.fromarray((skel_s.astype(np.uint8) * 255), mode="L").resize(
+                    (w_s, h_s), Image.Resampling.NEAREST
+                ),
+                dtype=np.uint8,
+            ) > 127
+        else:
+            skel = skel_s
     else:
-        skel = skel_s
+        skel = mask_s
     from numpy.lib.stride_tricks import sliding_window_view as _swv
 
     skel_pad = np.pad(skel.astype(np.uint8), 1, mode="constant")
     skel_dil = _swv(skel_pad, (3, 3)).max(axis=(2, 3)).astype(bool)
     # Skeleton chains + residual face features not covered by skeleton
-    trace_mask = skel | (mask_face & ~skel_dil)
+    if prefer_skeleton:
+        trace_mask = skel | (mask_face & ~skel_dil)
+    else:
+        trace_mask = mask_hi | mask_face
 
     min_len = 16 if strength <= 1 else (14 if strength == 2 else 10)
     contours = _trace_edge_chains(trace_mask, min_len=min_len)
 
     # Dual-axis silhouette only (long strokes) — avoids hair noise piles
-    dots1 = _getdots(mask_hi)
-    c1 = _connectdots(dots1)
-    pil = Image.fromarray(mask_hi.astype(np.uint8) * 255, mode="L")
-    pil2 = pil.rotate(-90, expand=True).transpose(Image.FLIP_LEFT_RIGHT)
-    mask2 = np.asarray(pil2, dtype=np.uint8) > 127
-    dots2 = _getdots(mask2)
-    c2 = _connectdots(dots2)
-    c2_mapped: list[list[tuple[int, int]]] = [[(p[1], p[0]) for p in c] for c in c2]
-    sil_min = max(36, min_len * 3)
-    for c in c1 + c2_mapped:
-        if len(c) >= sil_min:
-            contours.append([(float(x), float(y)) for x, y in c])
+    if prefer_silhouette:
+        dots1 = _getdots(mask_hi)
+        c1 = _connectdots(dots1)
+        pil = Image.fromarray(mask_hi.astype(np.uint8) * 255, mode="L")
+        pil2 = pil.rotate(-90, expand=True).transpose(Image.FLIP_LEFT_RIGHT)
+        mask2 = np.asarray(pil2, dtype=np.uint8) > 127
+        dots2 = _getdots(mask2)
+        c2 = _connectdots(dots2)
+        c2_mapped: list[list[tuple[int, int]]] = [[(p[1], p[0]) for p in c] for c in c2]
+        sil_min = max(36, min_len * 3)
+        for c in c1 + c2_mapped:
+            if len(c) >= sil_min:
+                contours.append([(float(x), float(y)) for x, y in c])
 
     contours = _merge_bidirectional(contours, dist_thresh=10.0 if strength <= 1 else 12.0)
     # Second pass with tighter gap after orientation settle
@@ -1054,10 +1072,12 @@ def linedraw_edges_and_hatch(
     seed: int = 0,
     max_edge_paths: int = 2000,
     max_hatch_paths: int = 4000,
+    scan_knobs: dict | None = None,
 ) -> tuple[list[list[tuple[float, float]]], list[list[tuple[float, float]]], np.ndarray]:
     """Full linedraw-style pass → (edge_mm, hatch_mm, edge_map)."""
     h, w = lum.shape
     lum_u8 = autocontrast_lum(lum, cutoff=10.0).astype(np.float32)
+    knobs = dict(scan_knobs or {})
     # Over-extract then refine so face budget can choose
     raw_budget = min(max_edge_paths * 2, max(max_edge_paths + 80, 400))
     contours_px, edge_map = contours_from_lum(
@@ -1066,6 +1086,11 @@ def linedraw_edges_and_hatch(
         jitter=jitter,
         seed=seed,
         max_paths=raw_budget,
+        prefer_silhouette=bool(knobs.get("prefer_silhouette", True)),
+        prefer_skeleton=bool(knobs.get("prefer_skeleton", True)),
+        soft_face_edges=bool(knobs.get("soft_face_edges", True)),
+        edge_low=knobs.get("edge_low"),
+        edge_high=knobs.get("edge_high"),
     )
     contours_px = refine_edge_polylines(contours_px, lum_u8, max_paths=max_edge_paths)
     hatch_px = hatch_from_lum(
@@ -1087,15 +1112,22 @@ def edge_polylines_from_lum(
     jitter: float = 0.04,
     seed: int = 0,
     max_paths: int = 2000,
+    scan_knobs: dict | None = None,
 ) -> tuple[list[list[tuple[float, float]]], np.ndarray]:
     """Edges only in pixel space (ensemble variant pass)."""
     lum_u8 = autocontrast_lum(np.asarray(lum, dtype=np.float32), cutoff=10.0).astype(np.float32)
+    knobs = dict(scan_knobs or {})
     return contours_from_lum(
         lum_u8,
         simplify=contour_simplify,
         jitter=jitter,
         seed=seed,
         max_paths=max_paths,
+        prefer_silhouette=bool(knobs.get("prefer_silhouette", True)),
+        prefer_skeleton=bool(knobs.get("prefer_skeleton", True)),
+        soft_face_edges=bool(knobs.get("soft_face_edges", True)),
+        edge_low=knobs.get("edge_low"),
+        edge_high=knobs.get("edge_high"),
     )
 
 

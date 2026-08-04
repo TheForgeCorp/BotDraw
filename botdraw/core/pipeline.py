@@ -172,6 +172,7 @@ def render_job(
                 hatch_size=extra.get("hatch_size"),
                 linedraw_jitter=extra.get("linedraw_jitter"),
                 ensemble=extra.get("ensemble"),
+                scan_mode=extra.get("scan_mode"),
             )
             pv = assign_pens(pv, palette, pen_map=extra.get("pen_map"))
             ingest_id = pv.ingest_id

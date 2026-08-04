@@ -5,6 +5,8 @@ from __future__ import annotations
 import math
 from copy import deepcopy
 
+import numpy as np
+
 from botdraw.core.models import LayeredSVG, PassLayer, Polyline
 
 
@@ -70,18 +72,78 @@ def linemerge_pass(pass_layer: PassLayer, tol_mm: float = 0.2) -> PassLayer:
     return out
 
 
-def optimize_layered(layered: LayeredSVG, *, use_vpype: bool = True) -> LayeredSVG:
-    """Optimize each pass; try vpype for SVG round-trip when installed."""
-    out = deepcopy(layered)
-    out.passes = [linesort_pass(linemerge_pass(p)) for p in out.passes]
+def _vpype_optimize_pass(pass_layer: PassLayer, *, tol_mm: float = 0.2) -> PassLayer | None:
+    """
+    Run vpype LineCollection.merge + LineIndex linesort (mm units).
 
+    Returns None if vpype is unavailable or the pass cannot be converted.
+    """
+    try:
+        import vpype as vp
+    except Exception:
+        return None
+    polys = [p for p in pass_layer.polylines if len(p.points) >= 2]
+    if not polys:
+        return pass_layer
+    # Preserve pen_id / closed via parallel metadata (vpype is geometry-only)
+    lc = vp.LineCollection()
+    meta: list[tuple[str, bool]] = []
+    for p in polys:
+        arr = np.asarray([complex(float(x), float(y)) for x, y in p.points], dtype=np.complex128)
+        lc.append(arr)
+        meta.append((p.pen_id, bool(p.closed)))
+    try:
+        lc.merge(tolerance=float(tol_mm), flip=True)
+        if len(lc) >= 2:
+            line_index = vp.LineIndex(lc[1:], reverse=True)
+            new_lines = lc.clone([lc[0]])
+            while len(line_index) > 0:
+                idx, reverse = line_index.find_nearest(new_lines[-1][-1])
+                line = line_index.pop(idx)
+                if line is None:
+                    continue
+                if reverse:
+                    line = np.flip(line)
+                new_lines.append(line)
+            lc = new_lines
+    except Exception:
+        return None
+
+    # After merge, path count/order no longer matches meta 1:1 — use pass pen_id
+    pen_id = pass_layer.pen_id
+    out_polys: list[Polyline] = []
+    for line in lc:
+        if line is None or len(line) < 2:
+            continue
+        pts = [(float(c.real), float(c.imag)) for c in np.asarray(line)]
+        out_polys.append(Polyline(points=pts, pen_id=pen_id, closed=False))
+    out = pass_layer.model_copy(deep=True)
+    out.polylines = out_polys
+    return out
+
+
+def optimize_layered(layered: LayeredSVG, *, use_vpype: bool = True) -> LayeredSVG:
+    """Optimize each pass; use vpype merge/sort when installed, else greedy."""
+    out = deepcopy(layered)
+    used_vpype = False
     if use_vpype:
         try:
             import vpype as vp  # noqa: F401
-            # Keep greedy result; vpype integration can refine file-based pipelines.
-            out.meta["optimizer"] = "greedy+vpype-available"
+
+            new_passes: list[PassLayer] = []
+            for p in out.passes:
+                optimized = _vpype_optimize_pass(p, tol_mm=0.2)
+                if optimized is None:
+                    new_passes.append(linesort_pass(linemerge_pass(p)))
+                else:
+                    used_vpype = True
+                    new_passes.append(optimized)
+            out.passes = new_passes
+            out.meta["optimizer"] = "vpype" if used_vpype else "greedy"
+            return out
         except Exception:
-            out.meta["optimizer"] = "greedy"
-    else:
-        out.meta["optimizer"] = "greedy"
+            pass
+
+    out.passes = [linesort_pass(linemerge_pass(p)) for p in out.passes]
+    out.meta["optimizer"] = "greedy"
     return out

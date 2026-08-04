@@ -69,6 +69,7 @@ def portrait_vector_preview_dict(
             "linedraw_jitter": (pv.meta or {}).get("linedraw_jitter"),
             "edge_extractor": (pv.meta or {}).get("edge_extractor"),
             "ensemble": (pv.meta or {}).get("ensemble"),
+            "scan_mode": (pv.meta or {}).get("scan_mode") or "auto",
         },
     }
     if include_preview_png:
@@ -89,6 +90,21 @@ def portrait_vector_preview_dict(
             out["preview_png_b64"] = base64.b64encode(buf.getvalue()).decode("ascii")
         except Exception:
             out["preview_png_b64"] = None
+        # Inkscape-style intermediate filter preview (brightness / edges / …)
+        try:
+            from botdraw.portrait.scan_modes import build_scan_intermediate, intermediate_to_png_b64
+
+            scan = (pv.meta or {}).get("scan_mode") or "auto"
+            inter = build_scan_intermediate(
+                np.asarray(pv.lum, dtype=np.float32),
+                np.asarray(pv.rgb, dtype=np.float32),
+                scan,
+                posterize_levels=int((pv.meta or {}).get("posterize_levels") or 6),
+            )
+            out["intermediate_png_b64"] = intermediate_to_png_b64(inter)
+            out["scan_mode"] = scan
+        except Exception:
+            out["intermediate_png_b64"] = None
     return out
 
 
@@ -115,9 +131,17 @@ def portrait_vector_raw_svg(
 
     chunks = [
         '<?xml version="1.0" encoding="UTF-8"?>',
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}mm" height="{h}mm" viewBox="0 0 {w} {h}">',
+        (
+            f'<svg xmlns="http://www.w3.org/2000/svg" '
+            f'xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" '
+            f'xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd" '
+            f'width="{w}mm" height="{h}mm" viewBox="0 0 {w} {h}">'
+        ),
         f'<rect x="0" y="0" width="{w}" height="{h}" fill="{paper_color_hex}"/>',
-        f'<g id="hatch" fill="none" stroke="{hatch_color}" stroke-width="0.25" stroke-opacity="0.75" stroke-linecap="round">',
+        (
+            f'<g id="layer-hatch" inkscape:groupmode="layer" inkscape:label="2 Midtone hatch" '
+            f'fill="none" stroke="{hatch_color}" stroke-width="0.25" stroke-opacity="0.75" stroke-linecap="round">'
+        ),
     ]
     for i, pts in enumerate(pv.hatch_polylines_mm):
         d = path_d(list(pts), closed=False)
@@ -125,7 +149,8 @@ def portrait_vector_raw_svg(
             chunks.append(f'<path d="{d}" data-hatch="{i}"/>')
     chunks.append("</g>")
     chunks.append(
-        f'<g id="regions" fill="none" stroke="{region_color}" stroke-width="0.35" stroke-opacity="0.85">'
+        f'<g id="layer-regions" inkscape:groupmode="layer" inkscape:label="3 Color bands" '
+        f'fill="none" stroke="{region_color}" stroke-width="0.35" stroke-opacity="0.85">'
     )
     for r in pv.regions:
         d = path_d(list(r.points_mm), closed=True)
@@ -133,7 +158,8 @@ def portrait_vector_raw_svg(
             chunks.append(f'<path d="{d}" data-region="{r.id}"/>')
     chunks.append("</g>")
     chunks.append(
-        f'<g id="edges" fill="none" stroke="{edge_color}" stroke-width="0.3" stroke-linecap="round">'
+        f'<g id="layer-edges" inkscape:groupmode="layer" inkscape:label="1 Structure" '
+        f'fill="none" stroke="{edge_color}" stroke-width="0.3" stroke-linecap="round">'
     )
     for i, pts in enumerate(pv.edge_polylines_mm):
         d = path_d(list(pts), closed=False)

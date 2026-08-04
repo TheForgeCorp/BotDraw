@@ -25,10 +25,14 @@ def layered_to_svg_string(
     *,
     paper_color_hex: str | None = None,
 ) -> str:
+    ink_ns = "http://www.inkscape.org/namespaces/inkscape"
+    sod_ns = "http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
     root = ET.Element(
         "svg",
         {
             "xmlns": "http://www.w3.org/2000/svg",
+            "xmlns:inkscape": ink_ns,
+            "xmlns:sodipodi": sod_ns,
             "width": f"{layered.width_mm}mm",
             "height": f"{layered.height_mm}mm",
             "viewBox": f"0 0 {layered.width_mm} {layered.height_mm}",
@@ -53,12 +57,12 @@ def layered_to_svg_string(
             if pass_layer.opacity_override is not None
             else pen.profile.opacity
         )
+        # Stroke-only groups (AxiDraw default: plot strokes, ignore fills)
         group = ET.SubElement(
             root,
             "g",
             {
-                "id": f"pass-{idx:02d}-{pass_layer.kind}",
-                "inkscape:label": pass_layer.name,
+                "id": f"pass-{idx:02d}-{pass_layer.id}",
                 "data-pass-id": pass_layer.id,
                 "data-pen-id": pass_layer.pen_id,
                 "fill": "none",
@@ -69,8 +73,9 @@ def layered_to_svg_string(
                 "stroke-linejoin": "round",
             },
         )
-        # inkscape namespace hint
-        group.set("{http://www.inkscape.org/namespaces/inkscape}label", pass_layer.name)
+        # True Inkscape layers (plot-by-layer in AxiDraw extension)
+        group.set(f"{{{ink_ns}}}label", pass_layer.name)
+        group.set(f"{{{ink_ns}}}groupmode", "layer")
         for poly in pass_layer.polylines:
             if len(poly.points) < 2:
                 continue

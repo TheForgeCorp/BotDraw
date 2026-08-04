@@ -559,6 +559,7 @@ def ingest_portrait(
     hatch_size: int | None = None,
     linedraw_jitter: float | None = None,
     ensemble: bool | None = None,
+    scan_mode: str | None = None,
 ) -> PortraitVector:
     """Load/crop/preprocess image and build PortraitVector (tone + edges + regions)."""
     from botdraw.portrait.linedraw_edges import (
@@ -572,6 +573,7 @@ def ingest_portrait(
         polylines_to_mm,
         refine_edge_polylines,
     )
+    from botdraw.portrait.scan_modes import normalize_scan_mode, scan_mode_knobs
     from botdraw.portrait.tone_variants import ENSEMBLE_RECIPES, ToneRecipe, apply_tone_recipe
 
     t0 = time.perf_counter()
@@ -582,6 +584,8 @@ def ingest_portrait(
     max_paths = int(limits["max_paths"])
     page_w, page_h = PAPER_MM[paper_enum]
     use_ensemble = _resolve_ensemble(ensemble, quality=quality_enum, mode=mode or "photo")
+    scan = normalize_scan_mode(scan_mode)
+    sknobs = scan_mode_knobs(scan)
 
     post_n = default_posterize_levels(quality_enum) if posterize_levels is None else int(posterize_levels)
     speckle = default_filter_speckle(quality_enum) if filter_speckle is None else int(filter_speckle)
@@ -672,6 +676,7 @@ def ingest_portrait(
                 jitter=0.0,
                 seed=i * 17,
                 max_paths=var_budget,
+                scan_knobs=sknobs,
             )
             ink_maps.append(polylines_to_ink_map(edges_px, height=h_px, width=w_px, stroke_radius=1))
             recipe_ids.append(recipe.id)
@@ -720,6 +725,7 @@ def ingest_portrait(
             seed=0,
             max_edge_paths=edge_budget,
             max_hatch_paths=hatch_budget,
+            scan_knobs=sknobs,
         )
     t_edges = time.perf_counter()
 
@@ -727,6 +733,8 @@ def ingest_portrait(
         max_paths // 3,
         80 if quality_enum == QualityPreset.BOOTH_FAST else (200 if quality_enum == QualityPreset.BOOTH_BALANCED else 500),
     )
+    if sknobs.get("region_boost"):
+        region_budget = min(max_paths // 2, max(region_budget, region_budget * 2))
     regions = _vtracer_regions(
         rgb,
         mode=mode,
@@ -797,5 +805,6 @@ def ingest_portrait(
             "linedraw_jitter": jitter,
             "edge_extractor": "linedraw_ensemble" if use_ensemble else "linedraw",
             "ensemble": ensemble_meta,
+            "scan_mode": scan,
         },
     )

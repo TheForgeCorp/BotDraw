@@ -129,46 +129,60 @@ def restyle_linework(
     include_hatch: bool = True,
     include_regions: bool = False,
 ) -> LayeredSVG:
-    """Primary vector style: linedraw edges + ingest hatch (regions off by default)."""
+    """Primary vector style: separate Inkscape layers for structure / hatch / bands."""
     limit = _budget(params)
-    polys = _edge_polys(pv, palette, limit=limit)
-    if include_hatch:
-        # Keep hatch as supporting tone — do not drown edges
-        hatch_limit = max(0, min(limit - len(polys), max(80, limit // 3)))
-        polys.extend(_ingest_hatch_polys(pv, palette, limit=hatch_limit))
-    if include_regions:
-        # Cap region outlines — they often introduce magenta/ochre spikes
-        region_budget = max(0, min(80, limit // 20))
-        added = 0
-        for r in pv.regions:
-            if added >= region_budget or len(polys) >= limit:
-                break
-            mean_l = 0.299 * r.mean_rgb[0] + 0.587 * r.mean_rgb[1] + 0.114 * r.mean_rgb[2]
-            if mean_l > 190 or mean_l < 25:
-                continue
-            pts = list(r.points_mm)
-            if not _region_outline_ok(pts, page_w=pv.page_w_mm, page_h=pv.page_h_mm):
-                continue
-            pen = _pen_for(pv, palette, r.id, r.mean_rgb)
-            polys.append(Polyline(points=pts, pen_id=pen.id, closed=True))
-            added += 1
-
     edge_pen = _pen_for(pv, palette, "edge")
-    buckets = _bucketize(polys)
-    edge_pass = make_pass(
-        "edges",
-        "Portrait edges",
-        edge_pen.id,
-        buckets.pop(edge_pen.id, []),
-    )
-    passes = [edge_pass] if edge_pass.polylines else []
-    passes += _passes_from_buckets("vec", "Vector", buckets)
+    edges = _edge_polys(pv, palette, limit=limit)
+    hatch: list[Polyline] = []
+    if include_hatch:
+        hatch_limit = max(0, min(limit - len(edges), max(80, limit // 3)))
+        hatch = _ingest_hatch_polys(pv, palette, limit=hatch_limit)
+    regions: list[Polyline] = []
+    if include_regions or (pv.meta or {}).get("scan_mode") == "color_bands":
+        region_budget = max(0, min(80, limit // 20))
+        if (pv.meta or {}).get("scan_mode") == "color_bands":
+            region_budget = max(region_budget, min(160, limit // 10))
+            include_regions = True
+        if include_regions:
+            for r in pv.regions:
+                if len(regions) >= region_budget:
+                    break
+                mean_l = 0.299 * r.mean_rgb[0] + 0.587 * r.mean_rgb[1] + 0.114 * r.mean_rgb[2]
+                if mean_l > 190 or mean_l < 25:
+                    continue
+                pts = list(r.points_mm)
+                if not _region_outline_ok(pts, page_w=pv.page_w_mm, page_h=pv.page_h_mm):
+                    continue
+                pen = _pen_for(pv, palette, r.id, r.mean_rgb)
+                regions.append(Polyline(points=pts, pen_id=pen.id, closed=True))
+
+    passes = []
+    if edges:
+        # One structure layer (AxiDraw/Inkscape plot-by-layer friendly)
+        passes.append(make_pass("structure", "1 Structure", edge_pen.id, edges, kind="ink"))
+    if hatch:
+        hatch_pen = _pen_for(pv, palette, "hatch") if "hatch" in pv.pen_map else edge_pen
+        # Keep multi-pen hatch as sub-buckets under midtone storytelling
+        buckets = _bucketize(hatch)
+        if len(buckets) == 1 and hatch_pen.id in buckets:
+            passes.append(make_pass("midtone", "2 Midtone hatch", hatch_pen.id, hatch, kind="ink"))
+        else:
+            for pid, polys in buckets.items():
+                passes.append(make_pass(f"midtone-{pid}", f"2 Midtone hatch ({pid})", pid, polys, kind="ink"))
+    if regions:
+        for pid, polys in _bucketize(regions).items():
+            passes.append(make_pass(f"bands-{pid}", f"3 Color bands ({pid})", pid, polys, kind="ink"))
     return LayeredSVG(
         width_mm=pv.page_w_mm,
         height_mm=pv.page_h_mm,
         passes=passes,
         seed=params.seed,
-        meta={"style": "portrait_linework", "quality": params.quality.value, "vector_source": "ingest"},
+        meta={
+            "style": "portrait_linework",
+            "quality": params.quality.value,
+            "vector_source": "ingest",
+            "inkscape_layers": [p.name for p in passes],
+        },
     )
 
 

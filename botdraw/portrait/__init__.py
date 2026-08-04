@@ -15,6 +15,7 @@ from botdraw.portrait.ornament import LINE_TYPES, StrokeOrnamentParams, decorate
 from botdraw.portrait.pens import apply_pen_overrides, assign_pens
 from botdraw.portrait.preview import portrait_vector_preview_dict, portrait_vector_raw_svg
 from botdraw.portrait.restyle import render_from_vector
+from botdraw.portrait.scan_modes import SCAN_MODES, SCAN_MODE_LABELS, normalize_scan_mode
 from botdraw.portrait.tone_variants import ENSEMBLE_RECIPES, ToneRecipe, apply_tone_recipe
 
 
@@ -61,6 +62,8 @@ __all__ = [
     "ENSEMBLE_RECIPES",
     "LINE_TYPES",
     "PortraitVector",
+    "SCAN_MODES",
+    "SCAN_MODE_LABELS",
     "StrokeOrnamentParams",
     "ToneRecipe",
     "apply_pen_overrides",
@@ -71,6 +74,7 @@ __all__ = [
     "ingest_portrait",
     "load_portrait_vector",
     "normalize_crop",
+    "normalize_scan_mode",
     "portrait_vector_preview_dict",
     "portrait_vector_raw_svg",
     "preprocess_portrait_image",

@@ -33,6 +33,8 @@ let portraitShowCrop = true;
 let portraitShowHatch = true;
 let portraitHatchEnabled = true;
 let portraitEnsemble = null; // null = auto (studio-hq photo on); bool overrides
+let portraitScanMode = "auto"; // Inkscape Trace Bitmap–inspired filter
+let portraitPathSimplify = 2; // contour_simplify / Path→Simplify strength (1=finest)
 let portraitIngestTimer = null;
 let portraitPenMap = null;
 const PORTRAIT_LINE_TYPES = [
@@ -465,16 +467,18 @@ function drawPortraitIngestPreview(preview) {
   const ox = (canvas.width - pw * s) / 2;
   const oy = (canvas.height - ph * s) / 2;
 
-  // Optional preprocessed bitmap underlay
-  if (preview.preview_png_b64) {
+  // Prefer Inkscape-style intermediate filter preview; fall back to photo underlay
+  const underlayB64 = preview.intermediate_png_b64 || preview.preview_png_b64;
+  const underlayAlpha = preview.intermediate_png_b64 ? 0.38 : 0.22;
+  if (underlayB64) {
     const img = new Image();
     img.onload = () => {
-      ctx.globalAlpha = 0.22;
+      ctx.globalAlpha = underlayAlpha;
       ctx.drawImage(img, ox, oy, pw * s, ph * s);
       ctx.globalAlpha = 1;
       _strokeIngestGeometry(ctx, preview, ox, oy, s);
     };
-    img.src = `data:image/png;base64,${preview.preview_png_b64}`;
+    img.src = `data:image/png;base64,${underlayB64}`;
   } else {
     _strokeIngestGeometry(ctx, preview, ox, oy, s);
   }
@@ -816,6 +820,24 @@ function renderPortrait() {
         </button>`
       ).join("")}
     </div>
+    <h4>Scan filter <span class="muted">(Inkscape-style intermediate)</span></h4>
+    <div class="grid-2">
+      ${field(
+        "Mode",
+        `<select id="scan-mode">
+          <option value="auto">Auto (Hybrid C)</option>
+          <option value="brightness">Brightness</option>
+          <option value="edges">Edges</option>
+          <option value="centerline">Centerline</option>
+          <option value="color_bands">Color bands</option>
+        </select>`
+      )}
+      ${field(
+        "Path simplify",
+        `<input id="path-simplify" type="range" min="1" max="3" step="1" value="${portraitPathSimplify}" /><span id="path-simplify-val">${portraitPathSimplify}</span>`
+      )}
+    </div>
+    <p class="muted" style="margin-top:0.2rem">Lighter intermediates first — Brightness / Edges / Centerline map to linedraw knobs (no Potrace).</p>
     <h4>Portrait style</h4>
     ${styleButtons(list)}
     <h4>Paper</h4>
@@ -877,6 +899,30 @@ function renderPortrait() {
   });
   root.querySelector("#paper").value = state.paper;
   root.querySelector("#quality").value = state.quality;
+  const scanEl = root.querySelector("#scan-mode");
+  if (scanEl) {
+    scanEl.value = portraitScanMode;
+    scanEl.onchange = () => {
+      portraitScanMode = scanEl.value;
+      portraitForceReingest = true;
+      const hint = document.getElementById("scan-mode-hint");
+      if (hint) hint.textContent = `Scan filter: ${portraitScanMode} — re-ingest to refresh intermediate`;
+    };
+  }
+  const simpEl = root.querySelector("#path-simplify");
+  const simpVal = root.querySelector("#path-simplify-val");
+  if (simpEl) {
+    const syncSimp = () => {
+      portraitPathSimplify = Number(simpEl.value) || 2;
+      if (simpVal) simpVal.textContent = String(portraitPathSimplify);
+    };
+    simpEl.oninput = syncSimp;
+    simpEl.onchange = () => {
+      syncSimp();
+      portraitForceReingest = true;
+    };
+    syncSimp();
+  }
   root.querySelector("#palette").value = selectedPaletteId;
   root.querySelector("#palette").onchange = () => {
     selectedPaletteId = root.querySelector("#palette").value;
@@ -1048,6 +1094,10 @@ async function runPortraitIngest(opts = {}) {
   const knobs = portraitHatchEnabled ? {} : { hatch_size: 0 };
   if (portraitEnsemble === true) knobs.ensemble = true;
   if (portraitEnsemble === false) knobs.ensemble = false;
+  knobs.scan_mode = root.querySelector("#scan-mode")?.value || portraitScanMode;
+  knobs.contour_simplify = Number(root.querySelector("#path-simplify")?.value || portraitPathSimplify);
+  portraitScanMode = knobs.scan_mode;
+  portraitPathSimplify = knobs.contour_simplify;
   if (portraitFile) {
     const uploadFile = await downscalePortraitForUpload(portraitFile, 1280);
     const fd = new FormData();
@@ -1061,6 +1111,8 @@ async function runPortraitIngest(opts = {}) {
     if (!portraitHatchEnabled) fd.append("hatch_size", "0");
     if (portraitEnsemble === true) fd.append("ensemble", "true");
     if (portraitEnsemble === false) fd.append("ensemble", "false");
+    fd.append("scan_mode", knobs.scan_mode);
+    fd.append("contour_simplify", String(knobs.contour_simplify));
     fd.append("file", uploadFile, uploadFile.name || "portrait.jpg");
     data = await api("/api/portrait/ingest/upload", { method: "POST", body: fd });
   } else {
@@ -1095,7 +1147,14 @@ async function runPortraitIngest(opts = {}) {
       (data.cache_hit ? " · cache" : "") +
       (portraitHatchEnabled ? "" : " · hatch off") +
       (meta.ensemble?.enabled ? " · ensemble 5+1" : "") +
+      (data.scan_mode || meta.scan_mode ? ` · scan ${data.scan_mode || meta.scan_mode}` : "") +
       ` · id ${portraitIngestId || "?"}`;
+  }
+  const hint = document.getElementById("scan-mode-hint");
+  if (hint) {
+    hint.textContent = data.intermediate_png_b64
+      ? `Intermediate: ${data.scan_mode || meta.scan_mode || "auto"} (shown under vectors)`
+      : "";
   }
   const applyBtn = root.querySelector("#portrait-apply");
   if (applyBtn) applyBtn.disabled = !portraitIngestId;
@@ -1123,6 +1182,12 @@ function collectPortraitExtra(root, { reuse = false, forceReingest = false } = {
   if (!portraitHatchEnabled) extra.hatch_size = 0;
   if (portraitEnsemble === true) extra.ensemble = true;
   if (portraitEnsemble === false) extra.ensemble = false;
+  const scanSel = root.querySelector("#scan-mode");
+  if (scanSel) portraitScanMode = scanSel.value;
+  const simpSel = root.querySelector("#path-simplify");
+  if (simpSel) portraitPathSimplify = Number(simpSel.value) || 2;
+  extra.scan_mode = portraitScanMode;
+  extra.contour_simplify = portraitPathSimplify;
   if (portraitCrop) extra.crop = portraitCrop;
   if (portraitPenMap) extra.pen_map = portraitPenMap;
   if (reuse && portraitIngestId && !forceReingest && !portraitForceReingest) {
