@@ -134,6 +134,17 @@ def test_skeleton_chains_longer_than_raw_mask_walk():
     assert max(lengths) > 40.0
 
 
+def test_merge_bidirectional_joins_reversed_fragments():
+    from botdraw.portrait.linedraw_edges import _merge_bidirectional
+
+    a = [(0.0, 0.0), (10.0, 0.0), (20.0, 0.0)]
+    # Oriented away from a's end; reverse join should still connect
+    b = [(40.0, 0.0), (30.0, 0.0), (22.0, 0.0)]
+    merged = _merge_bidirectional([a, b], dist_thresh=5.0)
+    assert len(merged) == 1
+    assert len(merged[0]) >= 5
+
+
 def test_curve_tone_skips_dark_wall():
     from botdraw.portrait.linedraw_edges import curve_tone_from_lum
 

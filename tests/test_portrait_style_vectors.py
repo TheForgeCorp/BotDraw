@@ -75,3 +75,16 @@ def test_render_from_vector_meta_counts():
     )
     assert layered.meta.get("hatch_count") == len(pv.hatch_polylines_mm)
     assert layered.meta.get("edge_count") == len(pv.edge_polylines_mm)
+
+
+def test_scribble_tone_uses_edges_and_curves():
+    ensure_styles_loaded()
+    from botdraw.portrait.restyle import restyle_scribble_tone
+
+    pv, palette = _pv_with_hatch()
+    layered = restyle_scribble_tone(pv, palette, StyleParams(seed=1, quality=QualityPreset.BOOTH_FAST, density=1.0))
+    assert layered.meta.get("vector_source") == "curve_tone+edges"
+    n = sum(len(p.polylines) for p in layered.passes)
+    assert n >= len(pv.edge_polylines_mm)
+    eng = get_style("portrait_scribble_tone")
+    assert eng is not None

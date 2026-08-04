@@ -384,6 +384,60 @@ def _merge_near_endpoints(
     return alive
 
 
+def _merge_bidirectional(
+    contours: list[list[tuple[float, float]]],
+    dist_thresh: float = 8.0,
+) -> list[list[tuple[float, float]]]:
+    """
+    Join polylines end-to-end in either orientation (line-weaver continuity).
+
+    Endpoint-only distance checks + spatial buckets; reverse only when merging.
+    """
+    alive: list[list[tuple[float, float]]] = [list(c) for c in contours if len(c) > 1]
+    if len(alive) < 2:
+        return alive
+    thresh2 = float(dist_thresh) * float(dist_thresh)
+    cell = max(float(dist_thresh), 1.0)
+    max_rounds = max(64, len(alive) * 2)
+
+    for _ in range(max_rounds):
+        buckets: dict[tuple[int, int], list[tuple[int, int]]] = {}
+        for i, c in enumerate(alive):
+            for end_flag, p in ((0, c[0]), (1, c[-1])):
+                key = (int(p[0] // cell), int(p[1] // cell))
+                buckets.setdefault(key, []).append((i, end_flag))
+
+        best_d2 = thresh2
+        best: tuple[int, int, bool, bool] | None = None
+        for (kx, ky), items in buckets.items():
+            neigh: list[tuple[int, int]] = []
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    neigh.extend(buckets.get((kx + dx, ky + dy), ()))
+            for i, ei in items:
+                pi = alive[i][0 if ei == 0 else -1]
+                for j, ej in neigh:
+                    if i >= j:
+                        continue
+                    pj = alive[j][0 if ej == 0 else -1]
+                    d2 = (pi[0] - pj[0]) ** 2 + (pi[1] - pj[1]) ** 2
+                    if d2 >= best_d2:
+                        continue
+                    # Join so the near endpoints become end(first)+start(second)
+                    best_d2 = d2
+                    best = (i, j, ei == 0, ej == 1)
+
+        if best is None:
+            break
+        i, j, rev_i, rev_j = best
+        a = list(reversed(alive[i])) if rev_i else alive[i]
+        b = list(reversed(alive[j])) if rev_j else alive[j]
+        alive[i] = a + b
+        alive.pop(j)
+
+    return [c for c in alive if len(c) > 1]
+
+
 def _subsample(contours: list[list[tuple[float, float]]], step: int) -> list[list[tuple[float, float]]]:
     step = max(1, int(step))
     out: list[list[tuple[float, float]]] = []
@@ -539,10 +593,9 @@ def contours_from_lum(
         if len(c) >= sil_min:
             contours.append([(float(x), float(y)) for x, y in c])
 
-    contours = _merge_near_endpoints(contours, dist_thresh=8.0 if strength <= 1 else 10.0)
-    # Try reverse-join without duplicating: reverse orphans then merge once
-    contours = [list(reversed(c)) for c in contours]
-    contours = _merge_near_endpoints(contours, dist_thresh=7.0)
+    contours = _merge_bidirectional(contours, dist_thresh=10.0 if strength <= 1 else 12.0)
+    # Second pass with tighter gap after orientation settle
+    contours = _merge_bidirectional(contours, dist_thresh=6.0 if strength <= 1 else 8.0)
 
     step = 2 if strength <= 2 else 3
     contours = _subsample(contours, step=step)
