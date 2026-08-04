@@ -115,14 +115,7 @@ button { cursor: pointer; }
     border-bottom: 1px solid var(--line);
   }
   .rail-inspector { max-height: 28%; }
-  .stage {
-    min-height: 62vh;
-    padding-bottom: 0.5rem;
-  }
-  .stage-toolbar {
-    border-radius: 14px;
-    max-width: calc(100% - 1rem);
-  }
+  .stage { min-height: 62vh; }
   #emu, #letters-emu, #portrait-emu, #portrait-src, #portrait-ingest {
     max-height: min(54vh, 640px);
   }
@@ -880,6 +873,25 @@ details.advanced .group { margin-top: 0.15rem; }
   width: 100%;
   justify-content: flex-start;
   text-decoration: none;
+}
+
+@media (max-width: 900px) {
+  .stage { padding-bottom: 4.75rem; }
+  .paper-desk { padding-bottom: 0.75rem; }
+  .stage-toolbar {
+    position: fixed;
+    left: 0.5rem;
+    right: 0.5rem;
+    bottom: 0.5rem;
+    transform: none;
+    width: auto;
+    max-width: none;
+    border-radius: 14px;
+    justify-content: flex-start;
+    gap: 0.35rem;
+    padding: 0.4rem 0.5rem;
+    z-index: 40;
+  }
 }
 
 /* Letters / portrait layer editors kept readable */

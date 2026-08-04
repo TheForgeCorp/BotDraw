@@ -2438,7 +2438,7 @@ async function vectorizeLetter(opts = {}) {
     : "";
   lettersStatsEl.textContent =
     `Ready · ${src} · draft ${timing.draft ?? "?"}s · vector ${timing.vectorize ?? "?"}s · wall ${wall}s · missing ${missing}${tr}`;
-  if (!quiet) setDeskState({ loading: false, empty: false });
+  setDeskState({ loading: false, empty: false });
   return data;
 }
 
