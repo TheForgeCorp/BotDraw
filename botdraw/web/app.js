@@ -18,6 +18,10 @@ let portraitFile = null;
 let portraitIngestId = null;
 let portraitPaperId = "natural-cream";
 let papers = [];
+let linesCatalog = [];
+let selectedLineId = "solid";
+let selectedPaperId = "natural-cream";
+let labIngestId = null; // shared GenArt / R&D ingest
 let portraitLineType = "solid";
 let portraitForceReingest = false;
 let portraitAutoFrame = true;
@@ -624,6 +628,133 @@ function paperSelectHtml(selectedId) {
   return `<select id="paper-color">${opts}</select>`;
 }
 
+function lineSelectHtml(selectedId) {
+  const opts = (linesCatalog.length ? linesCatalog : [{ id: "solid", name: "Solid" }])
+    .map((l) => `<option value="${l.id}" ${l.id === selectedId ? "selected" : ""}>${l.name || l.id}</option>`)
+    .join("");
+  return `<select id="line-lib">${opts}</select>`;
+}
+
+function applyLineStockToPortraitForm(root, stock) {
+  if (!root || !stock) return;
+  const set = (id, v, labelId) => {
+    const el = root.querySelector(`#${id}`);
+    if (!el || v == null) return;
+    el.value = v;
+    const lab = labelId ? root.querySelector(`#${labelId}`) : null;
+    if (lab) lab.textContent = Number(v).toFixed(1);
+  };
+  if (stock.line_type) {
+    portraitLineType = stock.line_type;
+    const lt = root.querySelector("#line-type");
+    if (lt) lt.value = stock.line_type;
+  }
+  set("line-spacing", stock.line_spacing_mm, "line-spacing-val");
+  set("pattern-period", stock.pattern_period_mm, "pattern-period-val");
+  set("pattern-amp", stock.pattern_amplitude_mm, "pattern-amp-val");
+  set("dash-mm", stock.dash_mm, "dash-mm-val");
+  set("gap-mm", stock.gap_mm, "gap-mm-val");
+  const amp = root.querySelector("#ornament-amp");
+  const dash = root.querySelector("#ornament-dash");
+  if (amp) amp.style.display = portraitOrnamentNeedsAmp(portraitLineType) ? "" : "none";
+  if (dash) dash.style.display = portraitOrnamentNeedsDash(portraitLineType) ? "" : "none";
+}
+
+function ensureLabEmuInCompare() {
+  const compare = document.getElementById("lab-compare");
+  const pane = document.querySelector(".lab-vector-pane");
+  const emu = document.getElementById("emu");
+  if (!compare || !pane || !emu) return;
+  compare.hidden = false;
+  const stage = emu.closest(".stage");
+  if (stage) stage.classList.add("compare-on");
+  if (emu.parentElement !== pane) pane.appendChild(emu);
+}
+
+function drawLabSource(file) {
+  const canvas = document.getElementById("lab-src");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true, alpha: true });
+  ctx.fillStyle = "#f4f4f5";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  if (!file) {
+    ctx.fillStyle = "#a3a3a3";
+    ctx.font = "12px sans-serif";
+    ctx.fillText("Upload a photo", 16, 28);
+    return;
+  }
+  const url = URL.createObjectURL(file);
+  const img = new Image();
+  img.onload = () => {
+    const scale = Math.min(canvas.width / img.width, canvas.height / img.height);
+    const w = img.width * scale;
+    const h = img.height * scale;
+    const ox = (canvas.width - w) / 2;
+    const oy = (canvas.height - h) / 2;
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, ox, oy, w, h);
+    URL.revokeObjectURL(url);
+  };
+  img.onerror = () => {
+    URL.revokeObjectURL(url);
+    ctx.fillStyle = "#92400e";
+    ctx.font = "12px sans-serif";
+    ctx.fillText("Could not preview image", 16, 28);
+  };
+  img.src = url;
+}
+
+function drawLabIngestPng(preview) {
+  const canvas = document.getElementById("lab-ingest");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d", { willReadFrequently: false, alpha: true });
+  ctx.fillStyle = "#f7f1e8";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  if (!preview?.preview_png_b64) {
+    ctx.fillStyle = "#737373";
+    ctx.font = "12px sans-serif";
+    ctx.fillText(preview ? "No preview PNG" : "Run Ingest", 16, 28);
+    return;
+  }
+  const img = new Image();
+  img.onload = () => {
+    const scale = Math.min(canvas.width / img.width, canvas.height / img.height);
+    const w = img.width * scale;
+    const h = img.height * scale;
+    const ox = (canvas.width - w) / 2;
+    const oy = (canvas.height - h) / 2;
+    ctx.drawImage(img, ox, oy, w, h);
+  };
+  img.src = `data:image/png;base64,${preview.preview_png_b64}`;
+}
+
+async function runLabIngest() {
+  syncStateFromForm();
+  const file = controls.querySelector("#photo")?.files?.[0];
+  if (!file) {
+    statsEl.textContent = "Choose a photo to ingest";
+    return null;
+  }
+  statsEl.textContent = "Ingesting…";
+  const fd = new FormData();
+  fd.append("quality", state.quality);
+  fd.append("paper", state.paper);
+  fd.append("image_mode", "photo");
+  fd.append("auto_frame", "true");
+  fd.append("include_preview_png", "true");
+  fd.append("file", file, file.name || "photo.jpg");
+  const data = await api("/api/portrait/ingest/upload", { method: "POST", body: fd });
+  labIngestId = data.ingest_id || null;
+  ensureLabEmuInCompare();
+  drawLabSource(file);
+  drawLabIngestPng(data);
+  statsEl.textContent =
+    `Ingest ready · edges ${data.edge_count ?? "?"} · hatch ${data.hatch_count ?? 0}` +
+    ` · id ${labIngestId || "?"}`;
+  return data;
+}
+
 function portraitOrnamentNeedsDash(lt) {
   return ["dashed", "dotted", "dash_dot", "stitch"].includes(lt);
 }
@@ -697,6 +828,7 @@ function renderPortrait() {
       ${field("Seed", `<input id="seed" type="number" value="${state.seed}" />`)}
       ${field("Line type", `<select id="line-type">${ltOpts}</select>`)}
     </div>
+    ${field("Line library", lineSelectHtml(selectedLineId))}
     <h4>Stroke ornament</h4>
     ${field("Line spacing mm", `<input id="line-spacing" type="range" min="0.4" max="4" step="0.1" value="1.2" /><span id="line-spacing-val">1.2</span>`)}
     <div id="ornament-amp" style="${needsAmp ? "" : "display:none"}">
@@ -755,6 +887,14 @@ function renderPortrait() {
     portraitLineType = root.querySelector("#line-type").value;
     renderPortrait();
   };
+  const lineLib = root.querySelector("#line-lib");
+  if (lineLib) {
+    lineLib.onchange = () => {
+      selectedLineId = lineLib.value;
+      const stock = linesCatalog.find((l) => l.id === selectedLineId);
+      if (stock) applyLineStockToPortraitForm(root, stock);
+    };
+  }
   root.querySelector("#auto-frame").onchange = (e) => {
     portraitAutoFrame = !!e.target.checked;
   };
@@ -1172,43 +1312,74 @@ async function renderWithSettings({ appName, busyText = "Rendering…", extraFor
     fd.append("density", String(state.density));
     fd.append("pen_up_speed_mm_s", String(state.pen_up_speed_mm_s));
     fd.append("pen_down_speed_mm_s", String(state.pen_down_speed_mm_s));
+    if (labIngestId) {
+      fd.append("ingest_id", labIngestId);
+      fd.append("reuse_ingest", "true");
+    }
     if (extraFormData) Object.entries(extraFormData).forEach(([k, v]) => fd.append(k, v));
     data = await api("/api/render/upload", { method: "POST", body: fd });
   } else {
+    const body = {
+      app: appName,
+      style_id: selectedStyle,
+      palette_id: selectedPaletteId,
+      paper: state.paper,
+      quality: state.quality,
+      seed: state.seed,
+      density: state.density,
+      pen_up_speed_mm_s: state.pen_up_speed_mm_s,
+      pen_down_speed_mm_s: state.pen_down_speed_mm_s,
+    };
+    if (labIngestId) {
+      body.ingest_id = labIngestId;
+      body.reuse_ingest = true;
+    }
     data = await api("/api/render", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        app: appName,
-        style_id: selectedStyle,
-        palette_id: selectedPaletteId,
-        paper: state.paper,
-        quality: state.quality,
-        seed: state.seed,
-        density: state.density,
-        pen_up_speed_mm_s: state.pen_up_speed_mm_s,
-        pen_down_speed_mm_s: state.pen_down_speed_mm_s,
-      }),
+      body: JSON.stringify(body),
     });
   }
+  if (data.emulator?.settings?.ingest_id) labIngestId = data.emulator.settings.ingest_id;
   loadResult(data);
 }
 
 function renderGenArt() {
-  const list = styles.filter((s) => ["artistic", "pattern", "technical"].includes(s.category));
+  const list = styles.filter((s) =>
+    ["artistic", "pattern", "technical", "portrait"].includes(s.category)
+  );
   if (!list.find((s) => s.id === selectedStyle)) selectedStyle = list[0]?.id || "stipple";
   controls.innerHTML = `
     <h3>GenArtBot · Dev</h3>
-    <p class="muted">Tune vectorization + multicolor layers, then inspect / export JSON.</p>
+    <p class="muted">Tune vectorization + multicolor layers. Optional photo ingest (linedraw) before Vectorize.</p>
     <h4>Style</h4>
     ${styleButtons(list)}
     ${commonDevOpts()}
-    <div class="row"><button class="primary" id="go">Render &amp; Inspect</button></div>
+    <div class="row">
+      <button type="button" id="genart-ingest">Ingest</button>
+      <button class="primary" id="go">Vectorize</button>
+    </div>
   `;
   bindStyleGrid();
   applyCommonDefaults();
+  const photo = controls.querySelector("#photo");
+  if (photo) {
+    photo.onchange = () => {
+      labIngestId = null;
+      const f = photo.files?.[0] || null;
+      if (f) drawLabSource(f);
+    };
+  }
+  controls.querySelector("#genart-ingest").onclick = () =>
+    runLabIngest().catch((e) => {
+      statsEl.textContent = String(e.message || e);
+      console.error(e);
+    });
   controls.querySelector("#go").onclick = () =>
-    renderWithSettings({ appName: "genartbot", busyText: "Rendering GenArt…" });
+    renderWithSettings({ appName: "genartbot", busyText: "Vectorizing GenArt…" }).catch((e) => {
+      statsEl.textContent = String(e.message || e);
+      console.error(e);
+    });
 }
 
 function letterContentRoot() {
@@ -1903,15 +2074,23 @@ function renderRdlab() {
   if (!list.find((s) => s.id === selectedStyle)) selectedStyle = "spiral";
   controls.innerHTML = `
     <h3>R&amp;D Lab · Dev</h3>
-    <p class="muted">Experimental motifs + rotating-base kinematics.</p>
+    <p class="muted">Experimental motifs + rotating-base kinematics. Optional photo ingest.</p>
     <h4>Experiment</h4>
     ${styleButtons(list)}
     ${commonDevOpts()}
     ${field("Turntable RPM", `<input id="rpm" type="number" step="0.5" value="${state.rpm}" />`)}
-    <div class="row"><button class="primary" id="go">Run &amp; Inspect</button></div>
+    <div class="row">
+      <button type="button" id="rd-ingest">Ingest</button>
+      <button class="primary" id="go">Run &amp; Inspect</button>
+    </div>
   `;
   bindStyleGrid();
   applyCommonDefaults();
+  controls.querySelector("#rd-ingest").onclick = () =>
+    runLabIngest().catch((e) => {
+      statsEl.textContent = String(e.message || e);
+      console.error(e);
+    });
   controls.querySelector("#go").onclick = async () => {
     syncStateFromForm();
     const file = controls.querySelector("#photo")?.files?.[0];
@@ -1923,6 +2102,10 @@ function renderRdlab() {
     fd.append("quality", state.quality);
     fd.append("density", String(state.density));
     if (file) fd.append("file", file);
+    if (labIngestId) {
+      fd.append("ingest_id", labIngestId);
+      fd.append("reuse_ingest", "true");
+    }
     statsEl.textContent = "R&D render…";
     const data = await api("/api/rdlab/render", { method: "POST", body: fd });
     loadResult(data);
@@ -1953,8 +2136,8 @@ function renderPalettes() {
   `).join("");
 
   controls.innerHTML = `
-    <h3>Palette Lab</h3>
-    <p class="muted">Edit established palettes and save as a new JSON preset for renders.</p>
+    <h3>Pen Library</h3>
+    <p class="muted">Customize pens and save palette sets for all bots.</p>
     ${field("Load palette", paletteSelectHtml())}
     ${penChipsHtml(palette)}
     ${field("New palette id", `<input id="new_id" value="${palette?.id || "custom"}-dev" />`)}
@@ -2023,6 +2206,264 @@ function renderPalettes() {
     downloadJson(`${saved.id}.json`, saved);
     statsEl.textContent = `Saved palette ${saved.id}`;
     renderControls();
+  };
+}
+
+function fillPaperForm(stock) {
+  if (!stock) return;
+  const set = (id, v) => {
+    const el = controls.querySelector(`#${id}`);
+    if (el && v != null) el.value = v;
+  };
+  set("paper_id", stock.id);
+  set("paper_name", stock.name);
+  set("paper_color", stock.color_hex || "#f7f1e8");
+  set("paper_finish", stock.finish || "matte");
+  set("paper_size_hint", stock.size_hint || "A4");
+  set("paper_notes", stock.notes || "");
+  const swatch = controls.querySelector("#paper-swatch");
+  if (swatch) swatch.style.background = stock.color_hex || "#f7f1e8";
+}
+
+function renderPaperLibrary() {
+  if (!selectedPaperId && papers[0]) selectedPaperId = papers[0].id;
+  const stock = papers.find((p) => p.id === selectedPaperId) || papers[0] || {
+    id: "custom-paper",
+    name: "Custom Paper",
+    color_hex: "#f7f1e8",
+    finish: "matte",
+    size_hint: "A4",
+    notes: "",
+  };
+  const chips = papers
+    .map(
+      (p) =>
+        `<button type="button" data-paper="${p.id}" class="${p.id === (stock.id || selectedPaperId) ? "active" : ""}">${p.name}</button>`
+    )
+    .join("");
+  controls.innerHTML = `
+    <h3>Paper Library</h3>
+    <p class="muted">Paper stocks with color + finish for Portrait and the emulator.</p>
+    <div class="library-list" id="paper-list">${chips || '<span class="muted">No papers loaded</span>'}</div>
+    <div class="paper-swatch" id="paper-swatch" style="background:${stock.color_hex || "#f7f1e8"}"></div>
+    <div class="grid-2">
+      ${field("id", `<input id="paper_id" value="${stock.id || ""}" />`)}
+      ${field("name", `<input id="paper_name" value="${stock.name || ""}" />`)}
+    </div>
+    <div class="grid-2">
+      ${field("color", `<input id="paper_color" type="color" value="${stock.color_hex || "#f7f1e8"}" />`)}
+      ${field("finish", `<select id="paper_finish">
+        ${["matte", "smooth", "toothy"].map((f) =>
+          `<option value="${f}" ${(stock.finish || "matte") === f ? "selected" : ""}>${f}</option>`
+        ).join("")}
+      </select>`)}
+    </div>
+    <div class="grid-2">
+      ${field("size hint", `<input id="paper_size_hint" value="${stock.size_hint || "A4"}" />`)}
+      ${field("notes", `<input id="paper_notes" value="${stock.notes || ""}" />`)}
+    </div>
+    <div class="row">
+      <button class="primary" id="save-paper">Save paper</button>
+      <button id="delete-paper">Delete</button>
+    </div>
+  `;
+  controls.querySelectorAll("[data-paper]").forEach((btn) => {
+    btn.onclick = () => {
+      selectedPaperId = btn.dataset.paper;
+      fillPaperForm(papers.find((p) => p.id === selectedPaperId));
+      controls.querySelectorAll("[data-paper]").forEach((b) =>
+        b.classList.toggle("active", b.dataset.paper === selectedPaperId)
+      );
+    };
+  });
+  const colorEl = controls.querySelector("#paper_color");
+  if (colorEl) {
+    colorEl.oninput = () => {
+      const swatch = controls.querySelector("#paper-swatch");
+      if (swatch) swatch.style.background = colorEl.value;
+    };
+  }
+  controls.querySelector("#save-paper").onclick = async () => {
+    const body = {
+      id: val("paper_id"),
+      name: val("paper_name"),
+      color_hex: val("paper_color", "#f7f1e8"),
+      finish: val("paper_finish", "matte"),
+      size_hint: val("paper_size_hint", "A4"),
+      notes: val("paper_notes", ""),
+    };
+    try {
+      const saved = await api("/api/papers/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      papers = await api("/api/papers");
+      selectedPaperId = saved.id;
+      statsEl.textContent = `Saved paper ${saved.id}`;
+      await renderControls();
+    } catch (e) {
+      statsEl.textContent = String(e.message || e);
+      console.error(e);
+    }
+  };
+  controls.querySelector("#delete-paper").onclick = async () => {
+    const id = val("paper_id");
+    if (!id) return;
+    try {
+      await api(`/api/papers/${encodeURIComponent(id)}`, { method: "DELETE" });
+      papers = await api("/api/papers");
+      selectedPaperId = papers[0]?.id || "natural-cream";
+      statsEl.textContent = `Deleted paper ${id}`;
+      await renderControls();
+    } catch (e) {
+      const msg = String(e.message || e);
+      statsEl.textContent = /403|preset|Cannot delete/i.test(msg)
+        ? `Cannot delete preset paper: ${id}`
+        : msg;
+      console.error(e);
+    }
+  };
+}
+
+function refreshLinePreview(lineId) {
+  const img = controls.querySelector("#line-preview");
+  if (!img || !lineId) return;
+  img.src = `/api/lines/${encodeURIComponent(lineId)}/preview.svg?t=${Date.now()}`;
+}
+
+function fillLineForm(stock) {
+  if (!stock) return;
+  const set = (id, v) => {
+    const el = controls.querySelector(`#${id}`);
+    if (el && v != null) el.value = v;
+  };
+  set("line_id", stock.id);
+  set("line_name", stock.name);
+  set("line_type", stock.line_type || "solid");
+  set("line_spacing_mm", stock.line_spacing_mm ?? 1.2);
+  set("pattern_period_mm", stock.pattern_period_mm ?? 2.0);
+  set("pattern_amplitude_mm", stock.pattern_amplitude_mm ?? 0.8);
+  set("dash_mm", stock.dash_mm ?? 2.0);
+  set("gap_mm", stock.gap_mm ?? 1.2);
+  set("ornament_target", stock.ornament_target || "all");
+  set("line_notes", stock.notes || "");
+  refreshLinePreview(stock.id);
+}
+
+function renderLineLibrary() {
+  if (!selectedLineId && linesCatalog[0]) selectedLineId = linesCatalog[0].id;
+  const stock = linesCatalog.find((l) => l.id === selectedLineId) || linesCatalog[0] || {
+    id: "custom-line",
+    name: "Custom Line",
+    line_type: "solid",
+    line_spacing_mm: 1.2,
+    pattern_period_mm: 2.0,
+    pattern_amplitude_mm: 0.8,
+    dash_mm: 2.0,
+    gap_mm: 1.2,
+    ornament_target: "all",
+    notes: "",
+  };
+  const chips = linesCatalog
+    .map(
+      (l) =>
+        `<button type="button" data-line="${l.id}" class="${l.id === stock.id ? "active" : ""}">${l.name || l.id}</button>`
+    )
+    .join("");
+  const ltOpts = PORTRAIT_LINE_TYPES.map(
+    (t) => `<option value="${t}" ${(stock.line_type || "solid") === t ? "selected" : ""}>${t.replace(/_/g, " ")}</option>`
+  ).join("");
+  controls.innerHTML = `
+    <h3>Line Library</h3>
+    <p class="muted">Stroke ornament presets shared by Portrait and other bots.</p>
+    <div class="library-list" id="line-list">${chips || '<span class="muted">No lines loaded</span>'}</div>
+    <div class="line-preview-frame">
+      <img id="line-preview" alt="Line preview" src="/api/lines/${encodeURIComponent(stock.id)}/preview.svg" />
+    </div>
+    <div class="grid-2">
+      ${field("id", `<input id="line_id" value="${stock.id || ""}" />`)}
+      ${field("name", `<input id="line_name" value="${stock.name || ""}" />`)}
+    </div>
+    <div class="grid-2">
+      ${field("line type", `<select id="line_type">${ltOpts}</select>`)}
+      ${field("ornament target", `<select id="ornament_target">
+        ${["all", "edges", "fills"].map((t) =>
+          `<option value="${t}" ${(stock.ornament_target || "all") === t ? "selected" : ""}>${t}</option>`
+        ).join("")}
+      </select>`)}
+    </div>
+    <div class="grid-2">
+      ${field("spacing mm", `<input id="line_spacing_mm" type="number" step="0.1" value="${stock.line_spacing_mm ?? 1.2}" />`)}
+      ${field("period mm", `<input id="pattern_period_mm" type="number" step="0.1" value="${stock.pattern_period_mm ?? 2}" />`)}
+    </div>
+    <div class="grid-2">
+      ${field("amplitude mm", `<input id="pattern_amplitude_mm" type="number" step="0.1" value="${stock.pattern_amplitude_mm ?? 0.8}" />`)}
+      ${field("dash mm", `<input id="dash_mm" type="number" step="0.1" value="${stock.dash_mm ?? 2}" />`)}
+    </div>
+    <div class="grid-2">
+      ${field("gap mm", `<input id="gap_mm" type="number" step="0.1" value="${stock.gap_mm ?? 1.2}" />`)}
+      ${field("notes", `<input id="line_notes" value="${stock.notes || ""}" />`)}
+    </div>
+    <div class="row">
+      <button class="primary" id="save-line">Save line</button>
+      <button id="delete-line">Delete</button>
+    </div>
+  `;
+  controls.querySelectorAll("[data-line]").forEach((btn) => {
+    btn.onclick = () => {
+      selectedLineId = btn.dataset.line;
+      fillLineForm(linesCatalog.find((l) => l.id === selectedLineId));
+      controls.querySelectorAll("[data-line]").forEach((b) =>
+        b.classList.toggle("active", b.dataset.line === selectedLineId)
+      );
+    };
+  });
+  controls.querySelector("#save-line").onclick = async () => {
+    const body = {
+      id: val("line_id"),
+      name: val("line_name"),
+      line_type: val("line_type", "solid"),
+      line_spacing_mm: num("line_spacing_mm", 1.2),
+      pattern_period_mm: num("pattern_period_mm", 2),
+      pattern_amplitude_mm: num("pattern_amplitude_mm", 0.8),
+      dash_mm: num("dash_mm", 2),
+      gap_mm: num("gap_mm", 1.2),
+      ornament_target: val("ornament_target", "all"),
+      notes: val("line_notes", ""),
+    };
+    try {
+      const saved = await api("/api/lines/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      linesCatalog = await api("/api/lines");
+      selectedLineId = saved.id;
+      statsEl.textContent = `Saved line ${saved.id}`;
+      await renderControls();
+      refreshLinePreview(saved.id);
+    } catch (e) {
+      statsEl.textContent = String(e.message || e);
+      console.error(e);
+    }
+  };
+  controls.querySelector("#delete-line").onclick = async () => {
+    const id = val("line_id");
+    if (!id) return;
+    try {
+      await api(`/api/lines/${encodeURIComponent(id)}`, { method: "DELETE" });
+      linesCatalog = await api("/api/lines");
+      selectedLineId = linesCatalog[0]?.id || "solid";
+      statsEl.textContent = `Deleted line ${id}`;
+      await renderControls();
+    } catch (e) {
+      const msg = String(e.message || e);
+      statsEl.textContent = /403|preset|Cannot delete/i.test(msg)
+        ? `Cannot delete preset line: ${id}`
+        : msg;
+      console.error(e);
+    }
   };
 }
 
@@ -2137,10 +2578,15 @@ async function renderControls() {
   if (!papers.length) {
     try { papers = await api("/api/papers"); } catch (_) { papers = []; }
   }
+  if (!linesCatalog.length) {
+    try { linesCatalog = await api("/api/lines"); } catch (_) { linesCatalog = []; }
+  }
   if (currentApp === "genartbot") return renderGenArt();
   if (currentApp === "portraitbot") return renderPortrait();
   if (currentApp === "lettersbot") return renderLetters();
   if (currentApp === "rdlab") return renderRdlab();
+  if (currentApp === "papers") return renderPaperLibrary();
+  if (currentApp === "lines") return renderLineLibrary();
   if (currentApp === "palettes") return renderPalettes();
   return renderTools();
 }

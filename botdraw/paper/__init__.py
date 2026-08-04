@@ -63,6 +63,29 @@ def list_papers() -> list[dict]:
     return [load_paper(pid).model_dump() for pid in list_paper_ids()]
 
 
+def save_paper(stock: PaperStock) -> PaperStock:
+    """Write/overwrite a user paper stock under jobs/paper/."""
+    USER_DIR.mkdir(parents=True, exist_ok=True)
+    path = USER_DIR / f"{stock.id}.json"
+    path.write_text(stock.model_dump_json(indent=2), encoding="utf-8")
+    return stock
+
+
+def delete_paper(paper_id: str) -> None:
+    """Delete a user paper. Presets are protected."""
+    preset = PRESET_DIR / f"{paper_id}.json"
+    user = USER_DIR / f"{paper_id}.json"
+    if preset.exists() and not user.exists():
+        raise PermissionError(f"Cannot delete preset paper: {paper_id}")
+    if not user.exists():
+        raise FileNotFoundError(f"Paper not found: {paper_id}")
+    user.unlink()
+
+
+def is_preset_paper(paper_id: str) -> bool:
+    return (PRESET_DIR / f"{paper_id}.json").exists()
+
+
 def resolve_paper_color(paper_id: str | None = None, paper_color_hex: str | None = None) -> tuple[str, str]:
     """Return (paper_id, color_hex)."""
     if paper_color_hex:

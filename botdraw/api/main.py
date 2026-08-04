@@ -224,6 +224,45 @@ def api_papers():
     return list_papers()
 
 
+class PaperSaveRequest(BaseModel):
+    id: str
+    name: str
+    color_hex: str = "#f7f1e8"
+    finish: str = "matte"
+    size_hint: Optional[str] = "A4"
+    notes: str = ""
+
+
+@app.post("/api/papers/save")
+def api_paper_save(body: PaperSaveRequest):
+    from botdraw.paper import PaperStock, save_paper
+
+    stock = save_paper(
+        PaperStock(
+            id=body.id,
+            name=body.name,
+            color_hex=body.color_hex,
+            finish=body.finish,
+            size_hint=body.size_hint,
+            notes=body.notes,
+        )
+    )
+    return stock.model_dump()
+
+
+@app.delete("/api/papers/{paper_id}")
+def api_paper_delete(paper_id: str):
+    from botdraw.paper import delete_paper
+
+    try:
+        delete_paper(paper_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    return {"ok": True, "id": paper_id}
+
+
 @app.get("/api/lines")
 def api_lines():
     from botdraw.lines import list_lines

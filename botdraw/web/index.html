@@ -21,7 +21,9 @@
       <button data-app="portraitbot">Portrait</button>
       <button data-app="lettersbot">Letters</button>
       <button data-app="rdlab">R&amp;D</button>
-      <button data-app="palettes">Palettes</button>
+      <button data-app="papers">Paper</button>
+      <button data-app="palettes">Pen Library</button>
+      <button data-app="lines">Line Library</button>
       <button data-app="tools">Tools</button>
     </nav>
   </header>
@@ -33,6 +35,19 @@
       <div class="stage-head">
         <h2 id="stage-title">Emulator</h2>
         <div class="stats" id="stats">Ready</div>
+      </div>
+      <div class="lab-compare" id="lab-compare" hidden>
+        <div class="portrait-pane">
+          <div class="pane-label">Source</div>
+          <canvas id="lab-src" width="360" height="480"></canvas>
+        </div>
+        <div class="portrait-pane">
+          <div class="pane-label">Ingest</div>
+          <canvas id="lab-ingest" width="360" height="480"></canvas>
+        </div>
+        <div class="portrait-pane lab-vector-pane">
+          <div class="pane-label">Vector</div>
+        </div>
       </div>
       <canvas id="emu" width="900" height="1200"></canvas>
       <div class="transport">

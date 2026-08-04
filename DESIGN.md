@@ -89,7 +89,7 @@ anti_patterns:
 | Left (~1/2) | Type rail + editor (layers, draft meta, palette, Vectorize) |
 | Right (~1/2) | Shared HiDPI EmulatorPlayer (zoom, pan, loupe) + downloads |
 
-Upcoming Operate tabs (not built yet): **Paper Library**, **Pen Library**. Paper color uses `GET /api/papers` presets.
+Operate library tabs: **Paper Library**, **Pen Library** (palette sets), **Line Library** (stroke ornament presets + SVG samples). Paper color uses `/api/papers`; pens via `/api/palettes`; lines via `/api/lines`.
 
 Paper stage canvas is write-optimized (`getContext("2d", { willReadFrequently: false })`). Pixel-read analysis (future image vectorize) must use a separate canvas with `willReadFrequently: true`.
 
