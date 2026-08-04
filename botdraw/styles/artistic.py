@@ -30,7 +30,8 @@ def _img(params: StyleParams, image_path, image_array):
     if image_array is not None:
         return image_array
     if image_path:
-        return load_image_array(image_path, int(limits["image_max"]))
+        mode = (params.extra or {}).get("image_mode") or (params.extra or {}).get("image_type")
+        return load_image_array(image_path, int(limits["image_max"]), mode=mode)
     return synthetic_portrait(int(limits["image_max"]))
 
 

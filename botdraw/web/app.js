@@ -1,14 +1,20 @@
 const player = new EmulatorPlayer(document.getElementById("emu"));
 const lettersPlayer = new EmulatorPlayer(document.getElementById("letters-emu"));
+const portraitPlayer = new EmulatorPlayer(document.getElementById("portrait-emu"));
 const statsEl = document.getElementById("stats");
 const lettersStatsEl = document.getElementById("letters-stats");
+const portraitStatsEl = document.getElementById("portrait-stats");
 const controls = document.getElementById("controls");
 const inspectorBody = document.getElementById("inspector-body");
 const downloadSvg = document.getElementById("download-svg");
 const labShell = document.getElementById("lab-shell");
 const lettersShell = document.getElementById("letters-shell");
+const portraitShell = document.getElementById("portrait-shell");
 player.onStats = (m) => { statsEl.textContent = m; };
 lettersPlayer.onStats = (m) => { if (lettersStatsEl) lettersStatsEl.textContent = m; };
+portraitPlayer.onStats = (m) => { if (portraitStatsEl) portraitStatsEl.textContent = m; };
+let portraitImageMode = "photo";
+let portraitFile = null;
 
 let currentApp = "genartbot";
 let inspTab = "layers";
@@ -201,12 +207,24 @@ document.getElementById("letters-play").onclick = () => lettersPlayer.play();
 document.getElementById("letters-pause").onclick = () => lettersPlayer.pause();
 document.getElementById("letters-skip").onclick = () => lettersPlayer.skipEnd();
 document.getElementById("letters-speed").oninput = (e) => lettersPlayer.setSpeed(e.target.value);
+document.getElementById("portrait-play").onclick = () => portraitPlayer.play();
+document.getElementById("portrait-pause").onclick = () => portraitPlayer.pause();
+document.getElementById("portrait-skip").onclick = () => portraitPlayer.skipEnd();
+document.getElementById("portrait-speed").oninput = (e) => portraitPlayer.setSpeed(e.target.value);
 
 function setShellForApp(app) {
   document.body.dataset.app = app;
   const letters = app === "lettersbot";
-  labShell.hidden = letters;
-  lettersShell.hidden = !letters;
+  const portrait = app === "portraitbot";
+  labShell.hidden = letters || portrait;
+  if (lettersShell) lettersShell.hidden = !letters;
+  if (portraitShell) portraitShell.hidden = !portrait;
+}
+
+function stagePlayer() {
+  if (currentApp === "lettersbot") return lettersPlayer;
+  if (currentApp === "portraitbot") return portraitPlayer;
+  return player;
 }
 
 document.querySelectorAll("#tabs button").forEach((btn) => {
@@ -286,12 +304,14 @@ function loadResult(data, opts = {}) {
     seed: data.job?.seed,
     density: data.job?.params?.density,
   };
-  player.load(lastPayload);
-  if (lastJob?.id) {
-    downloadSvg.hidden = false;
+  const pl = stagePlayer();
+  pl.load(lastPayload, { preserveVisibility: currentApp === "lettersbot" });
+  if (lastJob?.id && downloadSvg) {
+    downloadSvg.hidden = currentApp === "portraitbot" || currentApp === "lettersbot";
     downloadSvg.href = `/api/jobs/${lastJob.id}/svg`;
   }
-  setExportEnabled(true);
+  if (currentApp === "portraitbot") setPortraitDownloads(true, lastJob?.id);
+  if (currentApp !== "portraitbot" && currentApp !== "lettersbot") setExportEnabled(true);
   inspectorJson = {
     settings: lastSettings,
     layers: lastLayers,
@@ -299,8 +319,203 @@ function loadResult(data, opts = {}) {
     job: lastJob,
     draft: data.draft,
   };
-  renderInspector();
-  if (autoplay) player.play();
+  if (currentApp !== "portraitbot" && currentApp !== "lettersbot") renderInspector();
+  if (autoplay && currentApp !== "portraitbot" && currentApp !== "lettersbot") pl.play();
+  else pl.skipEnd();
+}
+
+function setPortraitDownloads(enabled, jobId) {
+  const svgBtn = document.getElementById("portrait-dl-svg");
+  const motionBtn = document.getElementById("portrait-dl-motion");
+  const packBtn = document.getElementById("portrait-dl-pack");
+  [svgBtn, motionBtn, packBtn].forEach((b) => { if (b) b.disabled = !enabled; });
+  if (!svgBtn) return;
+  svgBtn.onclick = () => {
+    if (!jobId) return;
+    const a = document.createElement("a");
+    a.href = `/api/jobs/${jobId}/svg`;
+    a.download = `botdraw-${jobId}-portrait.svg`;
+    a.click();
+  };
+  motionBtn.onclick = async () => {
+    if (!jobId) return;
+    downloadJson(`botdraw-${jobId}-motion.json`, await api(`/api/jobs/${jobId}/motion`));
+  };
+  packBtn.onclick = async () => {
+    if (!jobId) return;
+    downloadJson(`botdraw-${jobId}-pack.json`, await api(`/api/jobs/${jobId}/export`));
+  };
+}
+
+function drawPortraitSourcePreview(file) {
+  const canvas = document.getElementById("portrait-src");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true, alpha: true });
+  ctx.fillStyle = "#f4f4f5";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  if (!file) {
+    ctx.fillStyle = "#a3a3a3";
+    ctx.font = "12px sans-serif";
+    ctx.fillText("Synthetic / upload a photo", 16, 28);
+    return;
+  }
+  const url = URL.createObjectURL(file);
+  const img = new Image();
+  img.onload = () => {
+    const scale = Math.min(canvas.width / img.width, canvas.height / img.height);
+    const w = img.width * scale;
+    const h = img.height * scale;
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, (canvas.width - w) / 2, (canvas.height - h) / 2, w, h);
+    URL.revokeObjectURL(url);
+  };
+  img.src = url;
+}
+
+function portraitContentRoot() {
+  return document.getElementById("portrait-content");
+}
+
+function renderPortrait() {
+  setShellForApp("portraitbot");
+  const list = styles.filter((s) => s.category === "portrait");
+  if (!list.find((s) => s.id === selectedStyle)) selectedStyle = list[0]?.id || "portrait_linework";
+  if (!selectedPaletteId) selectedPaletteId = "default-6";
+  const root = portraitContentRoot();
+  if (!root) return;
+  const modes = [
+    ["photo", "Photo", "Many tones"],
+    ["sketch", "Sketch", "Grayscale"],
+    ["lineart", "Line art", "Edges"],
+    ["drawing", "Drawing", "Black / white"],
+  ];
+  root.innerHTML = `
+    <h3>Portrait</h3>
+    <p class="muted">Upload → image mode → style → vector preview.</p>
+    <h4>Image</h4>
+    <div class="portrait-drop ${portraitFile ? "has-file" : ""}" id="portrait-drop">
+      ${portraitFile ? portraitFile.name : "Drop a photo or choose a file"}
+      <div style="margin-top:0.45rem"><input id="portrait-photo" type="file" accept="image/*" /></div>
+    </div>
+    <h4>Image type</h4>
+    <div class="image-mode-grid" id="image-mode-grid">
+      ${modes.map(([id, title, sub]) =>
+        `<button type="button" data-mode="${id}" class="${portraitImageMode === id ? "active" : ""}">
+          <strong>${title}</strong><span>${sub}</span>
+        </button>`
+      ).join("")}
+    </div>
+    <h4>Portrait style</h4>
+    ${styleButtons(list)}
+    <h4>Render settings</h4>
+    <div class="grid-2">
+      ${field("Paper", `<select id="paper"><option>A4</option><option>Letter</option><option>A3</option><option>A5</option><option>Card</option></select>`)}
+      ${field("Quality", `<select id="quality"><option value="booth-fast">booth-fast</option><option value="booth-balanced">booth-balanced</option><option value="studio-hq">studio-hq</option></select>`)}
+    </div>
+    <div class="grid-2">
+      ${field("Seed", `<input id="seed" type="number" value="${state.seed}" />`)}
+      ${field("Density", `<input id="density" type="number" step="0.1" value="${state.density}" />`)}
+    </div>
+    <h4>Palette</h4>
+    ${field("Palette", paletteSelectHtml())}
+    ${penChipsHtml(currentPalette())}
+    <div class="row"><button class="primary" id="portrait-go">Vectorize</button></div>
+  `;
+
+  // Rebind style grid against portrait content root
+  root.querySelectorAll("[data-style]").forEach((btn) => {
+    btn.onclick = () => {
+      selectedStyle = btn.dataset.style;
+      renderPortrait();
+    };
+  });
+  root.querySelector("#paper").value = state.paper;
+  root.querySelector("#quality").value = state.quality;
+  root.querySelector("#palette").value = selectedPaletteId;
+  root.querySelector("#palette").onchange = () => {
+    selectedPaletteId = root.querySelector("#palette").value;
+    renderPortrait();
+  };
+  root.querySelectorAll("#image-mode-grid button").forEach((btn) => {
+    btn.onclick = () => {
+      portraitImageMode = btn.dataset.mode;
+      renderPortrait();
+    };
+  });
+  const fileInput = root.querySelector("#portrait-photo");
+  fileInput.onchange = () => {
+    portraitFile = fileInput.files?.[0] || null;
+    drawPortraitSourcePreview(portraitFile);
+    const drop = root.querySelector("#portrait-drop");
+    if (drop) {
+      drop.classList.toggle("has-file", !!portraitFile);
+      drop.childNodes[0].textContent = portraitFile ? portraitFile.name : "Drop a photo or choose a file";
+    }
+  };
+  drawPortraitSourcePreview(portraitFile);
+  setPortraitDownloads(!!lastJob?.id && lastJob?.app === "portraitbot", lastJob?.id);
+  root.querySelector("#portrait-go").onclick = () =>
+    renderPortraitJob().catch((e) => {
+      if (portraitStatsEl) portraitStatsEl.textContent = String(e);
+      console.error(e);
+    });
+}
+
+async function renderPortraitJob() {
+  const root = portraitContentRoot();
+  state.paper = root.querySelector("#paper")?.value || state.paper;
+  state.quality = root.querySelector("#quality")?.value || state.quality;
+  state.seed = Number(root.querySelector("#seed")?.value || state.seed);
+  state.density = Number(root.querySelector("#density")?.value || state.density);
+  selectedPaletteId = root.querySelector("#palette")?.value || selectedPaletteId;
+  if (portraitStatsEl) portraitStatsEl.textContent = "Vectorizing portrait…";
+  const t0 = performance.now();
+  const extra = { image_mode: portraitImageMode };
+  let data;
+  if (portraitFile) {
+    const fd = new FormData();
+    fd.append("style_id", selectedStyle);
+    fd.append("app_name", "portraitbot");
+    fd.append("palette_id", selectedPaletteId);
+    fd.append("quality", state.quality);
+    fd.append("paper", state.paper);
+    fd.append("seed", String(state.seed));
+    fd.append("density", String(state.density));
+    fd.append("pen_up_speed_mm_s", String(state.pen_up_speed_mm_s));
+    fd.append("pen_down_speed_mm_s", String(state.pen_down_speed_mm_s));
+    fd.append("params_extra", JSON.stringify(extra));
+    fd.append("file", portraitFile);
+    // params_extra may not be on Form API — also append flat field
+    fd.append("image_mode", portraitImageMode);
+    const res = await fetch("/api/render/upload", { method: "POST", body: fd });
+    if (!res.ok) throw new Error(await res.text());
+    data = await res.json();
+  } else {
+    data = await api("/api/render", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        app: "portraitbot",
+        style_id: selectedStyle,
+        palette_id: selectedPaletteId,
+        paper: state.paper,
+        quality: state.quality,
+        seed: state.seed,
+        density: state.density,
+        pen_up_speed_mm_s: state.pen_up_speed_mm_s,
+        pen_down_speed_mm_s: state.pen_down_speed_mm_s,
+        params_extra: extra,
+      }),
+    });
+  }
+  currentApp = "portraitbot";
+  loadResult(data, { autoplay: false });
+  const wall = ((performance.now() - t0) / 1000).toFixed(2);
+  if (portraitStatsEl) {
+    portraitStatsEl.textContent =
+      `Ready · ${selectedStyle} · ${portraitImageMode} · wall ${wall}s · passes ${data.layers?.pass_count ?? "?"}`;
+  }
 }
 
 function currentPalette() {
@@ -455,23 +670,6 @@ function renderGenArt() {
     renderWithSettings({ appName: "genartbot", busyText: "Rendering GenArt…" });
 }
 
-function renderPortrait() {
-  const list = styles.filter((s) => s.category === "portrait");
-  if (!list.find((s) => s.id === selectedStyle)) selectedStyle = list[0]?.id || "portrait_linework";
-  controls.innerHTML = `
-    <h3>PortraitBot · Dev</h3>
-    <p class="muted">Face/image → style engine → palette-quantized layers.</p>
-    <h4>Portrait style</h4>
-    ${styleButtons(list)}
-    ${commonDevOpts()}
-    <div class="row"><button class="primary" id="go">Capture &amp; Inspect</button></div>
-  `;
-  bindStyleGrid();
-  applyCommonDefaults();
-  controls.querySelector("#go").onclick = () =>
-    renderWithSettings({ appName: "portraitbot", busyText: "Rendering portrait…" });
-}
-
 function letterContentRoot() {
   return document.getElementById("letter-content");
 }
@@ -512,6 +710,10 @@ function setLettersDownloads(enabled, jobId) {
   };
 }
 
+const LETTER_PAPER_MM = {
+  A5: [148, 210], A4: [210, 297], Letter: [216, 279], A3: [297, 420], Card: [105, 148],
+};
+
 function updatePaperFrame() {
   const paper = document.getElementById("letters-paper")?.value || "A5";
   const orientation = document.getElementById("letters-orientation")?.value || "portrait";
@@ -520,13 +722,33 @@ function updatePaperFrame() {
   if (!frame) return;
   frame.dataset.orientation = orientation;
   frame.dataset.paper = paper;
+  let [pw, ph] = LETTER_PAPER_MM[paper] || LETTER_PAPER_MM.A5;
+  if (orientation === "landscape") [pw, ph] = [ph, pw];
+  const canvas = document.getElementById("letters-emu");
+  if (canvas) {
+    const maxW = 740;
+    const scale = maxW / pw;
+    const tw = Math.round(pw * scale);
+    const th = Math.round(ph * scale);
+    if (canvas.width !== tw || canvas.height !== th) {
+      canvas.width = tw;
+      canvas.height = th;
+      if (lastPayload) {
+        lettersPlayer.load(lastPayload, { preserveVisibility: true });
+        lettersPlayer.skipEnd();
+        syncLineHandles();
+      } else {
+        lettersPlayer.drawFrame();
+      }
+    }
+  }
   const limit = document.getElementById("print-limit");
-  // Scale mm → CSS inset for on-screen dashed print limits.
-  const scale = 0.55;
-  limit.style.top = `${12 + m.top * scale}px`;
-  limit.style.right = `${12 + m.right * scale}px`;
-  limit.style.bottom = `${12 + m.bottom * scale}px`;
-  limit.style.left = `${12 + m.left * scale}px`;
+  if (!limit) return;
+  const scaleCss = 0.55;
+  limit.style.top = `${12 + m.top * scaleCss}px`;
+  limit.style.right = `${12 + m.right * scaleCss}px`;
+  limit.style.bottom = `${12 + m.bottom * scaleCss}px`;
+  limit.style.left = `${12 + m.left * scaleCss}px`;
 }
 
 function scheduleLetterVectorize() {
@@ -753,11 +975,12 @@ function renderLetterLayerEditor() {
       layer.draw_mode = btn.dataset.mode;
       if (layer.draw_mode === "line") {
         layer.kind = layer.kind === "ink" ? "underline" : layer.kind;
-        if (!layer.snap.target_layer_id) {
-          const t = letterLayersState.find((l) => (l.draw_mode || "text") === "text");
-          layer.snap.target_layer_id = t?.id || null;
-          layer.snap.span_index = 0;
-        }
+        layer.placement = "snap";
+        const t = letterLayersState.find((l) => l.id !== layer.id && (l.draw_mode || "text") === "text")
+          || letterLayersState.find((l) => (l.draw_mode || "text") === "text");
+        layer.snap.target_layer_id = t?.id || null;
+        if (layer.snap.span_index == null) layer.snap.span_index = 0;
+        applySnapToLayer(layer);
       }
       renderLetterLayerEditor();
       scheduleLetterVectorize();
@@ -820,7 +1043,8 @@ function renderLetterLayerEditor() {
     lettersPlayer.soloPass(layer.id);
   });
   specs.querySelector("#letter-hide")?.addEventListener("click", () => {
-    lettersPlayer.setPassVisible(layer.id, false);
+    const hidden = lettersPlayer.hiddenPassIds.has(layer.id);
+    lettersPlayer.setPassVisible(layer.id, hidden);
   });
   syncLineHandles();
 }
@@ -861,7 +1085,7 @@ function letterEditorShellHtml() {
         <p class="muted">Font or line · pen · snap</p>
       </div>
       <div class="layer-actions">
-        <button type="button" id="letter-layer-add" title="Add layer">+</button>
+        <button type="button" id="letter-layer-add" title="Add text layer (Shift: line)">+</button>
         <button type="button" id="letter-layer-remove" title="Remove layer">−</button>
       </div>
     </div>
@@ -889,46 +1113,68 @@ function bindLayerChrome() {
   const addBtn = document.getElementById("letter-layer-add");
   const removeBtn = document.getElementById("letter-layer-remove");
   if (!addBtn || !removeBtn) return;
-  addBtn.onclick = () => {
+  addBtn.onclick = (ev) => {
     syncActiveLayerFromForm();
     const pal = currentPalette();
     const pens = pal?.pens || [];
     const nextPen = pens[letterLayersState.length % Math.max(1, pens.length)] || pens[0];
     const id = `layer-${Date.now().toString(36)}`;
-    const isHl = nextPen?.profile?.nib_type === "highlighter";
+    const addLine = !!ev.shiftKey || nextPen?.profile?.nib_type === "highlighter";
     const textTarget = letterLayersState.find((l) => (l.draw_mode || "text") === "text");
-    const asLine = true;
-    const layer = ensureLineFields({
-      id,
-      name: isHl ? "Highlight" : `Line ${letterLayersState.length}`,
-      body: letterLayersState[0]?.body || "HELLO",
-      font_name: "simplex",
-      size_mm: 4.5,
-      pen_id: nextPen?.id || "ink",
-      language: "en",
-      translate_from_en: false,
-      offset_x_mm: 0,
-      offset_y_mm: 0,
-      kind: isHl ? "highlight" : "underline",
-      tracking: 0.15,
-      humanize: 0.08,
-      highlight_words: ["forever", "heart", "love"],
-      draw_mode: "line",
-      leading_variation: 0.12,
-      line_angle_deg: 0,
-      placement: textTarget ? "snap" : "freehand",
-      snap: {
-        target_layer_id: textTarget?.id || null,
-        span_index: 0,
-        role: isHl ? "highlight" : "underline",
-      },
-      line: {
-        x0_mm: 20, y0_mm: 40, x1_mm: 120, y1_mm: 40,
-        style: "solid", dash_mm: 2, gap_mm: 1.2, width_mm: null,
-      },
-    });
-    applySnapToLayer(layer);
-    letterLayersState.push(layer);
+    if (addLine) {
+      const layer = ensureLineFields({
+        id,
+        name: nextPen?.profile?.nib_type === "highlighter" ? "Highlight" : `Line ${letterLayersState.length}`,
+        body: "",
+        font_name: "simplex",
+        size_mm: 4.5,
+        pen_id: nextPen?.id || "ink",
+        language: "en",
+        translate_from_en: false,
+        offset_x_mm: 0,
+        offset_y_mm: 0,
+        kind: nextPen?.profile?.nib_type === "highlighter" ? "highlight" : "underline",
+        tracking: 0.15,
+        humanize: 0.08,
+        highlight_words: [],
+        draw_mode: "line",
+        leading_variation: 0.12,
+        line_angle_deg: 0,
+        placement: textTarget ? "snap" : "freehand",
+        snap: {
+          target_layer_id: textTarget?.id || null,
+          span_index: 0,
+          role: nextPen?.profile?.nib_type === "highlighter" ? "highlight" : "underline",
+        },
+        line: {
+          x0_mm: 20, y0_mm: 40, x1_mm: 120, y1_mm: 40,
+          style: "solid", dash_mm: 2, gap_mm: 1.2, width_mm: null,
+        },
+      });
+      applySnapToLayer(layer);
+      letterLayersState.push(layer);
+    } else {
+      letterLayersState.push(ensureLineFields({
+        id,
+        name: `Ink ${letterLayersState.length + 1}`,
+        body: letterLayersState[0]?.body || "HELLO",
+        font_name: "simplex",
+        size_mm: 4.5,
+        pen_id: nextPen?.id || "ink",
+        language: "en",
+        translate_from_en: false,
+        offset_x_mm: 0,
+        offset_y_mm: 0,
+        kind: "ink",
+        tracking: 0.15,
+        humanize: 0.08,
+        highlight_words: [],
+        draw_mode: "text",
+        leading_variation: 0.12,
+        line_angle_deg: 0,
+        placement: "freehand",
+      }));
+    }
     letterLayerTab = id;
     renderLetterLayerEditor();
     scheduleLetterVectorize();
@@ -994,8 +1240,27 @@ async function vectorizeLetter(opts = {}) {
     ensureLineFields(L);
     Object.assign(L.line, meta.line);
   }
-  lettersPlayer.load(lastPayload);
+  lettersPlayer.load(lastPayload, { preserveVisibility: true });
   lettersPlayer.skipEnd();
+  // Refresh snap span options in-place (avoid full re-render / focus loss).
+  const specs = document.getElementById("letter-layer-specs");
+  const targetSel = specs?.querySelector("#layer-snap-target");
+  const spanSel = specs?.querySelector("#layer-snap-span");
+  if (targetSel && spanSel) {
+    const cur = spanSel.value;
+    spanSel.innerHTML = spanOptionsHtml(targetSel.value, cur === "" ? null : Number(cur));
+    if ([...spanSel.options].some((o) => o.value === cur)) spanSel.value = cur;
+  }
+  const layer = activeLetterLayer();
+  if (layer && (layer.draw_mode || "text") === "line" && layer.placement === "snap") {
+    applySnapToLayer(layer);
+    if (specs?.querySelector("#line-x0")) {
+      specs.querySelector("#line-x0").value = Number(layer.line.x0_mm).toFixed(2);
+      specs.querySelector("#line-y0").value = Number(layer.line.y0_mm).toFixed(2);
+      specs.querySelector("#line-x1").value = Number(layer.line.x1_mm).toFixed(2);
+      specs.querySelector("#line-y1").value = Number(layer.line.y1_mm).toFixed(2);
+    }
+  }
   syncLineHandles();
   const zl = document.getElementById("letters-zoom-label");
   if (zl) zl.textContent = `${lettersPlayer.zoom.toFixed(2)}×`;
@@ -1069,12 +1334,13 @@ async function renderLetters() {
     const zl = document.getElementById("letters-zoom-label");
     if (zl) zl.textContent = `${lettersPlayer.zoom.toFixed(2)}×`;
   };
+  lettersPlayer.onZoomChange = () => setZoomUi();
   const zin = document.getElementById("letters-zoom-in");
   const zout = document.getElementById("letters-zoom-out");
   const zfit = document.getElementById("letters-zoom-fit");
-  if (zin) zin.onclick = () => { lettersPlayer.zoomBy(1.15); setZoomUi(); };
-  if (zout) zout.onclick = () => { lettersPlayer.zoomBy(1 / 1.15); setZoomUi(); };
-  if (zfit) zfit.onclick = () => { lettersPlayer.fitZoom(); setZoomUi(); };
+  if (zin) zin.onclick = () => { lettersPlayer.zoomBy(1.15); };
+  if (zout) zout.onclick = () => { lettersPlayer.zoomBy(1 / 1.15); };
+  if (zfit) zfit.onclick = () => { lettersPlayer.fitZoom(); };
   setZoomUi();
   root.querySelector("#palette").value = selectedPaletteId;
   root.querySelector("#palette").onchange = () => {

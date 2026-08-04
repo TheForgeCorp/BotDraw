@@ -139,6 +139,48 @@
     </div>
   </main>
 
+  <main class="letters-lab portrait-lab" id="portrait-shell" hidden>
+    <header class="letters-top">
+      <div class="letters-identity">
+        <span class="letters-mark">Portrait</span>
+        <span class="letters-sub">Dev panel</span>
+      </div>
+      <div class="letters-stats" id="portrait-stats" aria-live="polite">Ready</div>
+    </header>
+
+    <div class="letters-grid portrait-grid">
+      <aside class="letters-left panel portrait-left">
+        <div class="letter-content" id="portrait-content"></div>
+      </aside>
+
+      <section class="letters-right panel portrait-right">
+        <div class="portrait-compare">
+          <div class="portrait-pane">
+            <div class="pane-label">Source</div>
+            <canvas id="portrait-src" width="480" height="640"></canvas>
+          </div>
+          <div class="portrait-pane">
+            <div class="pane-label">Vector</div>
+            <div class="paper-frame portrait-frame" id="portrait-frame">
+              <canvas id="portrait-emu" width="480" height="640"></canvas>
+            </div>
+          </div>
+        </div>
+        <div class="letters-transport">
+          <button type="button" id="portrait-play">Play</button>
+          <button type="button" id="portrait-pause">Pause</button>
+          <button type="button" id="portrait-skip">End</button>
+          <label class="speed-label">Speed <input id="portrait-speed" type="range" min="1" max="60" value="16" /></label>
+        </div>
+        <div class="letters-download">
+          <button type="button" class="primary" id="portrait-dl-svg" disabled>Download SVG</button>
+          <button type="button" id="portrait-dl-motion" disabled>Motion JSON</button>
+          <button type="button" id="portrait-dl-pack" disabled>Pack</button>
+        </div>
+      </section>
+    </div>
+  </main>
+
   <script src="/static/emulator.js"></script>
   <script src="/static/app.js"></script>
 </body>

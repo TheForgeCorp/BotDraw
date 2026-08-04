@@ -8,7 +8,11 @@ import numpy as np
 from PIL import Image
 
 
-def load_image_array(path: str | Path, max_side: int = 640) -> np.ndarray:
+def load_image_array(path: str | Path, max_side: int = 640, mode: str | None = None) -> np.ndarray:
+    if mode and mode.lower() != "photo":
+        from botdraw.portrait import preprocess_portrait_image
+
+        return preprocess_portrait_image(path, mode=mode, max_side=max_side)
     img = Image.open(path).convert("RGB")
     w, h = img.size
     scale = max_side / max(w, h)

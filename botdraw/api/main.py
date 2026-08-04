@@ -237,11 +237,21 @@ async def api_render_upload(
     density: float = Form(1.0),
     pen_up_speed_mm_s: float = Form(100.0),
     pen_down_speed_mm_s: float = Form(25.0),
+    image_mode: str = Form("photo"),
+    params_extra: Optional[str] = Form(None),
     file: UploadFile = File(...),
 ):
     from botdraw.core.jobs import artifact_dir
     from uuid import uuid4
 
+    extra: dict[str, Any] = {"image_mode": image_mode or "photo"}
+    if params_extra:
+        try:
+            parsed = json.loads(params_extra)
+            if isinstance(parsed, dict):
+                extra.update(parsed)
+        except json.JSONDecodeError:
+            pass
     tmp = artifact_dir(uuid4().hex[:8]) / (file.filename or "upload.png")
     tmp.write_bytes(await file.read())
     job, payload, layers = render_job(
@@ -253,6 +263,7 @@ async def api_render_upload(
         seed=seed,
         density=density,
         image_path=str(tmp),
+        params_extra=extra,
         pen_up_speed_mm_s=pen_up_speed_mm_s,
         pen_down_speed_mm_s=pen_down_speed_mm_s,
     )

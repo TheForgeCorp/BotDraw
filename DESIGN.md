@@ -91,6 +91,15 @@ anti_patterns:
 
 Paper stage canvas is write-optimized (`getContext("2d", { willReadFrequently: false })`). Pixel-read analysis (future image vectorize) must use a separate canvas with `willReadFrequently: true`.
 
+## Portrait Dev Panel IA
+
+| Region | Role |
+|--------|------|
+| Left (~2/3) | Upload, image type (photo/sketch/lineart/drawing), style, render settings |
+| Right (~1/3) | Source preview + vector emulator + hardware download |
+
+Source preview uses a readback-friendly canvas (`willReadFrequently: true`); vector emu stays write-optimized.
+
 ## Venue-facing (future)
 
 Reuse these tokens. Shift dials toward `VARIANCE 5 / MOTION 3 / DENSITY 3`, keep the same neutrals and type, let the paper stage lead the first viewport.

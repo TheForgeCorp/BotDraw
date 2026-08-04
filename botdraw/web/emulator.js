@@ -28,14 +28,24 @@ class EmulatorPlayer {
     this._bound = false;
   }
 
-  load(plan) {
+  load(plan, opts = {}) {
+    const preserve = !!opts.preserveVisibility;
+    const savedHiddenPass = preserve ? new Set(this.hiddenPassIds) : null;
+    const savedHiddenPen = preserve ? new Set(this.hiddenPenIds) : null;
+    const savedSolo = preserve ? this.soloPassId : null;
     this.plan = plan;
     this.index = 0;
     this.ink = [];
     this.playing = false;
-    this.hiddenPassIds.clear();
-    this.hiddenPenIds.clear();
-    this.soloPassId = null;
+    if (!preserve) {
+      this.hiddenPassIds.clear();
+      this.hiddenPenIds.clear();
+      this.soloPassId = null;
+    } else {
+      this.hiddenPassIds = savedHiddenPass;
+      this.hiddenPenIds = savedHiddenPen;
+      this.soloPassId = savedSolo;
+    }
     this.drawFrame();
     this._stats("Loaded");
   }
@@ -46,6 +56,7 @@ class EmulatorPlayer {
   setZoom(z) {
     this.zoom = Math.max(0.5, Math.min(3, Number(z) || 1));
     this.drawFrame();
+    if (this.onZoomChange) this.onZoomChange(this.zoom);
   }
 
   zoomBy(factor) {
