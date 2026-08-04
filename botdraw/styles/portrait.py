@@ -52,6 +52,7 @@ PORTRAIT_STYLES = [
     _PortraitRestyler("portrait_dots", "Dot Halftone Portrait", "Lighter stipple with linedraw edges"),
     _PortraitRestyler("portrait_cubism", "Cubism Portrait", "Region facets + linedraw edge structure"),
     _PortraitRestyler("portrait_hatch", "Hatch Portrait", "Linedraw ingest hatch (fallback: midtone adaptive)"),
+    _PortraitRestyler("portrait_scribble_tone", "Scribble Tone Portrait", "Intensity curves (ScribbleTrace-inspired) + edge underlay"),
     _PortraitRestyler("portrait_tsp", "TSP Single-line Portrait", "Stipple tour with linedraw edge underlay"),
 ]
 

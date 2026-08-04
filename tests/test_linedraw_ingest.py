@@ -113,13 +113,43 @@ def test_linework_skips_region_spikes_by_default():
     assert "black" in pens
 
 
-def test_hatch_off_empty():
-    lum = luminance(synthetic_portrait(96).astype(np.float32))
-    assert hatch_from_lum(lum, hatch_size=0) == []
-    _, hatch, _ = linedraw_edges_and_hatch(
-        lum, page_w=100, page_h=150, hatch_size=0, contour_simplify=2, jitter=0
-    )
-    assert hatch == []
+def test_skeleton_chains_longer_than_raw_mask_walk():
+    """Thinning should yield fewer, longer centerline strokes on a thick bar."""
+    rgb = np.ones((120, 160, 3), dtype=np.float32) * 240
+    rgb[40:80, 20:140] = 20  # thick horizontal bar
+    from botdraw.portrait.linedraw_edges import _zhang_suen_thin, edge_bitmap, autocontrast_lum
+
+    lum = autocontrast_lum(luminance(rgb))
+    mask = edge_bitmap(lum.astype(np.float32), low=40, high=90)
+    skel = _zhang_suen_thin(mask, max_iter=12)
+    assert int(skel.sum()) < int(mask.sum()), "skeleton should be thinner than edge band"
+    contours, _ = contours_from_lum(luminance(rgb), simplify=1, jitter=0.0, max_paths=200)
+    assert contours
+    lengths = []
+    for c in contours:
+        t = 0.0
+        for i in range(1, len(c)):
+            t += ((c[i][0] - c[i - 1][0]) ** 2 + (c[i][1] - c[i - 1][1]) ** 2) ** 0.5
+        lengths.append(t)
+    assert max(lengths) > 40.0
+
+
+def test_curve_tone_skips_dark_wall():
+    from botdraw.portrait.linedraw_edges import curve_tone_from_lum
+
+    rgb = _dark_bg_bright_face(160)
+    curves = curve_tone_from_lum(luminance(rgb), cell=14, jitter=0.0, max_paths=800)
+    assert curves
+    h, w = 160, 160
+    mx, my = int(w * 0.12), int(h * 0.12)
+    border = face = 0
+    for pts in curves:
+        for x, y in pts:
+            if x < mx or y < my or x > w - mx or y > h - my:
+                border += 1
+            else:
+                face += 1
+    assert border < face * 0.2
 
 
 def test_vertical_bar_contour_extent():

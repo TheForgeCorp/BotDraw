@@ -418,6 +418,45 @@ def restyle_tsp(pv: PortraitVector, palette, params: StyleParams) -> LayeredSVG:
     )
 
 
+def restyle_scribble_tone(pv: PortraitVector, palette, params: StyleParams, *, line_spacing_mm: float | None = None) -> LayeredSVG:
+    """ScribbleTrace-inspired intensity curves + linedraw edge underlay."""
+    from botdraw.portrait.linedraw_edges import curve_tone_from_lum, polylines_to_mm
+
+    limit = _budget(params)
+    arrays = pv.arrays()
+    lum = arrays["lum"]
+    cell = 16
+    if line_spacing_mm is not None:
+        cell = max(8, int(round(line_spacing_mm * 8)))
+    elif params.density:
+        cell = max(8, int(round(18 / max(0.5, float(params.density)))))
+    curves_px = curve_tone_from_lum(
+        lum.astype(np.float32),
+        cell=cell,
+        jitter=0.03,
+        seed=int(params.seed) + 7,
+        max_paths=max(200, limit - 80),
+    )
+    curves_mm = polylines_to_mm(
+        curves_px,
+        img_w=int(pv.width_px),
+        img_h=int(pv.height_px),
+        page_w=pv.page_w_mm,
+        page_h=pv.page_h_mm,
+    )
+    hatch_pen = _pen_for(pv, palette, "hatch") if "hatch" in pv.pen_map else _pen_for(pv, palette, "edge")
+    tone_polys = [Polyline(points=pts, pen_id=hatch_pen.id) for pts in curves_mm if len(pts) >= 2]
+    edges = _edge_polys(pv, palette, limit=max(60, limit // 6))
+    buckets = _bucketize(edges + tone_polys[: max(0, limit - len(edges))])
+    return LayeredSVG(
+        width_mm=pv.page_w_mm,
+        height_mm=pv.page_h_mm,
+        passes=_passes_from_buckets("scribble", "Scribble tone", buckets),
+        seed=params.seed,
+        meta={"style": "portrait_scribble_tone", "quality": params.quality.value, "vector_source": "curve_tone+edges"},
+    )
+
+
 RESTYLERS = {
     "portrait_linework": restyle_linework,
     "portrait_hatch": restyle_hatch,
@@ -428,6 +467,7 @@ RESTYLERS = {
     "portrait_cubism": restyle_regions_mosaic,
     "portrait_pen": restyle_pen_sketch,
     "portrait_tsp": restyle_tsp,
+    "portrait_scribble_tone": restyle_scribble_tone,
 }
 
 
@@ -448,6 +488,7 @@ def render_from_vector(
         "portrait_color_shade",
         "portrait_squiggle",
         "portrait_pen",
+        "portrait_scribble_tone",
     ):
         kwargs["line_spacing_mm"] = line_spacing_mm
     layered = fn(pv, palette, params, **kwargs)

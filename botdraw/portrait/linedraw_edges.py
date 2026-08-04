@@ -208,6 +208,110 @@ def _trace_edge_chains(mask: np.ndarray, *, min_len: int = 6) -> list[list[tuple
     return chains
 
 
+
+def _zhang_suen_thin(mask: np.ndarray, *, max_iter: int = 20) -> np.ndarray:
+    """
+    Zhang–Suen skeletonization (centerline) on a bool mask — vectorized.
+
+    Produces 1px-wide ridges so chain walks follow stroke centers instead of
+    thick jittery edge bands — kdraw/VectorLine idea, numpy-only.
+    """
+    img = (mask.astype(np.uint8) > 0).astype(np.uint8)
+    if int(img.sum()) == 0:
+        return mask
+
+    def neighbors(a: np.ndarray):
+        # p2..p9 clockwise from north
+        p2 = a[:-2, 1:-1]
+        p3 = a[:-2, 2:]
+        p4 = a[1:-1, 2:]
+        p5 = a[2:, 2:]
+        p6 = a[2:, 1:-1]
+        p7 = a[2:, :-2]
+        p8 = a[1:-1, :-2]
+        p9 = a[:-2, :-2]
+        return p2, p3, p4, p5, p6, p7, p8, p9
+
+    changed = True
+    it = 0
+    while changed and it < max_iter:
+        changed = False
+        it += 1
+        for step in (0, 1):
+            p2, p3, p4, p5, p6, p7, p8, p9 = neighbors(img)
+            core = img[1:-1, 1:-1]
+            b = p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9
+            # transitions 0->1
+            seq = [p2, p3, p4, p5, p6, p7, p8, p9, p2]
+            a = np.zeros_like(core, dtype=np.uint8)
+            for i in range(8):
+                a += ((seq[i] == 0) & (seq[i + 1] == 1)).astype(np.uint8)
+            cond = (core == 1) & (b >= 2) & (b <= 6) & (a == 1)
+            if step == 0:
+                cond &= (p2 * p4 * p6 == 0) & (p4 * p6 * p8 == 0)
+            else:
+                cond &= (p2 * p4 * p8 == 0) & (p2 * p6 * p8 == 0)
+            if cond.any():
+                changed = True
+                core[cond] = 0
+    return img.astype(bool)
+
+
+def _spur_prune(mask: np.ndarray, *, min_spur: int = 6) -> np.ndarray:
+    """Remove short dangling skeleton branches (spurs)."""
+    m = mask.copy()
+    neighbors = ((-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1))
+    h, w = m.shape
+    ys, xs = np.where(m)
+    tips = []
+    for x, y in zip(xs.tolist(), ys.tolist()):
+        deg = 0
+        for dx, dy in neighbors:
+            nx, ny = x + dx, y + dy
+            if 0 <= nx < w and 0 <= ny < h and m[ny, nx]:
+                deg += 1
+        if deg == 1:
+            tips.append((x, y))
+    for x0, y0 in tips:
+        path = [(x0, y0)]
+        x, y = x0, y0
+        prev = None
+        while True:
+            nxt = None
+            for dx, dy in neighbors:
+                nx, ny = x + dx, y + dy
+                if not (0 <= nx < w and 0 <= ny < h and m[ny, nx]):
+                    continue
+                if prev is not None and (nx, ny) == prev:
+                    continue
+                nxt = (nx, ny)
+                break
+            if nxt is None:
+                break
+            # Stop at junctions
+            deg = 0
+            for dx, dy in neighbors:
+                ax, ay = nxt[0] + dx, nxt[1] + dy
+                if 0 <= ax < w and 0 <= ay < h and m[ay, ax]:
+                    deg += 1
+            path.append(nxt)
+            if deg != 2:
+                break
+            prev, x, y = (x, y), nxt[0], nxt[1]
+            if len(path) > min_spur + 2:
+                break
+        if len(path) <= min_spur:
+            for x, y in path:
+                deg = sum(
+                    1
+                    for dx, dy in neighbors
+                    if 0 <= x + dx < w and 0 <= y + dy < h and m[y + dy, x + dx]
+                )
+                if deg <= 2:
+                    m[y, x] = False
+    return m
+
+
 def _getdots(mask: np.ndarray) -> list[list[tuple[int, int]]]:
     h, w = mask.shape
     dots: list[list[tuple[int, int]]] = []
@@ -381,8 +485,45 @@ def contours_from_lum(
         dtype=np.float32,
     )
 
+    # Centerline: thin at capped working res for speed, then upscale
+    th_max = 420
+    th_sc = max(1, int(math.ceil(max(w_s, h_s) / th_max)))
+    if th_sc > 1:
+        tw, th = max(8, w_s // th_sc), max(8, h_s // th_sc)
+        mask_s = np.asarray(
+            Image.fromarray((mask.astype(np.uint8) * 255), mode="L").resize(
+                (tw, th), Image.Resampling.NEAREST
+            ),
+            dtype=np.uint8,
+        ) > 127
+        face_s = np.asarray(
+            Image.fromarray((mask_face.astype(np.uint8) * 255), mode="L").resize(
+                (tw, th), Image.Resampling.NEAREST
+            ),
+            dtype=np.uint8,
+        ) > 127
+    else:
+        mask_s, face_s = mask, mask_face
+    skel_s = _zhang_suen_thin(mask_s, max_iter=14 if strength <= 2 else 10)
+    skel_s = _spur_prune(skel_s, min_spur=6 if strength <= 1 else 5)
+    if th_sc > 1:
+        skel = np.asarray(
+            Image.fromarray((skel_s.astype(np.uint8) * 255), mode="L").resize(
+                (w_s, h_s), Image.Resampling.NEAREST
+            ),
+            dtype=np.uint8,
+        ) > 127
+    else:
+        skel = skel_s
+    from numpy.lib.stride_tricks import sliding_window_view as _swv
+
+    skel_pad = np.pad(skel.astype(np.uint8), 1, mode="constant")
+    skel_dil = _swv(skel_pad, (3, 3)).max(axis=(2, 3)).astype(bool)
+    # Skeleton chains + residual face features not covered by skeleton
+    trace_mask = skel | (mask_face & ~skel_dil)
+
     min_len = 16 if strength <= 1 else (14 if strength == 2 else 10)
-    contours = _trace_edge_chains(mask, min_len=min_len)
+    contours = _trace_edge_chains(trace_mask, min_len=min_len)
 
     # Dual-axis silhouette only (long strokes) — avoids hair noise piles
     dots1 = _getdots(mask_hi)
@@ -562,6 +703,66 @@ def hatch_from_lum(
             out.append(pts)
     return out[:max_paths]
 
+
+def curve_tone_from_lum(
+    lum: np.ndarray,
+    *,
+    cell: int = 14,
+    jitter: float = 0.04,
+    seed: int = 2,
+    max_paths: int = 3000,
+) -> list[list[tuple[float, float]]]:
+    """
+    ScribbleTrace-inspired intensity curves: denser wavy strokes in darker midtones.
+
+    Skips flat dark walls via the same midtone mask as hatch. Output is px-space
+    polylines suitable for polylines_to_mm.
+    """
+    sc = max(6, int(cell))
+    h0, w0 = lum.shape
+    w_s = max(4, w0 // sc)
+    h_s = max(4, int(round(h0 * (w_s / w0))))
+    small = np.asarray(
+        Image.fromarray(np.clip(lum, 0, 255).astype(np.uint8), mode="L").resize(
+            (w_s, h_s), Image.Resampling.LANCZOS
+        ),
+        dtype=np.uint8,
+    )
+    small = autocontrast_lum(small.astype(np.float32), cutoff=6.0)
+    allow = _midtone_hatch_mask(small)
+    vals = small.astype(np.float32)
+    hs = float(sc)
+    table = _make_perlin_table(seed)
+    out: list[list[tuple[float, float]]] = []
+    for y0 in range(h_s):
+        for x0 in range(w_s):
+            if not allow[y0, x0]:
+                continue
+            v = float(vals[y0, x0])
+            # Darker → more / taller waves
+            ink = 1.0 - (v / 255.0)
+            if ink < 0.12:
+                continue
+            n_seg = 1 if ink < 0.35 else (2 if ink < 0.55 else 3)
+            amp = hs * (0.12 + 0.35 * ink)
+            period = max(3, int(6 - 3 * ink))
+            x_base = x0 * hs
+            y_base = y0 * hs + hs * 0.5
+            for s in range(n_seg):
+                pts: list[tuple[float, float]] = []
+                y_off = (s - (n_seg - 1) / 2.0) * hs * 0.22
+                for k in range(period + 1):
+                    t = k / period
+                    x = x_base + t * hs
+                    wave = amp * math.sin(t * math.pi * (1.5 + ink))
+                    jx = hs * jitter * (_perlin_noise(table, x0 * 0.2, y0 * 0.2 + s, k * 0.3) - 0.5)
+                    jy = hs * jitter * (_perlin_noise(table, x0 * 0.2, y0 * 0.2 + s, k * 0.3 + 3) - 0.5)
+                    pts.append((x + jx, y_base + y_off + wave + jy))
+                if len(pts) >= 2:
+                    out.append(pts)
+                if len(out) >= max_paths:
+                    return out
+    return out[:max_paths]
 
 
 def polylines_to_mm(
