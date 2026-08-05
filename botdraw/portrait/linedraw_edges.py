@@ -1269,23 +1269,203 @@ def equalize_parallel_gaps(
     return out, added
 
 
+def stitch_colinear_horizontals(
+    contours: list[list[tuple[float, float]]],
+    *,
+    y_slack: float = 3.5,
+    gap_max: float = 22.0,
+    min_seg: float = 8.0,
+) -> tuple[list[list[tuple[float, float]]], int]:
+    """
+    Merge short colinear horizontal fragments into continuous strokes.
+
+    Classic Sobel often splits interior decorative lines into gaps; stitching
+    restores a readable H stroke without inventing new geometry off-row.
+    Clusters by y-band, then unions intervals that overlap or gap ≤ gap_max
+    (so a distant stroke in the same band cannot block a local merge).
+    """
+    horiz: list[tuple[float, float, float]] = []
+    other: list[list[tuple[float, float]]] = []
+    for c in contours:
+        if len(c) < 2:
+            continue
+        _, _, minx, maxx, miny, maxy = _polyline_xy_ends(c)
+        width = maxx - minx
+        height = maxy - miny
+        if width >= min_seg and height <= max(6.0, 0.4 * width):
+            ymid = 0.5 * (miny + maxy)
+            horiz.append((ymid, minx, maxx))
+        else:
+            other.append(list(c))
+
+    if len(horiz) < 2:
+        return list(contours), 0
+
+    # Group into y-bands
+    horiz.sort(key=lambda t: t[0])
+    bands: list[list[tuple[float, float, float]]] = []
+    for seg in horiz:
+        if not bands or abs(seg[0] - bands[-1][0][0]) > y_slack:
+            bands.append([seg])
+        else:
+            bands[-1].append(seg)
+
+    merged: list[list[tuple[float, float]]] = []
+    stitches = 0
+    for band in bands:
+        intervals = sorted((a, b) for _, a, b in band)
+        y = sum(s[0] for s in band) / len(band)
+        cur_a, cur_b = intervals[0]
+        for a, b in intervals[1:]:
+            gap = a - cur_b
+            if gap <= gap_max:
+                cur_b = max(cur_b, b)
+                stitches += 1
+            else:
+                merged.append([(float(cur_a), float(y)), (float(cur_b), float(y))])
+                cur_a, cur_b = a, b
+        merged.append([(float(cur_a), float(y)), (float(cur_b), float(y))])
+
+    return other + merged, stitches
+
+
+def recover_interior_dark_strokes(
+    lum: np.ndarray,
+    contours: list[list[tuple[float, float]]],
+    *,
+    max_added: int = 12,
+    min_run: int = 12,
+    max_run_frac: float = 0.72,
+    contrast: float = 28.0,
+) -> tuple[list[list[tuple[float, float]]], int]:
+    """
+    Recover short high-contrast interior horizontal ink (e.g. mug body accent).
+
+    Classic Sobel often drops decorative H strokes. Studio posterize + luma prep
+    can darken a whole body band so absolute thresholds miss the accent; we
+    detect vertical *valleys* (darker than rows above and below), score them,
+    and keep the strongest interior candidates — not just the first N from top.
+    """
+    u8 = np.asarray(lum, dtype=np.float32)
+    h, w = u8.shape
+    if h < 8 or w < 16:
+        return list(contours), 0
+
+    max_run = max(min_run + 2, int(w * max_run_frac))
+    out: list[list[tuple[float, float]]] = [list(c) for c in contours if len(c) > 1]
+
+    def covered(x0: float, x1: float, y: float) -> bool:
+        for c in out:
+            if len(c) < 2:
+                continue
+            _, _, cx0, cx1, cy0, cy1 = _polyline_xy_ends(c)
+            if abs(0.5 * (cy0 + cy1) - y) > 4.0:
+                continue
+            overlap = min(cx1, x1) - max(cx0, x0)
+            if overlap >= 0.65 * (x1 - x0):
+                return True
+        return False
+
+    # Absolute-dark OR relative valley vs vertical neighbors (studio-prep safe)
+    abs_dark = u8 < 75.0
+    candidates: list[tuple[float, float, float, float]] = []  # score, y, x0, x1
+
+    for y in range(4, h - 4, 1):
+        above_row = u8[y - 3 : y].mean(axis=0)
+        below_row = u8[y + 1 : y + 4].mean(axis=0)
+        mid_row = u8[y]
+        # Valley pixel: darker than both sides, with usable contrast on at least one
+        d_above = above_row - mid_row
+        d_below = below_row - mid_row
+        valley = (d_above >= contrast * 0.55) & (d_below >= contrast * 0.55)
+        valley |= abs_dark[y] & ((d_above >= contrast) | (d_below >= contrast))
+        row = valley
+        x = 0
+        while x < w:
+            if not row[x]:
+                x += 1
+                continue
+            x0 = x
+            while x < w and row[x]:
+                x += 1
+            x1 = x - 1
+            run = x1 - x0 + 1
+            if run < min_run:
+                continue
+            # Interior margin from image sides
+            if x0 < 4 or x1 > w - 5:
+                continue
+            # Over-long runs: shrink to the darkest contiguous window ≤ max_run
+            if run > max_run:
+                seg = mid_row[x0 : x1 + 1]
+                win = max_run
+                # Prefer the darkest mean window inside the run
+                csum = np.cumsum(np.concatenate([[0.0], seg.astype(np.float64)]))
+                best_i, best_m = 0, float("inf")
+                for i in range(0, run - win + 1):
+                    m = (csum[i + win] - csum[i]) / win
+                    if m < best_m:
+                        best_m = m
+                        best_i = i
+                x0 = x0 + best_i
+                x1 = x0 + win - 1
+                run = win
+
+            mid = float(mid_row[x0 : x1 + 1].mean())
+            above = float(above_row[x0 : x1 + 1].mean())
+            below = float(below_row[x0 : x1 + 1].mean())
+            if mid > 90.0:
+                continue
+            side = min(above - mid, below - mid)
+            if side < contrast * 0.55:
+                continue
+            # Skip strokes floating on paper (no body)
+            if above > 235 and below > 235:
+                continue
+            if covered(float(x0), float(x1), float(y)):
+                continue
+            # Score: vertical contrast × span; slight bias toward mid/lower body
+            y_bias = 1.0 + 0.35 * (y / max(1, h - 1))
+            score = side * (0.35 + min(1.0, run / float(max_run))) * y_bias
+            candidates.append((score, float(y), float(x0), float(x1)))
+
+    candidates.sort(key=lambda t: t[0], reverse=True)
+    added = 0
+    for _score, y, x0, x1 in candidates:
+        if added >= max_added:
+            break
+        if covered(x0, x1, y):
+            continue
+        out.append([(x0, y), (x1, y)])
+        added += 1
+
+    return out, added
+
+
 def refine_edge_polylines(
     contours: list[list[tuple[float, float]]],
     lum: np.ndarray,
     *,
     max_paths: int,
 ) -> list[list[tuple[float, float]]]:
-    """Island kill + arc splice + parallel-H equalize + face-weighted budget."""
+    """Island kill + arc splice + equalize + interior H recover + face budget."""
     face = face_roi_mask(lum)
-    cleaned = prune_edge_islands(contours, face)
+    # Keep short interior H strokes (decorative ink) that island-kill would drop
+    cleaned = prune_edge_islands(contours, face, inside_min_len=10.0)
     cleaned = repair_arc_gaps(cleaned, lum, face)
     cleaned, n_eq = equalize_parallel_gaps(cleaned, face)
+    cleaned, n_stitch1 = stitch_colinear_horizontals(cleaned)
+    cleaned, n_rec = recover_interior_dark_strokes(lum, cleaned)
+    # Stitch again so recovered accent fragments become one readable stroke
+    cleaned, n_stitch2 = stitch_colinear_horizontals(cleaned, gap_max=28.0)
     refine_edge_polylines.last_equalize_added = n_eq  # type: ignore[attr-defined]
+    refine_edge_polylines.last_interior_recovered = n_rec + n_stitch1 + n_stitch2  # type: ignore[attr-defined]
     cleaned = _merge_bidirectional(cleaned, dist_thresh=8.0)
     return allocate_face_budget(cleaned, face, max_paths)
 
 
 refine_edge_polylines.last_equalize_added = 0  # type: ignore[attr-defined]
+refine_edge_polylines.last_interior_recovered = 0  # type: ignore[attr-defined]
 
 
 def linedraw_edges_and_hatch(

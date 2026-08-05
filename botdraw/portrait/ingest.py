@@ -998,6 +998,9 @@ def ingest_portrait(
             "edge_prep": "prepare_luma_for_edges",
             "edge_equalize": {
                 "added": int(getattr(refine_edge_polylines, "last_equalize_added", 0) or 0),
+                "interior_recovered": int(
+                    getattr(refine_edge_polylines, "last_interior_recovered", 0) or 0
+                ),
             },
             "mesh": {
                 "cell_px": float(tone_pack.get("mesh_cell_px") or tone_pack["tone_cell_px"]),
