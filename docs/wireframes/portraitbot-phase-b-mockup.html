@@ -79,9 +79,119 @@
     }
     @media (max-width: 900px) {
       .devlab { grid-template-columns: 1fr; height: auto; }
-      .rail { max-height: 42vh; border-right: 0; border-bottom: 1px solid var(--line); }
+      .rail { max-height: 36vh; border-right: 0; border-bottom: 1px solid var(--line); }
       .stage { min-height: 58vh; }
     }
+
+    /* Calculation window */
+    .desk-wrap {
+      flex: 1; display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
+      min-height: 0; gap: 0;
+    }
+    @media (max-width: 1100px) {
+      .desk-wrap { grid-template-columns: 1fr; grid-template-rows: minmax(280px, 1fr) minmax(200px, 38%); }
+    }
+    .calc {
+      border-left: 1px solid var(--line);
+      background: var(--panel);
+      display: flex; flex-direction: column;
+      min-height: 0; overflow: hidden;
+    }
+    @media (max-width: 1100px) {
+      .calc { border-left: 0; border-top: 1px solid var(--line); }
+    }
+    .calc-head {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 0.5rem; padding: 0.55rem 0.75rem;
+      border-bottom: 1px solid var(--line); background: var(--soft);
+      flex-shrink: 0;
+    }
+    .calc-head h4 {
+      margin: 0; font-size: 0.75rem; font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+    .calc-head .live {
+      font-family: var(--font-mono); font-size: 0.625rem;
+      color: var(--success); display: flex; align-items: center; gap: 0.3rem;
+    }
+    .calc-head .live::before {
+      content: ""; width: 6px; height: 6px; border-radius: 50%;
+      background: var(--success); display: inline-block;
+    }
+    .calc-body {
+      flex: 1; overflow: auto; padding: 0.55rem 0.75rem 0.85rem;
+      font-family: var(--font-mono); font-size: 0.6875rem; line-height: 1.45;
+    }
+    .calc-sec { margin: 0 0 0.75rem; }
+    .calc-sec:last-child { margin-bottom: 0; }
+    .calc-sec .lab {
+      font-family: var(--font-ui); font-size: 0.625rem; font-weight: 600;
+      letter-spacing: 0.04em; text-transform: uppercase; color: var(--faint);
+      margin: 0 0 0.3rem;
+    }
+    .kv { display: grid; grid-template-columns: 1fr auto; gap: 0.15rem 0.75rem; }
+    .kv span:nth-child(odd) { color: var(--muted); }
+    .kv span:nth-child(even) { color: var(--ink); text-align: right; }
+    .kv .warn { color: var(--warning); }
+    .kv .ok { color: var(--success); }
+    .bars { display: flex; flex-direction: column; gap: 0.25rem; }
+    .bar-row { display: grid; grid-template-columns: 28px 1fr 36px; gap: 0.35rem; align-items: center; }
+    .bar-row .t { color: var(--muted); }
+    .bar-row .n { text-align: right; color: var(--ink); }
+    .bar {
+      height: 6px; background: var(--soft); border-radius: 3px; overflow: hidden;
+    }
+    .bar i {
+      display: block; height: 100%; background: var(--tone); border-radius: 3px;
+    }
+    .bar i.c0 { background: #d2d2d7; }
+    .bar i.c1 { background: #f5d76e; }
+    .bar i.c2 { background: #f0a202; }
+    .bar i.c3 { background: #e85d04; }
+    .bar i.c4 { background: #9b2226; }
+    .bar i.c5 { background: #0a7a6a; }
+    .pipe {
+      list-style: none; margin: 0; padding: 0;
+    }
+    .pipe li {
+      position: relative; padding: 0.35rem 0 0.35rem 0.85rem;
+      border-left: 2px solid var(--line); margin-left: 0.35rem;
+    }
+    .pipe li::before {
+      content: ""; position: absolute; left: -5px; top: 0.55rem;
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--panel); border: 2px solid var(--line);
+    }
+    .pipe li.done { border-left-color: var(--success); }
+    .pipe li.done::before { border-color: var(--success); background: var(--success); }
+    .pipe li.active { border-left-color: var(--focus); }
+    .pipe li.active::before { border-color: var(--focus); background: var(--focus); }
+    .pipe .step { font-family: var(--font-ui); font-size: 0.6875rem; font-weight: 600; color: var(--ink); }
+    .pipe .detail { color: var(--muted); display: block; margin-top: 0.1rem; }
+    .assess {
+      border: 1px solid var(--line); border-radius: 8px;
+      padding: 0.45rem 0.5rem; background: var(--soft);
+    }
+    .assess .row {
+      display: flex; justify-content: space-between; gap: 0.5rem;
+      padding: 0.2rem 0; border-bottom: 1px solid var(--line);
+      font-family: var(--font-ui); font-size: 0.6875rem;
+    }
+    .assess .row:last-child { border-bottom: 0; }
+    .badge {
+      font-family: var(--font-mono); font-size: 0.625rem;
+      padding: 0.1rem 0.35rem; border-radius: 4px;
+    }
+    .badge.pass { background: #e5f5ea; color: var(--success); }
+    .badge.fail { background: #fff0e8; color: var(--warning); }
+    .badge.skip { background: var(--panel); color: var(--faint); border: 1px solid var(--line); }
+    .calc-note {
+      font-family: var(--font-ui); font-size: 0.6875rem; color: var(--muted);
+      margin: 0.35rem 0 0; line-height: 1.35;
+    }
+    .view-source .calc { opacity: 0.72; }
+    .desk { padding-bottom: 4.5rem; }
 
     .rail {
       display: flex; flex-direction: column;
@@ -391,6 +501,7 @@
         <div class="stats" id="stats">edges 842 · hatch 0 · classic · edges · booth-balanced</div>
       </div>
 
+      <div class="desk-wrap">
       <div class="desk">
         <div class="paper" id="paper" aria-label="Paper preview">
           <div class="paper-empty" id="empty-cue" hidden>Drop a photo</div>
@@ -460,6 +571,38 @@
         </div>
       </div>
 
+      <aside class="calc" id="calc" aria-label="Calculation window">
+        <div class="calc-head">
+          <h4>Calculation window</h4>
+          <span class="live" id="calc-live">live</span>
+        </div>
+        <div class="calc-body" id="calc-body">
+          <div class="calc-sec">
+            <div class="lab">Pipeline</div>
+            <ol class="pipe" id="calc-pipe"></ol>
+          </div>
+          <div class="calc-sec">
+            <div class="lab">Structure</div>
+            <div class="kv" id="calc-struct"></div>
+          </div>
+          <div class="calc-sec">
+            <div class="lab">ShadeField mesh</div>
+            <div class="kv" id="calc-mesh"></div>
+            <div class="bars" id="calc-hist" style="margin-top:0.45rem;"></div>
+            <p class="calc-note">Codes 1–4 → hatch pitch; code 5 = structure-only (no hatch).</p>
+          </div>
+          <div class="calc-sec">
+            <div class="lab">Pitch map (mm)</div>
+            <div class="kv" id="calc-pitch"></div>
+          </div>
+          <div class="calc-sec">
+            <div class="lab">Model assessment</div>
+            <div class="assess" id="calc-assess"></div>
+          </div>
+        </div>
+      </aside>
+      </div>
+
       <div class="ingest-toggles" id="ingest-toggles">
         <label>Underlay
           <select id="underlay">
@@ -504,19 +647,131 @@
     const underlay = document.getElementById("underlay");
     const simplify = document.getElementById("simplify");
     const srcPhotos = document.querySelectorAll(".src-photo");
+    const calcLive = document.getElementById("calc-live");
+
+    const PITCH = { 1: 1.7, 2: 1.15, 3: 0.8, 4: 0.55 };
+    const BUDGET = { "booth-fast": 800, "booth-balanced": 2500, "studio-hq": 8000 };
+    const CELL = { "booth-fast": 8, "booth-balanced": 6, "studio-hq": 5 };
+    const SCAN_KNOBS = {
+      auto: { edge_low: 48, edge_high: 110, prefer_silhouette: false, prefer_skeleton: false, soft_face_edges: true },
+      edges: { edge_low: 36, edge_high: 85, prefer_silhouette: false, prefer_skeleton: true, soft_face_edges: true },
+      brightness: { edge_low: 70, edge_high: 140, prefer_silhouette: true, prefer_skeleton: false, soft_face_edges: false },
+      centerline: { edge_low: 40, edge_high: 95, prefer_silhouette: false, prefer_skeleton: true, soft_face_edges: false },
+      color_bands: { edge_low: 55, edge_high: 120, prefer_silhouette: true, prefer_skeleton: false, soft_face_edges: false, region_boost: true },
+    };
 
     let hasPhoto = true;
     let ingested = true;
     let seg = "ingest";
 
-    function updateStats() {
-      const hatchOn = showTone.checked;
+    function mockModel() {
+      const q = document.getElementById("quality").value;
       const ls = document.getElementById("line-source").value;
       const sm = document.getElementById("scan-mode").value;
-      const q = document.getElementById("quality").value;
+      const simp = Number(simplify.value);
+      const toneOn = showTone.checked;
+      const knobs = SCAN_KNOBS[sm] || SCAN_KNOBS.auto;
+      const cellPx = CELL[q];
+      const budget = BUDGET[q];
+      // Deterministic mock numbers from knobs
+      const edgeBase = ls === "neural" ? 720 : 842;
+      const edgeCount = Math.round(edgeBase * (1.15 - simp * 0.08) * (sm === "brightness" ? 0.82 : 1));
+      const pathLen = Math.round(edgeCount * 18.4);
+      const penUp = Math.round(pathLen * 0.31);
+      const hist = toneOn
+        ? { 0: 1820, 1: 410, 2: 288, 3: 194, 4: 96, 5: 142 }
+        : { 0: 2140, 1: 0, 2: 0, 3: 0, 4: 0, 5: 142 };
+      const hatchCount = toneOn ? 310 : 0;
+      const shadeCells = hist[1] + hist[2] + hist[3] + hist[4];
+      const meanInk = toneOn ? 0.34 : 0.0;
+      const continuity = Math.min(0.98, 0.72 + (ls === "neural" ? 0.12 : 0) + (sm === "edges" ? 0.08 : 0));
+      const noiseScore = Math.max(0.05, 0.22 - simp * 0.04 + (sm === "brightness" ? 0.06 : 0));
+      const budgetOk = edgeCount + hatchCount <= budget;
+      const identityOk = edgeCount >= 400 && continuity >= 0.78;
+      const noiseOk = noiseScore <= 0.18;
+      const cropOk = true;
+      const classicOk = ls === "classic" || ls === "auto";
+
+      return {
+        q, ls, sm, simp, toneOn, knobs, cellPx, budget,
+        edgeCount, hatchCount, pathLen, penUp, hist, shadeCells, meanInk,
+        continuity, noiseScore, budgetOk, identityOk, noiseOk, cropOk, classicOk,
+        page: "210×297 mm", px: "640×853", timing: ls === "neural" ? 1.8 : 0.42,
+        extractor: ls === "neural" ? "u2net_portrait→trace" : "linedraw_edges",
+        meshShape: `${Math.round(640 / cellPx)}×${Math.round(853 / cellPx)}`,
+      };
+    }
+
+    function renderCalc() {
+      const m = mockModel();
+      const pipe = document.getElementById("calc-pipe");
+      const steps = [
+        { name: "Load / crop", detail: `${m.px} px · auto-frame · ${m.page}`, done: hasPhoto },
+        { name: "Preprocess", detail: `contrast · posterize · simplify ${m.simp}`, done: ingested },
+        { name: "Scan field", detail: `${m.sm} · low ${m.knobs.edge_low} / high ${m.knobs.edge_high}`, done: ingested, active: seg === "ingest" && !m.toneOn },
+        { name: "Structure extract", detail: `${m.extractor} → ${m.edgeCount} polys`, done: ingested, active: seg === "ingest" },
+        { name: "ShadeField mesh", detail: m.toneOn ? `cell ${m.cellPx}px · ${m.shadeCells} shade cells` : "hatch off (gate-1)", done: ingested },
+        { name: "Emit polylines_mm", detail: m.toneOn ? `edges + hatch ${m.hatchCount}` : `edges only`, done: ingested },
+        { name: "Gate assess", detail: gatePassed() ? "PASS" : "open", done: gatePassed(), active: seg === "ingest" },
+      ];
+      pipe.innerHTML = steps.map((s) => {
+        const cls = s.done ? "done" : (s.active ? "active" : "");
+        return `<li class="${cls}"><span class="step">${s.name}</span><span class="detail">${s.detail}</span></li>`;
+      }).join("");
+
+      document.getElementById("calc-struct").innerHTML = `
+        <span>line_source</span><span>${m.ls}</span>
+        <span>edge_extractor</span><span>${m.extractor}</span>
+        <span>edge_polylines</span><span>${ingested ? m.edgeCount : "—"}</span>
+        <span>path_length_mm</span><span>${ingested ? m.pathLen.toLocaleString() : "—"}</span>
+        <span>pen_up_travel_mm</span><span>${ingested ? m.penUp.toLocaleString() : "—"}</span>
+        <span>continuity</span><span class="${m.continuity >= 0.78 ? "ok" : "warn"}">${(m.continuity * 100).toFixed(0)}%</span>
+        <span>timing_s</span><span>${ingested ? m.timing.toFixed(2) : "—"}</span>
+      `;
+
+      document.getElementById("calc-mesh").innerHTML = `
+        <span>tone_cell_mm</span><span>${(0.33 * m.cellPx / 6).toFixed(2)}</span>
+        <span>mesh shape</span><span>${m.meshShape}</span>
+        <span>mean ink (shade)</span><span>${m.toneOn ? m.meanInk.toFixed(2) : "0.00"}</span>
+        <span>hatch_polylines</span><span>${m.hatchCount}</span>
+        <span>penmanship</span><span>${m.toneOn ? "hatch" : "none"}</span>
+      `;
+
+      const histEl = document.getElementById("calc-hist");
+      const maxH = Math.max(...Object.values(m.hist), 1);
+      histEl.innerHTML = [0,1,2,3,4,5].map((c) => {
+        const n = m.hist[c];
+        const pct = Math.round((n / maxH) * 100);
+        return `<div class="bar-row"><span class="t">c${c}</span><div class="bar"><i class="c${c}" style="width:${pct}%"></i></div><span class="n">${n}</span></div>`;
+      }).join("");
+
+      document.getElementById("calc-pitch").innerHTML = [1,2,3,4].map((c) =>
+        `<span>code ${c}</span><span>${PITCH[c].toFixed(2)} mm${m.toneOn ? "" : " (idle)"}</span>`
+      ).join("") + `<span>budget max_paths</span><span class="${m.budgetOk ? "ok" : "warn"}">${m.edgeCount + m.hatchCount} / ${m.budget}</span>`;
+
+      const assess = [
+        ["Identity (edges + continuity)", m.identityOk, ingested],
+        ["Noise / travel", m.noiseOk, ingested],
+        ["Path budget", m.budgetOk, ingested],
+        ["Crop / frame", m.cropOk, hasPhoto],
+        ["Classic baseline", m.classicOk, ingested],
+        ["Tone form (gate-2)", m.toneOn && m.shadeCells > 200, m.toneOn],
+      ];
+      document.getElementById("calc-assess").innerHTML = assess.map(([label, pass, active]) => {
+        const badge = !active ? `<span class="badge skip">n/a</span>` :
+          pass ? `<span class="badge pass">pass</span>` : `<span class="badge fail">watch</span>`;
+        return `<div class="row"><span>${label}</span>${badge}</div>`;
+      }).join("");
+
+      calcLive.textContent = ingested ? "live" : "idle";
+    }
+
+    function updateStats() {
+      const m = mockModel();
       stats.textContent = ingested
-        ? `edges 842 · hatch ${hatchOn ? "310" : "0"} · ${ls} · ${sm} · ${q}`
+        ? `edges ${m.edgeCount} · hatch ${m.hatchCount} · ${m.ls} · ${m.sm} · ${m.q}`
         : "awaiting ingest";
+      renderCalc();
     }
 
     function gatePassed() {
@@ -534,6 +789,7 @@
       gateStatus.classList.toggle("ok", ok);
       applyBtn.disabled = !(ok && ingested);
       exportBtn.disabled = !(ok && seg === "vector");
+      renderCalc();
     }
 
     function setSeg(next) {
@@ -546,11 +802,10 @@
       crop.hidden = !(next === "source" && hasPhoto);
       empty.hidden = !(next === "source" && !hasPhoto);
       ingestToggles.hidden = next !== "ingest";
-      srcPhotos.forEach((el) => {
-        el.style.opacity = next === "source" && hasPhoto ? (el.tagName === "RECT" ? "1" : "1") : "0";
-      });
       if (next === "source") {
         srcPhotos.forEach((el) => { el.style.opacity = hasPhoto ? "1" : "0"; });
+      } else {
+        srcPhotos.forEach((el) => { el.style.opacity = "0"; });
       }
       updateChannels();
       refreshGate();
@@ -576,6 +831,7 @@
     underlay.addEventListener("change", updateChannels);
     simplify.addEventListener("input", () => {
       document.getElementById("simp-val").textContent = simplify.value;
+      updateStats();
     });
     ["line-source", "scan-mode", "quality"].forEach((id) => {
       document.getElementById(id).addEventListener("change", updateStats);
@@ -585,7 +841,6 @@
       hasPhoto = true;
       ingested = true;
       setSeg("ingest");
-      // demo: leave checklist for operator
       updateStats();
     }
     document.getElementById("btn-ingest").addEventListener("click", doIngest);
@@ -613,7 +868,6 @@
     document.getElementById("btn-raw").addEventListener("click", rawSvg);
     document.getElementById("btn-raw-inline").addEventListener("click", rawSvg);
 
-    // Start on Ingest with mock photo already ingested (Phase B land)
     setSeg("ingest");
     refreshGate();
   </script>
