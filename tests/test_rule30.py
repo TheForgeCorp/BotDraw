@@ -63,6 +63,7 @@ def test_rule30_listed_under_design_category():
     assert "rule30" in ids
     assert "phyllotaxis" in ids
     assert "modular_chords" in ids
+    assert "prime_sieve" in ids
 
 
 def test_phyllotaxis_points_and_render():
@@ -124,3 +125,33 @@ def test_modular_chords_edges_and_render():
     assert layered.meta["k"] == 77
     assert layered.meta["strokes"] == 200
     assert layered.meta["equation"] == "i → (i + k) mod N"
+
+
+def test_prime_sieve_and_render():
+    from botdraw.styles.design_library import sieve_of_eratosthenes
+
+    is_prime, primes = sieve_of_eratosthenes(30)
+    assert primes[:6] == [2, 3, 5, 7, 11, 13]
+    assert is_prime[17] and not is_prime[15] and not is_prime[1]
+
+    ensure_styles_loaded()
+    eng = get_style("prime_sieve")
+    assert eng.category == "design"
+    palette = load_palette("default-6")
+    layered = eng.render(
+        palette=palette,
+        params=StyleParams(
+            seed=1,
+            quality=QualityPreset.BOOTH_BALANCED,
+            density=1.0,
+            extra={"max_n": 212, "grid_cols": 6, "show_arcs": True, "show_sieve": True},
+        ),
+        paper=PaperSize.A4,
+    )
+    assert layered.meta["style"] == "prime_sieve"
+    assert layered.meta["subsection"] == "math_derived"
+    assert layered.meta["max_n"] == 212
+    assert layered.meta["grid_cols"] == 6
+    assert layered.meta["prime_count"] == 47  # primes ≤ 212
+    assert len(layered.passes) == 2
+    assert layered.meta["strokes"] > 0

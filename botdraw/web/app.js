@@ -479,6 +479,14 @@ function designLibraryParams() {
       k: Number(controls.querySelector("#mod-k")?.value || 77),
     };
   }
+  if (selectedStyle === "prime_sieve") {
+    return {
+      max_n: Number(controls.querySelector("#sieve-n")?.value || 212),
+      grid_cols: Number(controls.querySelector("#sieve-cols")?.value || 6),
+      show_arcs: !!controls.querySelector("#sieve-arcs")?.checked,
+      show_sieve: !!controls.querySelector("#sieve-grid")?.checked,
+    };
+  }
   return {
     cols: Number(controls.querySelector("#ca-cols")?.value || 120),
     rows: Number(controls.querySelector("#ca-rows")?.value || 90),
@@ -507,6 +515,20 @@ function designLibraryKnobsHtml() {
       </div>
     `;
   }
+  if (selectedStyle === "prime_sieve") {
+    return `
+      <h4>Prime sieve</h4>
+      <p class="muted">Left: arc spire between primes. Right: circled primes / struck composites. Cols=6 → vertical lanes.</p>
+      <div class="grid-2">
+        ${field("Max n", `<input id="sieve-n" type="number" min="10" max="2000" value="212" />`)}
+        ${field("Grid cols", `<input id="sieve-cols" type="number" min="2" max="20" value="6" />`)}
+      </div>
+      <div class="chk-row" style="margin-top:0.45rem">
+        <label><input id="sieve-arcs" type="checkbox" checked /> Arc spire</label>
+        <label><input id="sieve-grid" type="checkbox" checked /> Sieve grid</label>
+      </div>
+    `;
+  }
   return `
     <h4>Automaton</h4>
     <div class="grid-2">
@@ -524,7 +546,7 @@ function renderDesignLibrary() {
     <h3>Design Library</h3>
     <p class="muted">Math-derived and structured motifs for the plotter — pick a design, then vectorize.</p>
     <h4>Math Derived</h4>
-    <p class="muted">Cellular automata, phyllotaxis, modular chords, and related constructions.</p>
+    <p class="muted">Cellular automata, primes, phyllotaxis, modular chords, and related constructions.</p>
     ${styleButtons(list)}
     ${designLibraryKnobsHtml()}
     ${fractalDevOpts()}

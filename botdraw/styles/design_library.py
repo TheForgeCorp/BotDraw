@@ -299,5 +299,249 @@ class _ModularChords:
         )
 
 
-for _e in (_Rule30(), _Phyllotaxis(), _ModularChords()):
+def sieve_of_eratosthenes(n: int) -> tuple[list[bool], list[int]]:
+    """Return (is_prime[0..n], primes). is_prime[0]=is_prime[1]=False."""
+    n = max(2, int(n))
+    is_prime = [True] * (n + 1)
+    is_prime[0] = is_prime[1] = False
+    p = 2
+    while p * p <= n:
+        if is_prime[p]:
+            for m in range(p * p, n + 1, p):
+                is_prime[m] = False
+        p += 1
+    primes = [i for i in range(2, n + 1) if is_prime[i]]
+    return is_prime, primes
+
+
+def _arc_points(
+    x0: float, x1: float, y: float, *, steps: int = 16, above: bool = True
+) -> list[tuple[float, float]]:
+    """Upper (or lower) semicircle from x0→x1 sitting on baseline y."""
+    if abs(x1 - x0) < 1e-6:
+        return [(x0, y), (x1, y)]
+    mid = (x0 + x1) / 2
+    radius = abs(x1 - x0) / 2
+    # Travel left→right along the arc
+    if x0 <= x1:
+        angles = np.linspace(math.pi, 0.0, max(4, steps))
+    else:
+        angles = np.linspace(0.0, math.pi, max(4, steps))
+    sign = -1.0 if above else 1.0
+    return [(mid + radius * math.cos(a), y + sign * radius * math.sin(a)) for a in angles]
+
+
+class _PrimeSieve:
+    id = "prime_sieve"
+    name = "Sieve of Eratosthenes"
+    category = "design"
+    description = (
+        "Prime sieve diptych — left: woven arc spire between successive primes; "
+        "right: grid with primes circled and composites struck (cols=6 → vertical prime lanes)"
+    )
+
+    def render(
+        self,
+        *,
+        palette,
+        params: StyleParams,
+        paper=PaperSize.A4,
+        orientation=Orientation.PORTRAIT,
+        image_path=None,
+        image_array=None,
+    ):
+        del image_path, image_array
+        extra = params.extra or {}
+        base_n = int(extra.get("max_n") or extra.get("n") or 212)
+        grid_cols = int(extra.get("grid_cols") or extra.get("cols") or 6)
+        show_arcs = extra.get("show_arcs", True)
+        show_sieve = extra.get("show_sieve", True)
+        if isinstance(show_arcs, str):
+            show_arcs = show_arcs.lower() not in ("0", "false", "no")
+        if isinstance(show_sieve, str):
+            show_sieve = show_sieve.lower() not in ("0", "false", "no")
+
+        dens = max(0.5, float(params.density or 1.0))
+        n = max(10, int(round(base_n * dens)))
+        grid_cols = max(2, min(20, grid_cols))
+
+        is_prime, primes = sieve_of_eratosthenes(n)
+        pw, ph = page_size(paper, orientation)
+        pen = ink_pens(palette)[0]
+        margin = 12.0
+        gap = 8.0
+        usable_w = pw - 2 * margin
+        usable_h = ph - 2 * margin
+
+        # Diptych: arcs left, sieve right (or full-bleed if one hidden)
+        if show_arcs and show_sieve:
+            left_w = usable_w * 0.46
+            right_w = usable_w * 0.46
+            left_x0 = margin
+            right_x0 = margin + left_w + gap
+        elif show_arcs:
+            left_w = usable_w
+            right_w = 0.0
+            left_x0 = margin
+            right_x0 = margin
+        else:
+            left_w = 0.0
+            right_w = usable_w
+            left_x0 = margin
+            right_x0 = margin
+
+        passes: list = []
+        arc_polys: list[Polyline] = []
+        sieve_polys: list[Polyline] = []
+
+        # —— Left: number line + continuous woven arc spire ——
+        if show_arcs and primes:
+            line_y = margin + usable_h * 0.78
+            x_lo = left_x0 + 4
+            x_hi = left_x0 + left_w - 4
+
+            def map_n(v: float) -> float:
+                return x_lo + (v - 1) / max(n - 1, 1) * (x_hi - x_lo)
+
+            # Baseline
+            arc_polys.append(
+                Polyline(points=[(x_lo, line_y), (x_hi, line_y)], pen_id=pen.id)
+            )
+            # Tick marks at primes (short)
+            tick = 1.6
+            for p in primes:
+                x = map_n(p)
+                arc_polys.append(
+                    Polyline(points=[(x, line_y - tick), (x, line_y + tick * 0.4)], pen_id=pen.id)
+                )
+
+            # Single continuous stroke: semicircle between consecutive primes
+            path: list[tuple[float, float]] = []
+            for a, b in zip(primes, primes[1:]):
+                span = abs(map_n(b) - map_n(a))
+                steps = max(8, min(36, int(span * 1.2)))
+                seg = _arc_points(map_n(a), map_n(b), line_y, steps=steps, above=True)
+                if path and seg:
+                    # avoid duplicating join point
+                    path.extend(seg[1:])
+                else:
+                    path.extend(seg)
+            if len(path) >= 2:
+                arc_polys.append(Polyline(points=path, pen_id=pen.id))
+
+            # Soft outer frame for the left panel
+            lx1, ly1 = left_x0, margin
+            lx2, ly2 = left_x0 + left_w, margin + usable_h
+            arc_polys.append(
+                Polyline(
+                    points=[(lx1, ly1), (lx2, ly1), (lx2, ly2), (lx1, ly2), (lx1, ly1)],
+                    pen_id=pen.id,
+                    closed=True,
+                )
+            )
+
+        # —— Right: sieve grid ——
+        if show_sieve:
+            rows = int(math.ceil(n / grid_cols))
+            pad = 6.0
+            cell_w = (right_w - 2 * pad) / grid_cols
+            cell_h = (usable_h - 2 * pad) / max(rows, 1)
+            cell = min(cell_w, cell_h)
+            grid_w = cell * grid_cols
+            grid_h = cell * rows
+            ox = right_x0 + (right_w - grid_w) / 2
+            oy = margin + (usable_h - grid_h) / 2
+
+            for num in range(1, n + 1):
+                idx = num - 1
+                r, c = divmod(idx, grid_cols)
+                cx = ox + (c + 0.5) * cell
+                cy = oy + (r + 0.5) * cell
+                rad = cell * 0.32
+                if num >= 2 and is_prime[num]:
+                    # Circled prime
+                    ring = [
+                        (cx + rad * math.cos(t), cy + rad * math.sin(t))
+                        for t in np.linspace(0, 2 * math.pi, 14, endpoint=False)
+                    ]
+                    sieve_polys.append(
+                        Polyline(points=ring + [ring[0]], pen_id=pen.id, closed=True)
+                    )
+                elif num >= 2:
+                    # Struck composite — X
+                    d = rad * 0.85
+                    sieve_polys.append(
+                        Polyline(points=[(cx - d, cy - d), (cx + d, cy + d)], pen_id=pen.id)
+                    )
+                    sieve_polys.append(
+                        Polyline(points=[(cx + d, cy - d), (cx - d, cy + d)], pen_id=pen.id)
+                    )
+                else:
+                    # 1 — small dash
+                    sieve_polys.append(
+                        Polyline(
+                            points=[(cx - rad * 0.5, cy), (cx + rad * 0.5, cy)],
+                            pen_id=pen.id,
+                        )
+                    )
+
+            # Light grid outline
+            rx1, ry1 = ox, oy
+            rx2, ry2 = ox + grid_w, oy + grid_h
+            sieve_polys.append(
+                Polyline(
+                    points=[(rx1, ry1), (rx2, ry1), (rx2, ry2), (rx1, ry2), (rx1, ry1)],
+                    pen_id=pen.id,
+                    closed=True,
+                )
+            )
+
+        if arc_polys:
+            passes.append(make_pass("prime-arcs", "Prime arc spire", pen.id, arc_polys))
+        if sieve_polys:
+            passes.append(make_pass("prime-sieve", "Sieve grid", pen.id, sieve_polys))
+        if not passes:
+            # Fallback empty frame so render never yields zero passes
+            passes.append(
+                make_pass(
+                    "prime-empty",
+                    "Empty",
+                    pen.id,
+                    [
+                        Polyline(
+                            points=[
+                                (margin, margin),
+                                (pw - margin, margin),
+                                (pw - margin, ph - margin),
+                                (margin, ph - margin),
+                                (margin, margin),
+                            ],
+                            pen_id=pen.id,
+                            closed=True,
+                        )
+                    ],
+                )
+            )
+
+        return LayeredSVG(
+            width_mm=pw,
+            height_mm=ph,
+            passes=passes,
+            seed=params.seed,
+            meta={
+                "style": self.id,
+                "library": "design",
+                "subsection": "math_derived",
+                "max_n": n,
+                "grid_cols": grid_cols,
+                "prime_count": len(primes),
+                "show_arcs": bool(show_arcs),
+                "show_sieve": bool(show_sieve),
+                "equation": "Sieve of Eratosthenes",
+                "strokes": sum(len(p.polylines) for p in passes),
+            },
+        )
+
+
+for _e in (_Rule30(), _Phyllotaxis(), _ModularChords(), _PrimeSieve()):
     register(_e)
