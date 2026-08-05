@@ -379,8 +379,8 @@ class EmulatorPlayer {
     if (!this.plan) return;
     const pw = this.plan.width_mm;
     const ph = this.plan.height_mm;
-    // Fixed layer resolution: crisp at fit, still good when zoomed in.
-    const target = this.fitScale * 1.6;
+    // Prefer enough px/mm that ~2.5mm glyphs stay readable at fit zoom.
+    const target = Math.max(this.fitScale * 2.2, 3.5);
     this.layerScale = Math.min(target, 4096 / Math.max(pw, ph));
     const mk = () => {
       const c = document.createElement("canvas");
@@ -388,7 +388,8 @@ class EmulatorPlayer {
       c.height = Math.max(2, Math.round(ph * this.layerScale));
       const cx = c.getContext("2d");
       cx.lineCap = "round";
-      cx.lineJoin = "round";
+      cx.lineJoin = "miter";
+      cx.miterLimit = 2.5;
       return { canvas: c, ctx: cx, penId: null };
     };
     this.ghost = mk();
@@ -418,7 +419,8 @@ class EmulatorPlayer {
       c.height = this.ghost.canvas.height;
       const cx = c.getContext("2d");
       cx.lineCap = "round";
-      cx.lineJoin = "round";
+      cx.lineJoin = "miter";
+      cx.miterLimit = 2.5;
       layer = { canvas: c, ctx: cx, penId: seg.pen_id || null };
       this.layers.set(key, layer);
     }
@@ -525,7 +527,7 @@ class EmulatorPlayer {
     this._strokePolyline(layer.ctx, chain, this.layerScale, 1);
   }
 
-  /** Stroke a polyline chain with nib-aware rendering and round joins. */
+  /** Stroke a polyline chain with nib-aware rendering. */
   _strokePolyline(ctx, chain, s, frac) {
     const pen = this._penInfo.get(chain.pen_id) || {};
     const nib = pen.nib_type || "fineliner";
@@ -542,16 +544,44 @@ class EmulatorPlayer {
       drawPts = pts.slice(0, -1).concat([[a[0] + (b[0] - a[0]) * frac, a[1] + (b[1] - a[1]) * frac]]);
     }
 
+    const closed =
+      drawPts.length >= 3 &&
+      Math.abs(drawPts[0][0] - drawPts[drawPts.length - 1][0]) < 1e-4 &&
+      Math.abs(drawPts[0][1] - drawPts[drawPts.length - 1][1]) < 1e-4;
+
+    // Detect sharp corners (squares/stars) → miter; smooth rings → round
+    let sharp = false;
+    if (drawPts.length >= 3) {
+      const n = closed ? drawPts.length - 1 : drawPts.length;
+      for (let i = 1; i < n - 1; i++) {
+        const ax = drawPts[i][0] - drawPts[i - 1][0];
+        const ay = drawPts[i][1] - drawPts[i - 1][1];
+        const bx = drawPts[i + 1][0] - drawPts[i][0];
+        const by = drawPts[i + 1][1] - drawPts[i][1];
+        const la = Math.hypot(ax, ay) || 1;
+        const lb = Math.hypot(bx, by) || 1;
+        const dot = (ax * bx + ay * by) / (la * lb);
+        if (dot < 0.2) {
+          sharp = true;
+          break;
+        }
+      }
+    }
+
     const stroke = (w, alpha, cap) => {
       ctx.strokeStyle = this._rgba(chain.color_hex || pen.color_hex || "#111111", alpha);
-      ctx.lineWidth = Math.max(0.75, w);
-      ctx.lineCap = cap;
-      ctx.lineJoin = "round";
+      // Keep pen width in true mm; only a tiny floor so 1px never vanishes
+      ctx.lineWidth = Math.max(0.5, w);
+      ctx.lineCap = closed ? "butt" : cap;
+      ctx.lineJoin = sharp ? "miter" : "round";
+      ctx.miterLimit = 2.5;
       ctx.beginPath();
       ctx.moveTo(drawPts[0][0] * s, drawPts[0][1] * s);
-      for (let i = 1; i < drawPts.length; i++) {
+      const last = closed ? drawPts.length - 1 : drawPts.length;
+      for (let i = 1; i < last; i++) {
         ctx.lineTo(drawPts[i][0] * s, drawPts[i][1] * s);
       }
+      if (closed) ctx.closePath();
       ctx.stroke();
     };
 

@@ -658,7 +658,7 @@ function renderFractal() {
 }
 
 const designKnobState = {
-  phyllotaxis: { n_points: 220, angle_deg: 137.5, mark: "circle", mark_size_mm: 2.5 },
+  phyllotaxis: { n_points: 220, angle_deg: 137.5, mark: "square", mark_size_mm: 2.5 },
   modular_chords: { n_points: 200, k: 77 },
   prime_sieve: { max_n: 212, grid_cols: 6, show_arcs: true, show_sieve: true },
   rule30: { cols: 120, rows: 90, rule: 30 },
