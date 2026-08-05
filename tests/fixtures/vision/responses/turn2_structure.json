@@ -1,5 +1,5 @@
 {
-  "overall": 0.42,
+  "overall": 0.38,
   "issues": [
     {
       "code": "band_sides_missing",
@@ -8,8 +8,14 @@
       "fix": "equalize_structure"
     },
     {
+      "code": "missing_interior_stroke",
+      "severity": 0.8,
+      "region": "mug_lower_body",
+      "fix": "keep_more_edges"
+    },
+    {
       "code": "soft_edges",
-      "severity": 0.6,
+      "severity": 0.55,
       "region": "silhouette",
       "fix": "keep_more_edges"
     }
@@ -21,5 +27,5 @@
     "contour_simplify": 1,
     "suppress_background": false
   },
-  "summary": "Turn 2: band L/R verticals missing \u2014 equalize + finer simplify"
+  "summary": "Turn 2: band sides + lower interior accent line missing \u2014 equalize + keep edges"
 }

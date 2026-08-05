@@ -113,7 +113,7 @@ def ensure_manual_turn_fixtures(*, root: Path | None = None, force: bool = False
         "summary": "Object mug — classic structure gate, hatch off",
     }
     turn2 = {
-        "overall": 0.42,
+        "overall": 0.38,
         "issues": [
             {
                 "code": "band_sides_missing",
@@ -122,8 +122,14 @@ def ensure_manual_turn_fixtures(*, root: Path | None = None, force: bool = False
                 "fix": "equalize_structure",
             },
             {
+                "code": "missing_interior_stroke",
+                "severity": 0.8,
+                "region": "mug_lower_body",
+                "fix": "keep_more_edges",
+            },
+            {
                 "code": "soft_edges",
-                "severity": 0.6,
+                "severity": 0.55,
                 "region": "silhouette",
                 "fix": "keep_more_edges",
             },
@@ -135,17 +141,18 @@ def ensure_manual_turn_fixtures(*, root: Path | None = None, force: bool = False
             "contour_simplify": 1,
             "suppress_background": False,
         },
-        "summary": "Turn 2: band L/R verticals missing — equalize + finer simplify",
+        "summary": "Turn 2: band sides + lower interior accent line missing — equalize + keep edges",
     }
     turn3 = {
-        "overall": 0.78,
+        "overall": 0.82,
         "issues": [],
         "actions": {
             "force_reingest": False,
             "line_source": "classic",
             "density_mul": 1.0,
+            "contour_simplify": 1,
         },
-        "summary": "Turn 3: confirm structure — accept (no further re-ingest)",
+        "summary": "Turn 3: confirm — band closers + lower accent recovered; no further re-ingest",
     }
 
     files = {
@@ -182,12 +189,15 @@ def ensure_manual_turn_fixtures(*, root: Path | None = None, force: bool = False
     (prompts / "turn2_structure.md").write_text(
         "# Turn 2 — Structure critique\n\n"
         "Paste source photo + ingest structure preview. Use STRUCTURE_CRITIQUE_SYSTEM.\n"
+        "Check silhouette, band/parallel gaps, AND short interior accent strokes "
+        "(e.g. lower mug body line). Prefer keep_more_edges / equalize_structure.\n"
         "Save as BOTDRAW_VISION_CRITIQUE_JSON or turns/turn02_critique.json.\n",
         encoding="utf-8",
     )
     (prompts / "turn3_confirm.md").write_text(
         "# Turn 3 — Confirm (restyle knobs only; no re-ingest)\n\n"
         "Paste source + latest preview. Use CRITIQUE_SYSTEM. Set force_reingest false.\n"
+        "Do not accept if a clear interior accent stroke from the photo is still missing.\n"
         "Save as BOTDRAW_VISION_FEEDBACK_JSON or turns/turn03_critique.json.\n",
         encoding="utf-8",
     )

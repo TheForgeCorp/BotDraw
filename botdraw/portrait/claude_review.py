@@ -104,7 +104,9 @@ background suppress for multi-subject or cluttered scenes."""
 
 STRUCTURE_CRITIQUE_SYSTEM = """You critique pen-plotter STRUCTURE linework (ingest Raw SVG /
 edge polylines) against the source photo. Focus on missing edges, open silhouettes,
-parallel-band gaps, noise/travel, and crop. Return ONLY valid JSON:
+parallel-band gaps, short interior decorative strokes (e.g. accent lines on object
+bodies), noise/travel, and crop. Flag missing interior H/V ink with keep_more_edges.
+Return ONLY valid JSON:
 {
   "overall": 0..1,
   "issues": [
