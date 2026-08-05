@@ -142,7 +142,7 @@ def vision_loop_demo(
     for p in history:
         ov = f"{p.overall:.2f}" if p.overall is not None else "—"
         mark = "re-ingest" if p.reingest else p.kind
-        print(f"  pass {p.turn:02d} [{mark}] overall={ov} edges={p.edge_count} · {p.summary}")
+        print(f"  pass {p.turn:02d} ({mark}) overall={ov} edges={p.edge_count} · {p.summary}")
 
 
 @vision_app.command("compare")
