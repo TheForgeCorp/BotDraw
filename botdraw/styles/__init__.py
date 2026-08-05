@@ -73,6 +73,7 @@ def ensure_styles_loaded() -> None:
     from botdraw.styles import (  # noqa: F401
         artistic,
         d3_patterns,
+        design_library,
         fractals,
         obscure,
         patterns,

@@ -463,6 +463,104 @@ function renderFractal() {
     withBusy("#go", () => renderWithSettings({ appName: "fractalbot", busyText: "Rendering fractal…" }));
 }
 
+function designLibraryParams() {
+  if (selectedStyle === "phyllotaxis") {
+    return {
+      n_points: Number(controls.querySelector("#phy-points")?.value || 900),
+      angle_deg: Number(controls.querySelector("#phy-angle")?.value || 137.5),
+    };
+  }
+  if (selectedStyle === "modular_chords") {
+    return {
+      n_points: Number(controls.querySelector("#mod-n")?.value || 200),
+      k: Number(controls.querySelector("#mod-k")?.value || 77),
+    };
+  }
+  if (selectedStyle === "prime_sieve") {
+    return {
+      max_n: Number(controls.querySelector("#sieve-n")?.value || 212),
+      grid_cols: Number(controls.querySelector("#sieve-cols")?.value || 6),
+      show_arcs: !!controls.querySelector("#sieve-arcs")?.checked,
+      show_sieve: !!controls.querySelector("#sieve-grid")?.checked,
+    };
+  }
+  return {
+    cols: Number(controls.querySelector("#ca-cols")?.value || 120),
+    rows: Number(controls.querySelector("#ca-rows")?.value || 90),
+    rule: Number(controls.querySelector("#ca-rule")?.value || 30),
+  };
+}
+
+function designLibraryKnobsHtml() {
+  if (selectedStyle === "phyllotaxis") {
+    return `
+      <h4>Sunflower</h4>
+      <p class="muted">r = c√n · θ = n × golden angle — Fibonacci spiral families.</p>
+      <div class="grid-2">
+        ${field("Points", `<input id="phy-points" type="number" min="50" max="4000" value="900" />`)}
+        ${field("Angle °", `<input id="phy-angle" type="number" min="1" max="179" step="0.1" value="137.5" />`)}
+      </div>
+    `;
+  }
+  if (selectedStyle === "modular_chords") {
+    return `
+      <h4>Circle steps</h4>
+      <p class="muted">i → (i + k) mod N — petals from periodicity, dense ring from chord interference.</p>
+      <div class="grid-2">
+        ${field("N points", `<input id="mod-n" type="number" min="12" max="2000" value="200" />`)}
+        ${field("Step k", `<input id="mod-k" type="number" min="1" max="1999" value="77" />`)}
+      </div>
+    `;
+  }
+  if (selectedStyle === "prime_sieve") {
+    return `
+      <h4>Prime sieve</h4>
+      <p class="muted">Left: arc spire between primes. Right: circled primes / struck composites. Cols=6 → vertical lanes.</p>
+      <div class="grid-2">
+        ${field("Max n", `<input id="sieve-n" type="number" min="10" max="2000" value="212" />`)}
+        ${field("Grid cols", `<input id="sieve-cols" type="number" min="2" max="20" value="6" />`)}
+      </div>
+      <div class="chk-row">
+        <label><input id="sieve-arcs" type="checkbox" checked /> Arc spire</label>
+        <label><input id="sieve-grid" type="checkbox" checked /> Sieve grid</label>
+      </div>
+    `;
+  }
+  return `
+    <h4>Automaton</h4>
+    <div class="grid-2">
+      ${field("Cols", `<input id="ca-cols" type="number" min="16" max="400" value="120" />`)}
+      ${field("Rows", `<input id="ca-rows" type="number" min="12" max="300" value="90" />`)}
+    </div>
+    ${field("Rule", `<input id="ca-rule" type="number" min="0" max="255" value="30" />`)}
+  `;
+}
+
+function renderDesignLibrary() {
+  const list = styles.filter((s) => s.category === "design");
+  if (!list.find((s) => s.id === selectedStyle)) selectedStyle = list[0]?.id || "rule30";
+  controls.innerHTML = `
+    <h3>Design Library</h3>
+    <p class="muted">Math-derived and structured motifs for the plotter — pick a design, then vectorize.</p>
+    <h4>Math Derived</h4>
+    <p class="muted">Cellular automata, primes, phyllotaxis, modular chords, and related constructions.</p>
+    ${styleButtons(list)}
+    ${designLibraryKnobsHtml()}
+    ${fractalDevOpts()}
+    <div class="row"><button class="primary" id="go">Vectorize</button></div>
+  `;
+  bindStyleGrid();
+  applyCommonDefaults();
+  controls.querySelector("#go").onclick = () =>
+    withBusy("#go", () =>
+      renderWithSettings({
+        appName: "design",
+        busyText: "Vectorizing design…",
+        paramsExtra: designLibraryParams(),
+      })
+    );
+}
+
 function renderPortrait() {
   const list = styles.filter((s) => s.category === "portrait");
   if (!list.find((s) => s.id === selectedStyle)) selectedStyle = list[0]?.id || "portrait_linework";
@@ -877,6 +975,7 @@ async function renderControls() {
   if (!palettes.length) palettes = await api("/api/palettes");
   if (currentApp === "genartbot") return renderGenArt();
   if (currentApp === "fractalbot") return renderFractal();
+  if (currentApp === "design") return renderDesignLibrary();
   if (currentApp === "portraitbot") return renderPortrait();
   if (currentApp === "lettersbot") return renderLetters();
   if (currentApp === "rdlab") return renderRdlab();

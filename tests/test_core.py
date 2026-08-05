@@ -43,7 +43,10 @@ def test_styles_registered():
     assert D3_PATTERN_IDS <= ids
     pattern_ids = {s["id"] for s in list_styles(category="pattern")}
     assert D3_PATTERN_IDS <= pattern_ids
-    assert {"truchet", "phyllotaxis", "mandala", "stringart", "seismograph"} <= pattern_ids
+    assert {"truchet", "mandala", "stringart", "seismograph"} <= pattern_ids
+    design_ids = {s["id"] for s in list_styles(category="design")}
+    assert {"rule30", "phyllotaxis", "modular_chords", "prime_sieve"} <= design_ids
+    assert get_style("phyllotaxis").category == "design"
     assert get_style("hilbert").category == "backlog"
     fractal_ids = {s["id"] for s in list_styles(category="fractal")}
     assert fractal_ids >= {
