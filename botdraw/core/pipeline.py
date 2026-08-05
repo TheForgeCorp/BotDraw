@@ -54,10 +54,11 @@ def layers_summary(layered: LayeredSVG, palette: PaletteSet) -> dict:
     }
 
 
-def render_job(
+def render_from_layered(
     *,
     app: str,
     style_id: str,
+    layered: LayeredSVG,
     palette_id: str = "default-6",
     paper: PaperSize = PaperSize.A4,
     orientation: Orientation = Orientation.PORTRAIT,
@@ -69,7 +70,7 @@ def render_job(
     pen_up_speed_mm_s: float = DEFAULT_PEN_UP_MM_S,
     pen_down_speed_mm_s: float = DEFAULT_PEN_DOWN_MM_S,
 ) -> tuple[JobRecord, dict, dict]:
-    ensure_styles_loaded()
+    """Optimize a pre-built LayeredSVG and write job artifacts (same shape as render_job)."""
     paper_enum = paper if isinstance(paper, PaperSize) else PaperSize(paper)
     orientation_enum = orientation if isinstance(orientation, Orientation) else Orientation(orientation)
     quality_enum = quality if isinstance(quality, QualityPreset) else QualityPreset(quality)
@@ -107,19 +108,6 @@ def render_job(
     save_job(job)
     try:
         palette = load_palette(palette_id)
-        engine = get_style(style_id)
-        layered = engine.render(
-            palette=palette,
-            params=StyleParams(
-                seed=seed,
-                quality=quality_enum,
-                density=density,
-                extra=params_extra or {},
-            ),
-            paper=paper_enum,
-            orientation=orientation_enum,
-            image_path=image_path,
-        )
         layered = optimize_layered(layered)
         plan = compile_motion_plan(
             layered,
@@ -160,3 +148,53 @@ def render_job(
         job.error = str(exc)
         save_job(job)
         raise
+
+
+def render_job(
+    *,
+    app: str,
+    style_id: str,
+    palette_id: str = "default-6",
+    paper: PaperSize = PaperSize.A4,
+    orientation: Orientation = Orientation.PORTRAIT,
+    quality: QualityPreset = QualityPreset.BOOTH_BALANCED,
+    seed: int = 42,
+    density: float = 1.0,
+    image_path: str | None = None,
+    params_extra: dict | None = None,
+    pen_up_speed_mm_s: float = DEFAULT_PEN_UP_MM_S,
+    pen_down_speed_mm_s: float = DEFAULT_PEN_DOWN_MM_S,
+) -> tuple[JobRecord, dict, dict]:
+    ensure_styles_loaded()
+    paper_enum = paper if isinstance(paper, PaperSize) else PaperSize(paper)
+    orientation_enum = orientation if isinstance(orientation, Orientation) else Orientation(orientation)
+    quality_enum = quality if isinstance(quality, QualityPreset) else QualityPreset(quality)
+    palette = load_palette(palette_id)
+    engine = get_style(style_id)
+    layered = engine.render(
+        palette=palette,
+        params=StyleParams(
+            seed=seed,
+            quality=quality_enum,
+            density=density,
+            extra=params_extra or {},
+        ),
+        paper=paper_enum,
+        orientation=orientation_enum,
+        image_path=image_path,
+    )
+    return render_from_layered(
+        app=app,
+        style_id=style_id,
+        layered=layered,
+        palette_id=palette_id,
+        paper=paper_enum,
+        orientation=orientation_enum,
+        quality=quality_enum,
+        seed=seed,
+        density=density,
+        image_path=image_path,
+        params_extra=params_extra,
+        pen_up_speed_mm_s=pen_up_speed_mm_s,
+        pen_down_speed_mm_s=pen_down_speed_mm_s,
+    )

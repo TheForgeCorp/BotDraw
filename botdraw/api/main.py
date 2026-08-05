@@ -14,8 +14,8 @@ from pydantic import BaseModel
 
 from botdraw.audio import render_audio_file, render_demo_tone
 from botdraw.core.jobs import list_jobs, load_job
-from botdraw.core.models import Orientation, PaperSize, QualityPreset
-from botdraw.core.pipeline import render_job
+from botdraw.core.models import LayeredSVG, Orientation, PaperSize, PassLayer, Polyline, QualityPreset, paper_dims
+from botdraw.core.pipeline import render_from_layered, render_job
 from botdraw.handwriting import load_samples, render_with_clone, save_samples
 from botdraw.letters import render_letter
 from botdraw.llm import draft_wedding_letter, is_loaded, try_local_ollama, unload
@@ -52,6 +52,29 @@ class RenderRequest(BaseModel):
     pen_up_speed_mm_s: float = 100.0
     pen_down_speed_mm_s: float = 25.0
     params_extra: dict[str, Any] = {}
+
+
+class PolylinePassIn(BaseModel):
+    pen_id: str
+    name: str | None = None
+    kind: str = "ink"
+    closed: bool = False
+    polylines: list[list[list[float]]]
+
+
+class PolylinesRenderRequest(BaseModel):
+    app: str = "tools"
+    style_id: str = "d3_lab"
+    palette_id: str = "default-6"
+    paper: PaperSize = PaperSize.A4
+    orientation: Orientation = Orientation.PORTRAIT
+    quality: QualityPreset = QualityPreset.BOOTH_BALANCED
+    seed: int = 42
+    density: float = 1.0
+    pen_up_speed_mm_s: float = 100.0
+    pen_down_speed_mm_s: float = 25.0
+    params_extra: dict[str, Any] = {}
+    passes: list[PolylinePassIn]
 
 
 class PaletteSaveRequest(BaseModel):
@@ -142,6 +165,70 @@ def api_render(body: RenderRequest):
     job, payload, layers = render_job(
         app=body.app,
         style_id=body.style_id,
+        palette_id=body.palette_id,
+        paper=body.paper,
+        orientation=body.orientation,
+        quality=body.quality,
+        seed=body.seed,
+        density=body.density,
+        params_extra=body.params_extra,
+        pen_up_speed_mm_s=body.pen_up_speed_mm_s,
+        pen_down_speed_mm_s=body.pen_down_speed_mm_s,
+    )
+    return {"job": job.model_dump(), "emulator": payload, "layers": layers}
+
+
+@app.post("/api/render/polylines")
+def api_render_polylines(body: PolylinesRenderRequest):
+    """Accept client-built polylines (e.g. D3 Pattern Lab) and run the plotter pipeline."""
+    if not body.passes:
+        raise HTTPException(400, "passes required")
+    try:
+        palette = load_palette(body.palette_id)
+    except KeyError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    pw, ph = paper_dims(body.paper, body.orientation)
+    pass_layers: list[PassLayer] = []
+    for i, p in enumerate(body.passes):
+        try:
+            palette.pen_by_id(p.pen_id)
+        except KeyError as exc:
+            raise HTTPException(400, f"Unknown pen_id: {p.pen_id}") from exc
+        polys: list[Polyline] = []
+        for pts in p.polylines:
+            if len(pts) < 2:
+                continue
+            points = [(float(x), float(y)) for x, y in pts]
+            closed = p.closed or (
+                len(points) > 2
+                and abs(points[0][0] - points[-1][0]) < 1e-6
+                and abs(points[0][1] - points[-1][1]) < 1e-6
+            )
+            polys.append(Polyline(points=points, pen_id=p.pen_id, closed=closed))
+        if not polys:
+            continue
+        pass_layers.append(
+            PassLayer(
+                id=f"d3-lab-{i}",
+                name=p.name or f"Lab pass {i + 1}",
+                pen_id=p.pen_id,
+                polylines=polys,
+                kind=p.kind,
+            )
+        )
+    if not pass_layers:
+        raise HTTPException(400, "No valid polylines in passes")
+    layered = LayeredSVG(
+        width_mm=pw,
+        height_mm=ph,
+        passes=pass_layers,
+        seed=body.seed,
+        meta={"style": body.style_id, "source": "d3_pattern_lab", **(body.params_extra or {})},
+    )
+    job, payload, layers = render_from_layered(
+        app=body.app,
+        style_id=body.style_id,
+        layered=layered,
         palette_id=body.palette_id,
         paper=body.paper,
         orientation=body.orientation,

@@ -360,6 +360,24 @@ button.loading::after {
 
 .muted { color: var(--text-2); font-size: 12px; }
 
+.d3-lab-preview {
+  margin-top: 12px;
+  border: 1px solid var(--border);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--surface) 88%, var(--accent) 12%), var(--surface));
+  border-radius: 6px;
+  overflow: hidden;
+  aspect-ratio: 210 / 297;
+  max-height: 280px;
+}
+
+.d3-lab-preview svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: #f7f5f1;
+}
+
 .fractal-ref {
   margin: 8px 0 12px;
   border: 1px solid var(--hairline);

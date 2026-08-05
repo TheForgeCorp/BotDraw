@@ -650,10 +650,34 @@ function renderPalettes() {
     });
 }
 
+let lastD3LabResult = null;
+
 function renderTools() {
+  const families = (window.BotDrawD3Lab && BotDrawD3Lab.FAMILIES) || [];
+  const familyOpts = families
+    .map((f) => `<option value="${f.id}">${f.name}</option>`)
+    .join("");
   controls.innerHTML = `
     <h3>Tools</h3>
-    <p class="muted">Audio / handwriting / plot stub / job reload.</p>
+    <p class="muted">Audio / handwriting / D3 Pattern Lab / plot stub / job reload.</p>
+
+    <h4>D3 Pattern Lab</h4>
+    <p class="muted">Live D3 preview → polylines → emulator. Full GenArt catalog also lists Python pattern engines.</p>
+    ${field("Family", `<select id="d3-family">${familyOpts}</select>`)}
+    ${field("Seed", `<input id="d3-seed" type="number" value="${state.seed}" />`)}
+    ${field("Density", `<input id="d3-density" type="number" step="0.1" min="0.3" max="2.5" value="${state.density}" />`)}
+    ${field("Paper", `<select id="paper"><option>A4</option><option>Letter</option><option>A3</option><option>A5</option><option>Card</option></select>`)}
+    ${field("Orientation", `<select id="orientation"><option value="portrait">portrait</option><option value="landscape">landscape</option></select>`)}
+    ${field("Palette", paletteSelectHtml())}
+    <div class="d3-lab-preview" id="d3-preview-wrap">
+      <svg id="d3-preview" xmlns="http://www.w3.org/2000/svg" aria-label="D3 pattern preview"></svg>
+    </div>
+    <div class="row">
+      <button id="d3-preview-btn">Preview</button>
+      <button class="primary" id="d3-send">Send to emulator</button>
+    </div>
+
+    <h4>Audio / handwriting</h4>
     ${field("Upload WAV", `<input id="wav" type="file" accept="audio/wav,audio/*" />`)}
     <div class="row"><button class="primary" id="audio">Audio → Vector</button></div>
     <div class="row"><button id="hw">Handwriting HELLO</button></div>
@@ -661,6 +685,78 @@ function renderTools() {
     <div class="row"><button id="load-job">Load job into lab</button></div>
     <div class="row"><button id="stub">AxiDraw stub on last/job</button></div>
   `;
+  const paper = controls.querySelector("#paper");
+  if (paper) paper.value = state.paper;
+  const orientation = controls.querySelector("#orientation");
+  if (orientation) orientation.value = state.orientation;
+
+  function syncToolsState() {
+    if (controls.querySelector("#paper")) state.paper = val("paper", state.paper);
+    if (controls.querySelector("#orientation")) state.orientation = val("orientation", state.orientation);
+    if (controls.querySelector("#palette")) selectedPaletteId = val("palette", selectedPaletteId);
+  }
+
+  function runD3Preview() {
+    if (!window.BotDrawD3Lab || !window.d3) {
+      statsEl.textContent = "D3 Pattern Lab failed to load";
+      return null;
+    }
+    syncToolsState();
+    const seed = Number(val("d3-seed", state.seed));
+    const density = Number(val("d3-density", state.density));
+    const family = val("d3-family", "voronoi");
+    const palette = currentPalette();
+    try {
+      lastD3LabResult = BotDrawD3Lab.generate({
+        family,
+        seed,
+        density,
+        paper: state.paper,
+        orientation: state.orientation,
+        palette,
+      });
+      BotDrawD3Lab.renderPreview(controls.querySelector("#d3-preview"), lastD3LabResult, palette);
+      const n = lastD3LabResult.passes.reduce((a, p) => a + p.polylines.length, 0);
+      statsEl.textContent = `D3 ${family} · ${n} strokes · seed ${seed}`;
+      return lastD3LabResult;
+    } catch (err) {
+      statsEl.textContent = `D3 preview error: ${err.message || err}`;
+      return null;
+    }
+  }
+
+  controls.querySelector("#d3-preview-btn").onclick = () => runD3Preview();
+  ["d3-family", "d3-seed", "d3-density", "paper", "orientation", "palette"].forEach((id) => {
+    const el = controls.querySelector(`#${id}`);
+    if (el) el.addEventListener("change", () => runD3Preview());
+  });
+  runD3Preview();
+
+  controls.querySelector("#d3-send").onclick = () =>
+    withBusy("#d3-send", async () => {
+      const result = lastD3LabResult || runD3Preview();
+      if (!result) return;
+      syncToolsState();
+      statsEl.textContent = "Sending D3 lab → pipeline…";
+      const data = await api("/api/render/polylines", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          app: "tools",
+          style_id: "d3_lab",
+          palette_id: selectedPaletteId,
+          paper: state.paper,
+          orientation: state.orientation,
+          quality: state.quality,
+          seed: Number(val("d3-seed", state.seed)),
+          density: Number(val("d3-density", state.density)),
+          params_extra: { family: result.family },
+          passes: result.passes,
+        }),
+      });
+      loadResult(data);
+    });
+
   controls.querySelector("#audio").onclick = () =>
     withBusy("#audio", async () => {
       const file = controls.querySelector("#wav").files[0];

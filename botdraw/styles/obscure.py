@@ -80,7 +80,7 @@ class _Hilbert:
 class _Truchet:
     id = "truchet"
     name = "Truchet Tiles"
-    category = "backlog"
+    category = "pattern"
     description = "Arc tile field from noise"
 
     def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
@@ -104,7 +104,7 @@ class _Truchet:
 class _Phyllotaxis:
     id = "phyllotaxis"
     name = "Phyllotaxis"
-    category = "backlog"
+    category = "pattern"
     description = "Sunflower packing dots"
 
     def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
@@ -133,7 +133,7 @@ class _Phyllotaxis:
 class _Mandala:
     id = "mandala"
     name = "Radial Mandala"
-    category = "backlog"
+    category = "pattern"
     description = "Radial burst sectors"
 
     def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
@@ -163,7 +163,7 @@ class _Mandala:
 class _StringArt:
     id = "stringart"
     name = "String Art"
-    category = "backlog"
+    category = "pattern"
     description = "Chord envelope around a circle"
 
     def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
@@ -188,7 +188,7 @@ class _StringArt:
 class _Seismograph:
     id = "seismograph"
     name = "Seismograph Rows"
-    category = "backlog"
+    category = "pattern"
     description = "Stacked waveforms from row scans"
 
     def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):

@@ -10,6 +10,28 @@ from botdraw.palettes import load_palette
 from botdraw.styles import ensure_styles_loaded, get_style, list_styles
 
 
+D3_PATTERN_IDS = {
+    "voronoi",
+    "delaunay",
+    "voronoi_stipple",
+    "hexbin",
+    "force_pack",
+    "poisson_disc",
+    "circle_pack",
+    "marching_squares",
+    "density_field",
+    "radial_burst",
+    "stream_ribbons",
+    "chord_arcs",
+    "lissajous",
+    "wave_interfere",
+    "grid_warp",
+    "treemap_stroke",
+    "symbol_stamp",
+    "radial_area",
+}
+
+
 def test_styles_registered():
     ensure_styles_loaded()
     ids = {s["id"] for s in list_styles()}
@@ -18,6 +40,11 @@ def test_styles_registered():
     assert "portrait_cubism" in ids
     assert "hilbert" in ids
     assert "mandelbrot" in ids
+    assert D3_PATTERN_IDS <= ids
+    pattern_ids = {s["id"] for s in list_styles(category="pattern")}
+    assert D3_PATTERN_IDS <= pattern_ids
+    assert {"truchet", "phyllotaxis", "mandala", "stringart", "seismograph"} <= pattern_ids
+    assert get_style("hilbert").category == "backlog"
     fractal_ids = {s["id"] for s in list_styles(category="fractal")}
     assert fractal_ids >= {
         "mandelbrot",
@@ -195,3 +222,92 @@ def test_motion_schema_file_exists():
     schema = Path(__file__).resolve().parents[1] / "botdraw" / "schemas" / "motion_plan.schema.json"
     data = json.loads(schema.read_text())
     assert data["properties"]["schema_version"]["const"] == "1.0.0"
+
+
+def test_d3_pattern_styles_render_nonempty():
+    ensure_styles_loaded()
+    palette = load_palette("default-6")
+    params = StyleParams(seed=42, quality=QualityPreset.BOOTH_FAST, density=0.6)
+    for style_id in ("voronoi", "marching_squares", "hexbin", "radial_burst", "lissajous"):
+        layered = get_style(style_id).render(
+            palette=palette, params=params, paper=PaperSize.A5
+        )
+        assert layered.meta.get("style") == style_id
+        assert layered.passes
+        assert sum(len(p.polylines) for p in layered.passes) >= 1
+        assert all(len(pl.points) >= 2 for p in layered.passes for pl in p.polylines)
+
+
+def test_d3_pattern_deterministic():
+    ensure_styles_loaded()
+    palette = load_palette("default-6")
+    params = StyleParams(seed=11, quality=QualityPreset.BOOTH_FAST, density=0.5)
+
+    def snap(layered):
+        return [
+            (p.pen_id, len(p.polylines), tuple(p.polylines[0].points[0]))
+            for p in layered.passes
+            if p.polylines
+        ]
+
+    a = get_style("voronoi").render(palette=palette, params=params, paper=PaperSize.A5)
+    b = get_style("voronoi").render(palette=palette, params=params, paper=PaperSize.A5)
+    assert snap(a) == snap(b)
+
+
+def test_render_from_polylines_api():
+    from fastapi.testclient import TestClient
+
+    from botdraw.api.main import app
+    from botdraw.core.pipeline import render_from_layered
+    from botdraw.core.models import LayeredSVG, PassLayer, Polyline
+
+    layered = LayeredSVG(
+        width_mm=148.0,
+        height_mm=210.0,
+        seed=3,
+        meta={"style": "d3_lab"},
+        passes=[
+            PassLayer(
+                id="p0",
+                name="Lab",
+                pen_id="black",
+                polylines=[Polyline(points=[(20.0, 20.0), (100.0, 40.0), (40.0, 160.0)], pen_id="black")],
+            )
+        ],
+    )
+    job, payload, layers = render_from_layered(
+        app="tools",
+        style_id="d3_lab",
+        layered=layered,
+        palette_id="default-6",
+        paper=PaperSize.A5,
+        seed=3,
+        quality=QualityPreset.BOOTH_FAST,
+    )
+    assert job.status.value == "ready"
+    assert layers["pass_count"] >= 1
+    assert payload["stats"]["stroke_count"] >= 1
+
+    client = TestClient(app)
+    res = client.post(
+        "/api/render/polylines",
+        json={
+            "app": "tools",
+            "style_id": "d3_lab",
+            "palette_id": "default-6",
+            "paper": "A5",
+            "seed": 9,
+            "quality": "booth-fast",
+            "passes": [
+                {
+                    "pen_id": "navy",
+                    "polylines": [[[15, 15], [120, 30], [30, 180]]],
+                }
+            ],
+        },
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["job"]["style_id"] == "d3_lab"
+    assert body["layers"]["pass_count"] >= 1
