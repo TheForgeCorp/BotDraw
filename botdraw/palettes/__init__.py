@@ -37,6 +37,21 @@ def save_palette(palette: PaletteSet) -> Path:
     return path
 
 
+def is_preset_palette(palette_id: str) -> bool:
+    return (PRESET_DIR / f"{palette_id}.json").exists()
+
+
+def delete_palette(palette_id: str) -> None:
+    """Delete a user palette. Presets are protected."""
+    preset = PRESET_DIR / f"{palette_id}.json"
+    user = USER_DIR / f"{palette_id}.json"
+    if preset.exists() and not user.exists():
+        raise PermissionError(f"Cannot delete preset palette: {palette_id}")
+    if not user.exists():
+        raise FileNotFoundError(f"Palette not found: {palette_id}")
+    user.unlink()
+
+
 def create_palette(
     palette_id: str,
     name: str,
