@@ -1,9 +1,8 @@
-# Wireframes
-
-Low-fidelity HTML plans before styled mockups.
+# Wireframes & mockups
 
 | File | Purpose |
 |------|---------|
-| [portraitbot-phase-b.html](portraitbot-phase-b.html) | PortraitBot Phase B — Source \| Ingest (gate) \| Vector; ShadeField dual channel |
+| [portraitbot-phase-b.html](portraitbot-phase-b.html) | Low-fi wireframe plan |
+| [portraitbot-phase-b-mockup.html](portraitbot-phase-b-mockup.html) | DESIGN.md Operate mockup (interactive stages, gate, channels) |
 
-Open the HTML file in a browser. Next step: DESIGN.md-token mockup (still Operate Dev Lab).
+Open in a browser. Mockup is static (not API-wired).
