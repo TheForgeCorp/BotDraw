@@ -423,6 +423,15 @@ button.loading::after {
   margin-top: 3px;
 }
 
+.text-status {
+  margin: 8px 0 0;
+  min-height: 1.2em;
+  font-size: 11px;
+}
+.text-status.error {
+  color: #b42318;
+}
+
 .stage-canvas { position: relative; }
 
 .text-drag-handle {

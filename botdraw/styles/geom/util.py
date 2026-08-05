@@ -52,42 +52,46 @@ def mark_polylines(
     """
     Return list of (points, closed) glyphs centered at (cx, cy).
 
-    `size` is characteristic radius in the same units as cx/cy.
+    `size` is the full outer extent in the same units as cx/cy:
+    circle diameter, square side, diamond/triangle bounding box,
+    star outer diameter, cross arm length.
     Cross yields two open strokes (H + V); other kinds one closed outline.
     """
     s = max(0.05, float(size))
+    half = s * 0.5
     k = (kind or "circle").lower().strip()
     if k not in MARK_KINDS:
         k = "circle"
 
     if k == "circle":
-        return [(circle_points(cx, cy, s, n=20, closed=True), True)]
+        return [(circle_points(cx, cy, half, n=20, closed=True), True)]
 
     if k == "square":
-        return [(rect_outline(cx - s * 0.75, cy - s * 0.75, cx + s * 0.75, cy + s * 0.75), True)]
+        return [(rect_outline(cx - half, cy - half, cx + half, cy + half), True)]
 
     if k == "diamond":
         return [
             (
                 [
-                    (cx, cy - s),
-                    (cx + s, cy),
-                    (cx, cy + s),
-                    (cx - s, cy),
-                    (cx, cy - s),
+                    (cx, cy - half),
+                    (cx + half, cy),
+                    (cx, cy + half),
+                    (cx - half, cy),
+                    (cx, cy - half),
                 ],
                 True,
             )
         ]
 
     if k == "triangle":
+        # Equilateral-ish triangle with bounding width/height ≈ size
         return [
             (
                 [
-                    (cx, cy - s),
-                    (cx + s * 0.866, cy + s * 0.5),
-                    (cx - s * 0.866, cy + s * 0.5),
-                    (cx, cy - s),
+                    (cx, cy - half),
+                    (cx + half * 0.866, cy + half * 0.5),
+                    (cx - half * 0.866, cy + half * 0.5),
+                    (cx, cy - half),
                 ],
                 True,
             )
@@ -95,7 +99,7 @@ def mark_polylines(
 
     if k == "star":
         pts: list[tuple[float, float]] = []
-        outer, inner = s, s * 0.45
+        outer, inner = half, half * 0.45
         for i in range(10):
             r = outer if i % 2 == 0 else inner
             ang = -math.pi / 2 + i * math.pi / 5
@@ -103,10 +107,10 @@ def mark_polylines(
         pts.append(pts[0])
         return [(pts, True)]
 
-    # cross — two separate strokes, no retrace
+    # cross — two separate strokes, no retrace; arm length = size
     return [
-        ([(cx - s, cy), (cx + s, cy)], False),
-        ([(cx, cy - s), (cx, cy + s)], False),
+        ([(cx - half, cy), (cx + half, cy)], False),
+        ([(cx, cy - half), (cx, cy + half)], False),
     ]
 
 

@@ -102,17 +102,27 @@ if (loupeBtn) {
 const pageTextState = {
   lines: ["", "", ""],
   size_mm: 5,
-  x_mm: 24,
-  y_mm: 240,
+  x_mm: 12,
+  y_mm: 14,
   pen_id: "black",
   pass_id: "page-text",
   active: false,
 };
 
+function setTextStatus(msg, { error = false } = {}) {
+  const el = document.getElementById("text-status");
+  if (!el) return;
+  el.textContent = msg || "";
+  el.classList.toggle("error", !!error && !!msg);
+}
+
 function refreshTextPenSelect() {
   const sel = document.getElementById("text-pen");
   if (!sel) return;
-  const palette = currentPalette();
+  const jobPalId = lastJob?.palette_id;
+  const palette =
+    (jobPalId && palettes.find((p) => p.id === jobPalId)) ||
+    currentPalette();
   const pens = (palette?.pens || []).filter((p) => (p.profile?.nib_type || "") !== "highlighter");
   sel.innerHTML = pens
     .map((p) => `<option value="${p.id}" ${p.id === pageTextState.pen_id ? "selected" : ""}>${p.id}</option>`)
@@ -149,15 +159,15 @@ function positionTextHandle() {
 
 async function applyPageText({ clear = false } = {}) {
   if (!lastJob?.id) {
-    statsEl.textContent = "Render a job before adding text";
+    setTextStatus("Render a job before adding text", { error: true });
     return;
   }
   readPageTextForm();
   if (!clear && !pageTextState.lines.some((l) => l.trim())) {
-    statsEl.textContent = "Enter at least one text line";
+    setTextStatus("Enter at least one text line", { error: true });
     return;
   }
-  statsEl.textContent = clear ? "Clearing page text…" : "Adding page text…";
+  setTextStatus(clear ? "Clearing page text…" : "Adding page text…");
   const data = await api(`/api/jobs/${lastJob.id}/overlay-text`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -171,21 +181,32 @@ async function applyPageText({ clear = false } = {}) {
       clear,
     }),
   });
+  const hasPass = !!(data.layers?.passes || []).some((p) => p.id === pageTextState.pass_id);
+  if (!clear && data.page_text && !hasPass) {
+    setTextStatus("No strokes generated — try different text or pen", { error: true });
+    return;
+  }
   loadResult(data);
-  pageTextState.active = !clear && !!data.page_text;
+  pageTextState.active = !clear && hasPass;
   if (data.page_text) {
     pageTextState.x_mm = data.page_text.x_mm;
     pageTextState.y_mm = data.page_text.y_mm;
   }
   positionTextHandle();
+  if (!clear && hasPass) {
+    player.skipEnd();
+    setTextStatus("Page text added — drag the handle to move");
+  } else if (clear) {
+    setTextStatus("Page text cleared");
+  }
 }
 
 function bindPageTextPanel() {
   refreshTextPenSelect();
   const addBtn = document.getElementById("text-add");
   const clearBtn = document.getElementById("text-clear");
-  if (addBtn) addBtn.onclick = () => withBusy("#text-add", () => applyPageText());
-  if (clearBtn) clearBtn.onclick = () => withBusy("#text-clear", () => applyPageText({ clear: true }));
+  if (addBtn) addBtn.onclick = () => withBusy(addBtn, () => applyPageText());
+  if (clearBtn) clearBtn.onclick = () => withBusy(clearBtn, () => applyPageText({ clear: true }));
 
   if (textDragHandle && !textDragHandle._bound) {
     textDragHandle._bound = true;
@@ -210,7 +231,12 @@ function bindPageTextPanel() {
       try {
         textDragHandle.releasePointerCapture(e.pointerId);
       } catch (_) {}
-      await applyPageText();
+      try {
+        await applyPageText();
+      } catch (err) {
+        setTextStatus(String(err.message || err), { error: true });
+        console.error(err);
+      }
     });
   }
   player._textDragHit = (e) => {
@@ -275,7 +301,10 @@ async function api(path, opts) {
 }
 
 async function withBusy(btn, fn) {
-  const b = typeof btn === "string" ? controls.querySelector(btn) : btn;
+  const b =
+    typeof btn === "string"
+      ? controls.querySelector(btn) || document.querySelector(btn)
+      : btn;
   if (b) {
     b.classList.add("loading");
     b.disabled = true;
@@ -283,7 +312,9 @@ async function withBusy(btn, fn) {
   try {
     return await fn();
   } catch (e) {
-    statsEl.textContent = String(e.message || e);
+    const msg = String(e.message || e);
+    statsEl.textContent = msg;
+    setTextStatus(msg, { error: true });
     console.error(e);
   } finally {
     if (b) {
@@ -394,11 +425,9 @@ function loadResult(data) {
     }
   } else if (!lastLayers?.passes?.some((p) => p.id === pageTextState.pass_id)) {
     pageTextState.active = false;
-    const w = lastPayload?.width_mm || 210;
-    const h = lastPayload?.height_mm || 297;
-    // Centered lower third of the current paper
-    pageTextState.x_mm = w * 0.18;
-    pageTextState.y_mm = h * 0.72;
+    // Top margin — outside centered sunflower / dense motifs
+    pageTextState.x_mm = 12;
+    pageTextState.y_mm = 14;
   }
   refreshTextPenSelect();
   positionTextHandle();
@@ -629,7 +658,7 @@ function renderFractal() {
 }
 
 const designKnobState = {
-  phyllotaxis: { n_points: 900, angle_deg: 137.5, mark: "circle", mark_size_mm: 2.5 },
+  phyllotaxis: { n_points: 220, angle_deg: 137.5, mark: "circle", mark_size_mm: 2.5 },
   modular_chords: { n_points: 200, k: 77 },
   prime_sieve: { max_n: 212, grid_cols: 6, show_arcs: true, show_sieve: true },
   rule30: { cols: 120, rows: 90, rule: 30 },
@@ -685,7 +714,7 @@ function designLibraryKnobsHtml() {
       .join("");
     return `
       <h4>Sunflower</h4>
-      <p class="muted">r = c√n · θ = n × angle — Points sets count; Mark size is absolute mm.</p>
+      <p class="muted">r = c√n · θ = n × angle — Mark size is outer mm (square side / circle diameter). Raise Points only for denser packing.</p>
       <div class="grid-2">
         ${field("Points", `<input id="phy-points" type="number" min="50" max="4000" value="${k.n_points}" />`)}
         ${field("Angle °", `<input id="phy-angle" type="number" min="1" max="179" step="0.1" value="${k.angle_deg}" />`)}

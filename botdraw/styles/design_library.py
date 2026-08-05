@@ -158,7 +158,7 @@ class _Rule30:
 
 
 def phyllotaxis_points(
-    n_points: int = 900,
+    n_points: int = 220,
     *,
     angle_deg: float = GOLDEN_ANGLE_DEG,
     scale: float = 1.0,
@@ -196,13 +196,13 @@ class _Phyllotaxis:
     ):
         del image_path, image_array
         extra = params.extra or {}
-        # Points knob is authoritative; mark_size_mm owns glyph size (mm)
+        # Points knob is authoritative; mark_size_mm owns outer glyph size (mm)
         if "n_points" in extra and extra["n_points"] is not None:
-            n_points = _extra_int(extra, "n_points", 900, lo=50, hi=4000)
+            n_points = _extra_int(extra, "n_points", 220, lo=50, hi=4000)
         elif "points" in extra and extra["points"] is not None:
-            n_points = _extra_int(extra, "points", 900, lo=50, hi=4000)
+            n_points = _extra_int(extra, "points", 220, lo=50, hi=4000)
         else:
-            n_points = 900
+            n_points = 220
         angle_deg = _extra_float(extra, "angle_deg", GOLDEN_ANGLE_DEG, lo=1.0, hi=179.0)
         mark = str(extra.get("mark") or "circle").lower().strip()
         if mark not in MARK_KINDS:
