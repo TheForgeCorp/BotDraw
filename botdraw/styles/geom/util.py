@@ -125,6 +125,203 @@ def mark_polyline(
     return strokes[0][0] if strokes else []
 
 
+LINE_TYPES = ("solid", "dashed", "dotted", "dash_dot", "double")
+# Keep dash gaps above linemerge_pass tol (0.2 mm) so dashes are not re-joined.
+_MIN_DASH_GAP_MM = 0.25
+
+
+def _polyline_length(points: Sequence[tuple[float, float]]) -> float:
+    total = 0.0
+    for a, b in zip(points, points[1:]):
+        total += math.hypot(b[0] - a[0], b[1] - a[1])
+    return total
+
+
+def _point_at_arclength(
+    points: Sequence[tuple[float, float]], dist: float
+) -> tuple[float, float] | None:
+    if len(points) < 2:
+        return None
+    remaining = max(0.0, float(dist))
+    for a, b in zip(points, points[1:]):
+        seg = math.hypot(b[0] - a[0], b[1] - a[1])
+        if seg < 1e-12:
+            continue
+        if remaining <= seg:
+            t = remaining / seg
+            return (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)
+        remaining -= seg
+    return points[-1]
+
+
+def _subpath_between(
+    points: Sequence[tuple[float, float]], d0: float, d1: float
+) -> list[tuple[float, float]]:
+    """Extract a sub-polyline from arc-length d0 to d1 along points."""
+    if len(points) < 2 or d1 <= d0 + 1e-9:
+        return []
+    out: list[tuple[float, float]] = []
+    traveled = 0.0
+    started = False
+    for a, b in zip(points, points[1:]):
+        seg = math.hypot(b[0] - a[0], b[1] - a[1])
+        if seg < 1e-12:
+            continue
+        seg_end = traveled + seg
+        if seg_end < d0 - 1e-12:
+            traveled = seg_end
+            continue
+        if not started:
+            t0 = max(0.0, (d0 - traveled) / seg)
+            p0 = (a[0] + (b[0] - a[0]) * t0, a[1] + (b[1] - a[1]) * t0)
+            out.append(p0)
+            started = True
+        if seg_end >= d1 - 1e-12:
+            t1 = max(0.0, min(1.0, (d1 - traveled) / seg))
+            p1 = (a[0] + (b[0] - a[0]) * t1, a[1] + (b[1] - a[1]) * t1)
+            if not out or abs(out[-1][0] - p1[0]) > 1e-9 or abs(out[-1][1] - p1[1]) > 1e-9:
+                out.append(p1)
+            break
+        if not out or abs(out[-1][0] - b[0]) > 1e-9 or abs(out[-1][1] - b[1]) > 1e-9:
+            out.append(b)
+        traveled = seg_end
+    return out if len(out) >= 2 else []
+
+
+def _tangent_at(points: Sequence[tuple[float, float]], dist: float) -> tuple[float, float]:
+    if len(points) < 2:
+        return (1.0, 0.0)
+    remaining = max(0.0, float(dist))
+    for a, b in zip(points, points[1:]):
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        seg = math.hypot(dx, dy)
+        if seg < 1e-12:
+            continue
+        if remaining <= seg:
+            return (dx / seg, dy / seg)
+        remaining -= seg
+    a, b = points[-2], points[-1]
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    seg = math.hypot(dx, dy) or 1.0
+    return (dx / seg, dy / seg)
+
+
+def _offset_polyline(
+    points: Sequence[tuple[float, float]], offset_mm: float
+) -> list[tuple[float, float]]:
+    """Simple per-vertex normal offset (open or closed)."""
+    n = len(points)
+    if n < 2:
+        return list(points)
+    closed = (
+        n >= 3
+        and abs(points[0][0] - points[-1][0]) < 1e-9
+        and abs(points[0][1] - points[-1][1]) < 1e-9
+    )
+    core = points[:-1] if closed else points
+    m = len(core)
+    out: list[tuple[float, float]] = []
+    for i in range(m):
+        prev_pt = core[(i - 1) % m] if closed else core[max(0, i - 1)]
+        next_pt = core[(i + 1) % m] if closed else core[min(m - 1, i + 1)]
+        if not closed and i == 0:
+            prev_pt = core[0]
+            next_pt = core[1]
+        elif not closed and i == m - 1:
+            prev_pt = core[m - 2]
+            next_pt = core[m - 1]
+        dx, dy = next_pt[0] - prev_pt[0], next_pt[1] - prev_pt[1]
+        length = math.hypot(dx, dy) or 1.0
+        nx, ny = -dy / length, dx / length
+        out.append((core[i][0] + nx * offset_mm, core[i][1] + ny * offset_mm))
+    if closed and out:
+        out.append(out[0])
+    return out
+
+
+def stroke_linetype(
+    points: Sequence[tuple[float, float]],
+    *,
+    linetype: str = "solid",
+    density: float = 1.0,
+    pattern_width_mm: float = 2.0,
+    closed: bool = False,
+) -> list[tuple[list[tuple[float, float]], bool]]:
+    """
+    Expand a path into plotter-safe polylines for the given linetype.
+
+    Returns list of (points, closed). Gaps between dashes exceed linemerge tol.
+    `density` higher → tighter repeats; `pattern_width_mm` is dash/dot length
+    or double-line separation.
+    """
+    pts = list(points)
+    if closed and len(pts) >= 2:
+        if abs(pts[0][0] - pts[-1][0]) > 1e-9 or abs(pts[0][1] - pts[-1][1]) > 1e-9:
+            pts = pts + [pts[0]]
+    if len(pts) < 2:
+        return []
+
+    lt = (linetype or "solid").lower().strip().replace("-", "_")
+    if lt not in LINE_TYPES:
+        lt = "solid"
+    dens = max(0.4, min(2.5, float(density)))
+    width = max(0.5, min(8.0, float(pattern_width_mm)))
+    total = _polyline_length(pts)
+
+    if lt == "solid" or total < width * 0.35:
+        return [(pts, bool(closed))]
+
+    if lt == "double":
+        sep = width * 0.5
+        a = _offset_polyline(pts, sep)
+        b = _offset_polyline(pts, -sep)
+        out: list[tuple[list[tuple[float, float]], bool]] = []
+        if len(a) >= 2:
+            out.append((a, bool(closed)))
+        if len(b) >= 2:
+            out.append((b, bool(closed)))
+        return out or [(pts, bool(closed))]
+
+    gap = max(_MIN_DASH_GAP_MM, width / dens)
+    strokes: list[tuple[list[tuple[float, float]], bool]] = []
+
+    if lt == "dotted":
+        spacing = max(_MIN_DASH_GAP_MM + width * 0.35, width / dens)
+        tick = max(0.35, min(width, width * 0.45))
+        d = 0.0
+        while d <= total + 1e-9:
+            p = _point_at_arclength(pts, d)
+            tx, ty = _tangent_at(pts, d)
+            if p is not None:
+                hx, hy = -ty * tick * 0.5, tx * tick * 0.5
+                strokes.append(([(p[0] - hx, p[1] - hy), (p[0] + hx, p[1] + hy)], False))
+            d += spacing
+        return strokes or [(pts, False)]
+
+    # dashed / dash_dot — walk on/off along arc length
+    pattern: list[tuple[bool, float]]
+    if lt == "dash_dot":
+        dot_len = max(0.35, width * 0.25)
+        pattern = [(True, width), (False, gap), (True, dot_len), (False, gap)]
+    else:
+        pattern = [(True, width), (False, gap)]
+
+    d = 0.0
+    pi = 0
+    while d < total - 1e-9:
+        on, seg_len = pattern[pi % len(pattern)]
+        pi += 1
+        d1 = min(total, d + seg_len)
+        if on:
+            run = _subpath_between(pts, d, d1)
+            if len(run) >= 2:
+                strokes.append((run, False))
+        d = d1
+        if seg_len < 1e-9:
+            break
+    return strokes or [(pts, False)]
+
+
 def hatch_rect(
     x0: float, y0: float, x1: float, y1: float, spacing: float
 ) -> list[list[tuple[float, float]]]:

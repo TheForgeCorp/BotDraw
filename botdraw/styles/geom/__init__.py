@@ -8,6 +8,7 @@ from botdraw.styles.geom.sampling import (
     weighted_sites,
 )
 from botdraw.styles.geom.util import (
+    LINE_TYPES,
     MARK_KINDS,
     budget_take,
     circle_points,
@@ -19,9 +20,11 @@ from botdraw.styles.geom.util import (
     mark_polylines,
     rect_outline,
     sample_polyline,
+    stroke_linetype,
 )
 
 __all__ = [
+    "LINE_TYPES",
     "MARK_KINDS",
     "budget_take",
     "circle_points",
@@ -38,6 +41,7 @@ __all__ = [
     "rect_outline",
     "rng_from_seed",
     "sample_polyline",
+    "stroke_linetype",
     "voronoi_cells",
     "weighted_sites",
 ]

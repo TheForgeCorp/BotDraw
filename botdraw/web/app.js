@@ -657,12 +657,53 @@ function renderFractal() {
     withBusy("#go", () => renderWithSettings({ appName: "fractalbot", busyText: "Rendering fractal…" }));
 }
 
+const LINE_TYPE_DEFAULTS = {
+  linetype: "solid",
+  line_density: 1.0,
+  line_pattern_width_mm: 2.0,
+};
+
 const designKnobState = {
   phyllotaxis: { n_points: 220, angle_deg: 137.5, mark: "square", mark_size_mm: 2.5 },
-  modular_chords: { n_points: 200, k: 77 },
-  prime_sieve: { max_n: 212, grid_cols: 6, show_arcs: true, show_sieve: true },
-  rule30: { cols: 120, rows: 90, rule: 30 },
+  modular_chords: { n_points: 200, k: 77, ...LINE_TYPE_DEFAULTS },
+  prime_sieve: {
+    max_n: 212,
+    grid_cols: 6,
+    show_arcs: true,
+    show_sieve: true,
+    mark_size_mm: 2.5,
+    ...LINE_TYPE_DEFAULTS,
+  },
+  rule30: { cols: 120, rows: 90, rule: 30, ...LINE_TYPE_DEFAULTS },
 };
+
+function readLineTypeKnobs(prefix, fallback) {
+  return {
+    linetype: controls.querySelector(`#${prefix}-linetype`)?.value || fallback.linetype || "solid",
+    line_density: Number(
+      controls.querySelector(`#${prefix}-line-density`)?.value ?? fallback.line_density ?? 1.0
+    ),
+    line_pattern_width_mm: Number(
+      controls.querySelector(`#${prefix}-line-width`)?.value ?? fallback.line_pattern_width_mm ?? 2.0
+    ),
+  };
+}
+
+function lineKnobsHtml(prefix, state) {
+  const types = ["solid", "dashed", "dotted", "dash_dot", "double"];
+  const opts = types
+    .map((t) => `<option value="${t}" ${t === state.linetype ? "selected" : ""}>${t}</option>`)
+    .join("");
+  return `
+    <h4>Line style</h4>
+    <p class="muted">Plotter-safe linetypes — density tightens repeats; width is dash/dot length or double separation (mm).</p>
+    ${field("Linetype", `<select id="${prefix}-linetype">${opts}</select>`)}
+    <div class="grid-2">
+      ${field("Pattern density", `<input id="${prefix}-line-density" type="number" min="0.4" max="2.5" step="0.1" value="${state.line_density}" />`)}
+      ${field("Pattern width mm", `<input id="${prefix}-line-width" type="number" min="0.5" max="8" step="0.1" value="${state.line_pattern_width_mm}" />`)}
+    </div>
+  `;
+}
 
 function syncDesignKnobState() {
   if (selectedStyle === "phyllotaxis") {
@@ -678,6 +719,7 @@ function syncDesignKnobState() {
     designKnobState.modular_chords = {
       n_points: Number(controls.querySelector("#mod-n")?.value ?? designKnobState.modular_chords.n_points),
       k: Number(controls.querySelector("#mod-k")?.value ?? designKnobState.modular_chords.k),
+      ...readLineTypeKnobs("mod", designKnobState.modular_chords),
     };
     return;
   }
@@ -687,6 +729,10 @@ function syncDesignKnobState() {
       grid_cols: Number(controls.querySelector("#sieve-cols")?.value ?? designKnobState.prime_sieve.grid_cols),
       show_arcs: !!controls.querySelector("#sieve-arcs")?.checked,
       show_sieve: !!controls.querySelector("#sieve-grid")?.checked,
+      mark_size_mm: Number(
+        controls.querySelector("#sieve-mark-size")?.value ?? designKnobState.prime_sieve.mark_size_mm
+      ),
+      ...readLineTypeKnobs("sieve", designKnobState.prime_sieve),
     };
     return;
   }
@@ -694,6 +740,7 @@ function syncDesignKnobState() {
     cols: Number(controls.querySelector("#ca-cols")?.value ?? designKnobState.rule30.cols),
     rows: Number(controls.querySelector("#ca-rows")?.value ?? designKnobState.rule30.rows),
     rule: Number(controls.querySelector("#ca-rule")?.value ?? designKnobState.rule30.rule),
+    ...readLineTypeKnobs("ca", designKnobState.rule30),
   };
 }
 
@@ -729,11 +776,12 @@ function designLibraryKnobsHtml() {
     const k = designKnobState.modular_chords;
     return `
       <h4>Circle steps</h4>
-      <p class="muted">i → (i + k) mod N — petals from periodicity, dense ring from chord interference.</p>
+      <p class="muted">i → (i + k) mod N — petals from periodicity, dense ring from chord interference. N is authoritative.</p>
       <div class="grid-2">
         ${field("N points", `<input id="mod-n" type="number" min="12" max="2000" value="${k.n_points}" />`)}
         ${field("Step k", `<input id="mod-k" type="number" min="1" max="1999" value="${k.k}" />`)}
       </div>
+      ${lineKnobsHtml("mod", k)}
     `;
   }
   if (selectedStyle === "prime_sieve") {
@@ -745,20 +793,26 @@ function designLibraryKnobsHtml() {
         ${field("Max n", `<input id="sieve-n" type="number" min="10" max="2000" value="${k.max_n}" />`)}
         ${field("Grid cols", `<input id="sieve-cols" type="number" min="2" max="20" value="${k.grid_cols}" />`)}
       </div>
+      <div class="grid-2">
+        ${field("Mark size mm", `<input id="sieve-mark-size" type="number" min="1" max="8" step="0.1" value="${k.mark_size_mm}" />`)}
+      </div>
       <div class="chk-row">
         <label><input id="sieve-arcs" type="checkbox" ${k.show_arcs ? "checked" : ""} /> Arc spire</label>
         <label><input id="sieve-grid" type="checkbox" ${k.show_sieve ? "checked" : ""} /> Sieve grid</label>
       </div>
+      ${lineKnobsHtml("sieve", k)}
     `;
   }
   const k = designKnobState.rule30;
   return `
     <h4>Automaton</h4>
+    <p class="muted">Cols/rows are authoritative cell counts — live cells become horizontal strokes.</p>
     <div class="grid-2">
       ${field("Cols", `<input id="ca-cols" type="number" min="16" max="400" value="${k.cols}" />`)}
       ${field("Rows", `<input id="ca-rows" type="number" min="12" max="300" value="${k.rows}" />`)}
     </div>
     ${field("Rule", `<input id="ca-rule" type="number" min="0" max="255" value="${k.rule}" />`)}
+    ${lineKnobsHtml("ca", k)}
   `;
 }
 

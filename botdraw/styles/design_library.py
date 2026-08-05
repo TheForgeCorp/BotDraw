@@ -10,7 +10,7 @@ from botdraw.core.models import LayeredSVG, Orientation, PaperSize, Polyline, St
 from botdraw.core.svg import make_pass
 from botdraw.palettes import ink_pens
 from botdraw.styles import page_size, register
-from botdraw.styles.geom import MARK_KINDS, mark_polylines
+from botdraw.styles.geom import LINE_TYPES, MARK_KINDS, mark_polylines, stroke_linetype
 
 # Golden angle (degrees) — most irrational rotation; Fibonacci spiral families
 GOLDEN_ANGLE_DEG = 137.5
@@ -40,6 +40,46 @@ def _extra_float(
     if hi is not None:
         val = min(hi, val)
     return val
+
+
+def _parse_linetype(extra: dict) -> tuple[str, float, float]:
+    """Return (linetype, line_density, line_pattern_width_mm)."""
+    lt = str(extra.get("linetype") or "solid").lower().strip().replace("-", "_")
+    if lt not in LINE_TYPES:
+        lt = "solid"
+    dens = _extra_float(extra, "line_density", 1.0, lo=0.4, hi=2.5)
+    width = _extra_float(extra, "line_pattern_width_mm", 2.0, lo=0.5, hi=8.0)
+    return lt, dens, width
+
+
+def _apply_linetype(
+    pen_id: str,
+    raw_paths: list[tuple[list[tuple[float, float]], bool]],
+    *,
+    linetype: str,
+    line_density: float,
+    line_pattern_width_mm: float,
+) -> list[Polyline]:
+    polys: list[Polyline] = []
+    for pts, closed in raw_paths:
+        for stroke_pts, stroke_closed in stroke_linetype(
+            pts,
+            linetype=linetype,
+            density=line_density,
+            pattern_width_mm=line_pattern_width_mm,
+            closed=closed,
+        ):
+            if len(stroke_pts) >= 2:
+                polys.append(Polyline(points=stroke_pts, pen_id=pen_id, closed=stroke_closed))
+    return polys
+
+
+def _linetype_meta(linetype: str, line_density: float, line_pattern_width_mm: float) -> dict:
+    return {
+        "linetype": linetype,
+        "line_density": line_density,
+        "line_pattern_width_mm": line_pattern_width_mm,
+    }
 
 
 def evolve_cellular_automaton(
@@ -93,17 +133,13 @@ class _Rule30:
     ):
         del image_path, image_array
         extra = params.extra or {}
-        base_cols = int(extra.get("cols") or 120)
-        base_rows = int(extra.get("rows") or 90)
-        rule = int(extra.get("rule") or 30) & 0xFF
+        cols = _extra_int(extra, "cols", 120, lo=16, hi=400)
+        rows = _extra_int(extra, "rows", 90, lo=12, hi=300)
+        rule = _extra_int(extra, "rule", 30, lo=0, hi=255) & 0xFF
         seed_col = extra.get("seed_col")
         if seed_col is not None:
             seed_col = int(seed_col)
-
-        # Density lightly scales resolution (keeps classic look near density=1)
-        dens = max(0.5, float(params.density or 1.0))
-        cols = max(16, int(round(base_cols * dens)))
-        rows = max(12, int(round(base_rows * dens)))
+        linetype, line_density, line_pattern_width_mm = _parse_linetype(extra)
 
         grid = evolve_cellular_automaton(cols, rows, rule=rule, seed_col=seed_col)
 
@@ -117,7 +153,7 @@ class _Rule30:
         origin_x = margin + (usable_w - cell * cols) / 2
         origin_y = margin + (usable_h - cell * rows) / 2
 
-        polys: list[Polyline] = []
+        raw_paths: list[tuple[list[tuple[float, float]], bool]] = []
         for y in range(rows):
             row = grid[y]
             run = None
@@ -130,13 +166,21 @@ class _Rule30:
                     x1 = origin_x + x * cell
                     yy = origin_y + (y + 0.5) * cell
                     if x1 - x0 >= cell * 0.25:
-                        polys.append(Polyline(points=[(x0, yy), (x1, yy)], pen_id=pen.id))
+                        raw_paths.append(([(x0, yy), (x1, yy)], False))
                     run = None
             if run is not None:
                 x0 = origin_x + run * cell
                 x1 = origin_x + cols * cell
                 yy = origin_y + (y + 0.5) * cell
-                polys.append(Polyline(points=[(x0, yy), (x1, yy)], pen_id=pen.id))
+                raw_paths.append(([(x0, yy), (x1, yy)], False))
+
+        polys = _apply_linetype(
+            pen.id,
+            raw_paths,
+            linetype=linetype,
+            line_density=line_density,
+            line_pattern_width_mm=line_pattern_width_mm,
+        )
 
         return LayeredSVG(
             width_mm=pw,
@@ -153,6 +197,7 @@ class _Rule30:
                 "seed_col": int(seed_col) if seed_col is not None else cols // 2,
                 "live_cells": int(grid.sum()),
                 "strokes": len(polys),
+                **_linetype_meta(linetype, line_density, line_pattern_width_mm),
             },
         )
 
@@ -301,13 +346,14 @@ class _ModularChords:
     ):
         del image_path, image_array
         extra = params.extra or {}
-        base_n = int(extra.get("n_points") or extra.get("n") or 200)
-        base_k = int(extra.get("k") or extra.get("step") or 77)
-        dens = max(0.5, float(params.density or 1.0))
-        n = max(12, int(round(base_n * dens)))
-        k = max(1, int(base_k) % n)
+        n = _extra_int(extra, "n_points", 200, lo=12, hi=2000)
+        if "n_points" not in extra and extra.get("n") is not None:
+            n = _extra_int(extra, "n", 200, lo=12, hi=2000)
+        k_raw = extra.get("k") if extra.get("k") is not None else extra.get("step", 77)
+        k = max(1, int(k_raw) % n)
         if k == 0:
             k = 1
+        linetype, line_density, line_pattern_width_mm = _parse_linetype(extra)
 
         edges = modular_chord_edges(n, k)
         angles = [2 * math.pi * i / n for i in range(n)]
@@ -322,7 +368,14 @@ class _ModularChords:
             a = angles[i]
             return (cx + radius * math.cos(a), cy + radius * math.sin(a))
 
-        polys = [Polyline(points=[pt(a), pt(b)], pen_id=pen.id) for a, b in edges]
+        raw_paths = [([pt(a), pt(b)], False) for a, b in edges]
+        polys = _apply_linetype(
+            pen.id,
+            raw_paths,
+            linetype=linetype,
+            line_density=line_density,
+            line_pattern_width_mm=line_pattern_width_mm,
+        )
 
         return LayeredSVG(
             width_mm=pw,
@@ -337,6 +390,7 @@ class _ModularChords:
                 "k": k,
                 "equation": "i → (i + k) mod N",
                 "strokes": len(polys),
+                **_linetype_meta(linetype, line_density, line_pattern_width_mm),
             },
         )
 
@@ -394,18 +448,20 @@ class _PrimeSieve:
     ):
         del image_path, image_array
         extra = params.extra or {}
-        base_n = int(extra.get("max_n") or extra.get("n") or 212)
-        grid_cols = int(extra.get("grid_cols") or extra.get("cols") or 6)
+        n = _extra_int(extra, "max_n", 212, lo=10, hi=2000)
+        if "max_n" not in extra and extra.get("n") is not None:
+            n = _extra_int(extra, "n", 212, lo=10, hi=2000)
+        grid_cols = _extra_int(extra, "grid_cols", 6, lo=2, hi=20)
+        if "grid_cols" not in extra and extra.get("cols") is not None:
+            grid_cols = _extra_int(extra, "cols", 6, lo=2, hi=20)
         show_arcs = extra.get("show_arcs", True)
         show_sieve = extra.get("show_sieve", True)
         if isinstance(show_arcs, str):
             show_arcs = show_arcs.lower() not in ("0", "false", "no")
         if isinstance(show_sieve, str):
             show_sieve = show_sieve.lower() not in ("0", "false", "no")
-
-        dens = max(0.5, float(params.density or 1.0))
-        n = max(10, int(round(base_n * dens)))
-        grid_cols = max(2, min(20, grid_cols))
+        linetype, line_density, line_pattern_width_mm = _parse_linetype(extra)
+        mark_size_mm = _extra_float(extra, "mark_size_mm", 2.5, lo=1.0, hi=8.0)
 
         is_prime, primes = sieve_of_eratosthenes(n)
         pw, ph = page_size(paper, orientation)
@@ -433,8 +489,9 @@ class _PrimeSieve:
             right_x0 = margin
 
         passes: list = []
-        arc_polys: list[Polyline] = []
-        sieve_polys: list[Polyline] = []
+        arc_paths: list[tuple[list[tuple[float, float]], bool]] = []
+        sieve_line_paths: list[tuple[list[tuple[float, float]], bool]] = []
+        sieve_mark_polys: list[Polyline] = []
 
         # —— Left: number line + continuous woven arc spire ——
         if show_arcs and primes:
@@ -445,41 +502,28 @@ class _PrimeSieve:
             def map_n(v: float) -> float:
                 return x_lo + (v - 1) / max(n - 1, 1) * (x_hi - x_lo)
 
-            # Baseline
-            arc_polys.append(
-                Polyline(points=[(x_lo, line_y), (x_hi, line_y)], pen_id=pen.id)
-            )
-            # Tick marks at primes (short)
+            arc_paths.append(([(x_lo, line_y), (x_hi, line_y)], False))
             tick = 1.6
             for p in primes:
                 x = map_n(p)
-                arc_polys.append(
-                    Polyline(points=[(x, line_y - tick), (x, line_y + tick * 0.4)], pen_id=pen.id)
-                )
+                arc_paths.append(([(x, line_y - tick), (x, line_y + tick * 0.4)], False))
 
-            # Single continuous stroke: semicircle between consecutive primes
             path: list[tuple[float, float]] = []
             for a, b in zip(primes, primes[1:]):
                 span = abs(map_n(b) - map_n(a))
                 steps = max(8, min(36, int(span * 1.2)))
                 seg = _arc_points(map_n(a), map_n(b), line_y, steps=steps, above=True)
                 if path and seg:
-                    # avoid duplicating join point
                     path.extend(seg[1:])
                 else:
                     path.extend(seg)
             if len(path) >= 2:
-                arc_polys.append(Polyline(points=path, pen_id=pen.id))
+                arc_paths.append((path, False))
 
-            # Soft outer frame for the left panel
             lx1, ly1 = left_x0, margin
             lx2, ly2 = left_x0 + left_w, margin + usable_h
-            arc_polys.append(
-                Polyline(
-                    points=[(lx1, ly1), (lx2, ly1), (lx2, ly2), (lx1, ly2), (lx1, ly1)],
-                    pen_id=pen.id,
-                    closed=True,
-                )
+            arc_paths.append(
+                ([(lx1, ly1), (lx2, ly1), (lx2, ly2), (lx1, ly2), (lx1, ly1)], True)
             )
 
         # —— Right: sieve grid ——
@@ -493,57 +537,55 @@ class _PrimeSieve:
             grid_h = cell * rows
             ox = right_x0 + (right_w - grid_w) / 2
             oy = margin + (usable_h - grid_h) / 2
+            glyph = min(mark_size_mm, max(0.8, cell * 0.64))
 
             for num in range(1, n + 1):
                 idx = num - 1
                 r, c = divmod(idx, grid_cols)
                 cx = ox + (c + 0.5) * cell
                 cy = oy + (r + 0.5) * cell
-                rad = cell * 0.32
                 if num >= 2 and is_prime[num]:
-                    # Circled prime
-                    ring = [
-                        (cx + rad * math.cos(t), cy + rad * math.sin(t))
-                        for t in np.linspace(0, 2 * math.pi, 14, endpoint=False)
-                    ]
-                    sieve_polys.append(
-                        Polyline(points=ring + [ring[0]], pen_id=pen.id, closed=True)
-                    )
+                    # Circled primes stay solid marks (outer-mm), not dashed
+                    for pts, closed in mark_polylines(cx, cy, glyph, "circle"):
+                        if len(pts) >= 2:
+                            sieve_mark_polys.append(
+                                Polyline(points=pts, pen_id=pen.id, closed=closed)
+                            )
                 elif num >= 2:
-                    # Struck composite — X
-                    d = rad * 0.85
-                    sieve_polys.append(
-                        Polyline(points=[(cx - d, cy - d), (cx + d, cy + d)], pen_id=pen.id)
-                    )
-                    sieve_polys.append(
-                        Polyline(points=[(cx + d, cy - d), (cx - d, cy + d)], pen_id=pen.id)
-                    )
+                    for pts, closed in mark_polylines(cx, cy, glyph, "cross"):
+                        sieve_line_paths.append((pts, closed))
                 else:
-                    # 1 — small dash
-                    sieve_polys.append(
-                        Polyline(
-                            points=[(cx - rad * 0.5, cy), (cx + rad * 0.5, cy)],
-                            pen_id=pen.id,
-                        )
+                    sieve_line_paths.append(
+                        ([(cx - glyph * 0.35, cy), (cx + glyph * 0.35, cy)], False)
                     )
 
-            # Light grid outline
             rx1, ry1 = ox, oy
             rx2, ry2 = ox + grid_w, oy + grid_h
-            sieve_polys.append(
-                Polyline(
-                    points=[(rx1, ry1), (rx2, ry1), (rx2, ry2), (rx1, ry2), (rx1, ry1)],
-                    pen_id=pen.id,
-                    closed=True,
-                )
+            sieve_line_paths.append(
+                ([(rx1, ry1), (rx2, ry1), (rx2, ry2), (rx1, ry2), (rx1, ry1)], True)
             )
+
+        arc_polys = _apply_linetype(
+            pen.id,
+            arc_paths,
+            linetype=linetype,
+            line_density=line_density,
+            line_pattern_width_mm=line_pattern_width_mm,
+        )
+        sieve_line_polys = _apply_linetype(
+            pen.id,
+            sieve_line_paths,
+            linetype=linetype,
+            line_density=line_density,
+            line_pattern_width_mm=line_pattern_width_mm,
+        )
+        sieve_polys = sieve_line_polys + sieve_mark_polys
 
         if arc_polys:
             passes.append(make_pass("prime-arcs", "Prime arc spire", pen.id, arc_polys))
         if sieve_polys:
             passes.append(make_pass("prime-sieve", "Sieve grid", pen.id, sieve_polys))
         if not passes:
-            # Fallback empty frame so render never yields zero passes
             passes.append(
                 make_pass(
                     "prime-empty",
@@ -579,8 +621,10 @@ class _PrimeSieve:
                 "prime_count": len(primes),
                 "show_arcs": bool(show_arcs),
                 "show_sieve": bool(show_sieve),
+                "mark_size_mm": mark_size_mm,
                 "equation": "Sieve of Eratosthenes",
                 "strokes": sum(len(p.polylines) for p in passes),
+                **_linetype_meta(linetype, line_density, line_pattern_width_mm),
             },
         )
 
