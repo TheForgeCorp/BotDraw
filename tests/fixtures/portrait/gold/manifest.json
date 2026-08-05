@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "description": "Phase B classic gold set \u2014 synthetic people + objects. Replace with licensed/demo photos when available; keep ids stable.",
+  "gate": {
+    "line_source": "classic",
+    "hatch": "off",
+    "ai_review": "off",
+    "ensemble": false,
+    "scan_mode": "edges",
+    "identity_target_edges": 200
+  },
+  "cases": [
+    {
+      "id": "person-front",
+      "category": "people",
+      "file": "people/person-front.png",
+      "label": "Person \u00b7 front",
+      "min_edges": 40,
+      "notes": "Synthetic face + shoulders for structure identity"
+    },
+    {
+      "id": "person-profile",
+      "category": "people",
+      "file": "people/person-profile.png",
+      "label": "Person \u00b7 profile",
+      "min_edges": 35,
+      "notes": "Side silhouette + features"
+    },
+    {
+      "id": "person-groupish",
+      "category": "people",
+      "file": "people/person-groupish.png",
+      "label": "Person \u00b7 busy collar",
+      "min_edges": 40,
+      "notes": "Hair strands + garment folds stress travel/noise"
+    },
+    {
+      "id": "object-mug",
+      "category": "objects",
+      "file": "objects/mug.png",
+      "label": "Object \u00b7 mug",
+      "min_edges": 12,
+      "notes": "Cylinder + handle silhouette"
+    },
+    {
+      "id": "object-camera",
+      "category": "objects",
+      "file": "objects/camera.png",
+      "label": "Object \u00b7 camera",
+      "min_edges": 18,
+      "notes": "Nested ellipses / body"
+    },
+    {
+      "id": "object-chair",
+      "category": "objects",
+      "file": "objects/chair.png",
+      "label": "Object \u00b7 chair",
+      "min_edges": 15,
+      "notes": "Straight structure lines / legs"
+    }
+  ]
+}

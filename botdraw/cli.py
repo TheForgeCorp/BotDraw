@@ -24,6 +24,45 @@ vision_app = typer.Typer(help="Vision review providers (Anthropic / OpenAI / Gem
 app.add_typer(vision_app, name="vision")
 
 
+vision_app = typer.Typer(help="Vision review providers (Anthropic / OpenAI / Gemini / manual)")
+app.add_typer(vision_app, name="vision")
+gold_app = typer.Typer(help="PortraitBot Phase B classic gold-set gate")
+app.add_typer(gold_app, name="gold")
+
+
+@gold_app.command("ensure-fixtures")
+def gold_ensure_fixtures(
+    force: bool = typer.Option(False, help="Rewrite PNG fixtures even if present"),
+) -> None:
+    """Write synthetic people/objects PNGs under tests/fixtures/portrait/gold/."""
+    from botdraw.portrait.gold import ensure_gold_fixtures, gold_dir
+
+    path = ensure_gold_fixtures(force=force)
+    print(f"[green]gold fixtures[/green] → {path}")
+    for p in sorted(gold_dir().rglob("*.png")):
+        print(f"  {p.relative_to(gold_dir())}")
+
+
+@gold_app.command("report")
+def gold_report(
+    out: Path = typer.Option(
+        Path("docs/wireframes/portraitbot-phase-b-gold.html"),
+        help="Self-contained HTML review report",
+    ),
+    quality: QualityPreset = typer.Option(QualityPreset.BOOTH_BALANCED, help="Ingest quality"),
+) -> None:
+    """Run classic gate-1 on the gold set and write an HTML review page."""
+    from botdraw.portrait.gold import write_gold_report
+
+    path, results = write_gold_report(out, quality=quality)
+    passed = sum(1 for r in results if r.passed)
+    print(f"[bold]{passed}/{len(results)}[/bold] passed → {path}")
+    for r in results:
+        mark = "PASS" if r.passed else "FAIL"
+        color = "green" if r.passed else "red"
+        print(f"  [{color}]{mark}[/{color}] {r.case.id} · edges={r.edge_count} hatch={r.hatch_count}")
+
+
 @models_app.command("status")
 def models_status() -> None:
     """Show which neural model weights are present."""
