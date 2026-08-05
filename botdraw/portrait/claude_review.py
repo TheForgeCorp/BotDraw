@@ -8,7 +8,8 @@ The vision model is a reviewer + controller, not a stroke engine:
 Modes (``ai_review``):
 - ``off`` — no vision
 - ``live`` — scene knobs only (booth-safe; never critique / AI re-ingest)
-- ``studio`` — scene + one critique; structure fixes may re-ingest once
+- ``studio`` — scene + structure critique + confirm (3 turns max);
+  structure fixes may re-ingest once
 
 Bool ``true`` resolves by quality: booth-* → live, studio-hq → studio.
 
@@ -17,7 +18,8 @@ Providers (env ``BOTDRAW_VISION_PROVIDER`` or per-call):
 - ``openai`` — OPENAI_API_KEY
 - ``gemini`` — GEMINI_API_KEY or GOOGLE_API_KEY
 - ``manual`` — load JSON from BOTDRAW_VISION_SCENE_JSON /
-  BOTDRAW_VISION_CRITIQUE_JSON (subscription/chat while API keys pending)
+  BOTDRAW_VISION_CRITIQUE_JSON / BOTDRAW_VISION_FEEDBACK_JSON
+  (or BOTDRAW_VISION_TURNS_DIR) for subscription/chat while API keys pending
 
 Fail closed: missing key/package/API errors return None and callers keep
 the current neural/classic path. Action/fix keys are a closed dictionary
@@ -52,6 +54,8 @@ ALLOWED_FIXES = frozenset(
     {
         "suppress_background",
         "keep_more_edges",
+        "equalize_structure",
+        "fix_crop",
         "boost_pet_shade",
         "boost_face_shade",
         "reduce_background_edges",
@@ -69,8 +73,14 @@ ALLOWED_ACTION_KEYS = frozenset(
         "max_tone_code",
         "suppress_background",
         "density_mul",
+        "scan_mode",
+        "contour_simplify",
     }
 )
+
+# Studio feedback loop: scene → structure critique → confirm (hard cap)
+VISION_MAX_TURNS = 3
+VISION_MAX_REINGESTS = 1
 
 SCENE_SYSTEM = """You review a portrait photograph for a pen-plotter pipeline.
 Return ONLY valid JSON matching this schema (no markdown):
@@ -92,15 +102,16 @@ orientation_deg is the clockwise rotation needed to make subjects upright.
 Flag pets and geometric clutter (blinds, crates). Prefer neural lines +
 background suppress for multi-subject or cluttered scenes."""
 
-CRITIQUE_SYSTEM = """You critique a pen-plotter portrait preview against the source photo.
-Return ONLY valid JSON matching this schema (no markdown):
+STRUCTURE_CRITIQUE_SYSTEM = """You critique pen-plotter STRUCTURE linework (ingest Raw SVG /
+edge polylines) against the source photo. Focus on missing edges, open silhouettes,
+parallel-band gaps, noise/travel, and crop. Return ONLY valid JSON:
 {
   "overall": 0..1,
   "issues": [
     {"code": string, "severity": 0..1, "region": string|null,
-     "fix": "suppress_background"|"keep_more_edges"|"boost_pet_shade"|
-            "boost_face_shade"|"reduce_background_edges"|"prefer_scribble"|
-            "prefer_linework"}
+     "fix": "suppress_background"|"keep_more_edges"|"equalize_structure"|
+            "fix_crop"|"boost_pet_shade"|"boost_face_shade"|
+            "reduce_background_edges"|"prefer_scribble"|"prefer_linework"}
   ],
   "actions": {
     "force_reingest": bool,
@@ -109,7 +120,34 @@ Return ONLY valid JSON matching this schema (no markdown):
     "style_id": string|null,
     "max_tone_code": 3|4|null,
     "suppress_background": bool|null,
-    "density_mul": number|null
+    "density_mul": number|null,
+    "scan_mode": "auto"|"edges"|"brightness"|"centerline"|"color_bands"|null,
+    "contour_simplify": 1|2|3|null
+  },
+  "summary": "one short sentence"
+}
+Prefer classic line_source for structure rescue. Smallest change that closes gaps."""
+
+CRITIQUE_SYSTEM = """You critique a pen-plotter portrait preview against the source photo.
+Return ONLY valid JSON matching this schema (no markdown):
+{
+  "overall": 0..1,
+  "issues": [
+    {"code": string, "severity": 0..1, "region": string|null,
+     "fix": "suppress_background"|"keep_more_edges"|"equalize_structure"|
+            "fix_crop"|"boost_pet_shade"|"boost_face_shade"|
+            "reduce_background_edges"|"prefer_scribble"|"prefer_linework"}
+  ],
+  "actions": {
+    "force_reingest": bool,
+    "line_source": "neural"|"classic"|"auto"|null,
+    "hatch_budget_mul": number|null,
+    "style_id": string|null,
+    "max_tone_code": 3|4|null,
+    "suppress_background": bool|null,
+    "density_mul": number|null,
+    "scan_mode": "auto"|"edges"|"brightness"|"centerline"|"color_bands"|null,
+    "contour_simplify": 1|2|3|null
   },
   "summary": "one short sentence"
 }
@@ -160,6 +198,8 @@ class CritiqueActions(BaseModel):
     max_tone_code: int | None = Field(default=None, ge=3, le=4)
     suppress_background: bool | None = None
     density_mul: float | None = Field(default=None, ge=0.5, le=2.5)
+    scan_mode: Literal["auto", "edges", "brightness", "centerline", "color_bands"] | None = None
+    contour_simplify: int | None = Field(default=None, ge=1, le=3)
 
 
 class PortraitCritique(BaseModel):
@@ -256,17 +296,39 @@ def provider_status() -> dict[str, dict[str, Any]]:
         "ready": gem_key and gem_pkg,
         "model": os.environ.get("BOTDRAW_GEMINI_MODEL", "gemini-2.0-flash"),
     }
-    # manual / subscription JSON
+    # manual / subscription JSON (multi-turn dir or single files)
     scene_path = os.environ.get("BOTDRAW_VISION_SCENE_JSON") or ""
     critique_path = os.environ.get("BOTDRAW_VISION_CRITIQUE_JSON") or ""
+    feedback_path = os.environ.get("BOTDRAW_VISION_FEEDBACK_JSON") or ""
+    turns_dir = os.environ.get("BOTDRAW_VISION_TURNS_DIR") or ""
+    tdir = Path(turns_dir) if turns_dir else None
+    turn1_ready = bool(
+        (scene_path and Path(scene_path).exists())
+        or (tdir and ((tdir / "turn01_scene.json").exists() or (tdir / "turn01.json").exists()))
+    )
+    turn2_ready = bool(
+        (critique_path and Path(critique_path).exists())
+        or (tdir and (tdir / "turn02_critique.json").exists())
+    )
+    turn3_ready = bool(
+        (feedback_path and Path(feedback_path).exists())
+        or (tdir and (tdir / "turn03_critique.json").exists())
+    )
     out["manual"] = {
         "key": True,
         "package": True,
-        "ready": bool(scene_path and Path(scene_path).exists()),
+        "ready": turn1_ready,
         "model": "subscription-json",
         "scene_json": scene_path or None,
         "critique_json": critique_path or None,
-        "critique_ready": bool(critique_path and Path(critique_path).exists()),
+        "feedback_json": feedback_path or None,
+        "turns_dir": turns_dir or None,
+        "turn1_ready": turn1_ready,
+        "turn2_ready": turn2_ready,
+        "turn3_ready": turn3_ready,
+        "critique_ready": turn2_ready,
+        "feedback_ready": turn3_ready,
+        "max_turns": VISION_MAX_TURNS,
     }
     return out
 
@@ -527,6 +589,59 @@ def load_critique_json(path: str | Path) -> PortraitCritique:
     return critique
 
 
+def vision_turns_dir() -> Path | None:
+    raw = (os.environ.get("BOTDRAW_VISION_TURNS_DIR") or "").strip()
+    if not raw:
+        return None
+    p = Path(raw)
+    return p if p.is_dir() else None
+
+
+def resolve_manual_turn_path(turn: int) -> Path | None:
+    """
+    Resolve subscription JSON for a 1-indexed turn.
+
+    Prefer BOTDRAW_VISION_TURNS_DIR/turnNN*.json, then legacy single-file env vars
+    (turn 1 → SCENE, turn 2 → CRITIQUE, turn 3+ → FEEDBACK or CRITIQUE).
+    """
+    turn = int(turn)
+    tdir = vision_turns_dir()
+    if tdir is not None:
+        candidates = [
+            tdir / f"turn{turn:02d}_scene.json",
+            tdir / f"turn{turn:02d}_critique.json",
+            tdir / f"turn{turn:02d}.json",
+        ]
+        for c in candidates:
+            if c.exists():
+                return c
+    if turn <= 1:
+        path = os.environ.get("BOTDRAW_VISION_SCENE_JSON") or ""
+        return Path(path) if path and Path(path).exists() else None
+    if turn == 2:
+        path = os.environ.get("BOTDRAW_VISION_CRITIQUE_JSON") or ""
+        return Path(path) if path and Path(path).exists() else None
+    path = (
+        os.environ.get("BOTDRAW_VISION_FEEDBACK_JSON")
+        or os.environ.get("BOTDRAW_VISION_CRITIQUE_JSON")
+        or ""
+    )
+    return Path(path) if path and Path(path).exists() else None
+
+
+def load_manual_turn(turn: int) -> PortraitScene | PortraitCritique | None:
+    """Load scene (turn 1) or critique (turn 2+) from manual/subscription JSON."""
+    path = resolve_manual_turn_path(turn)
+    if path is None:
+        return None
+    try:
+        if turn <= 1 or "scene" in path.name:
+            return load_scene_json(path)
+        return load_critique_json(path)
+    except (ValidationError, json.JSONDecodeError, Exception):
+        return None
+
+
 def review_photo(
     rgb: np.ndarray,
     *,
@@ -540,6 +655,9 @@ def review_photo(
     try:
         if p == "manual" and client_call is _call_vision:
             path = os.environ.get("BOTDRAW_VISION_SCENE_JSON")
+            if not path:
+                tpath = resolve_manual_turn_path(1)
+                path = str(tpath) if tpath else None
             if not path:
                 return None
             scene = load_scene_json(path)
@@ -565,14 +683,30 @@ def critique_render(
     style_id: str,
     client_call=_call_vision,
     provider: ProviderName | None = None,
+    turn: int | None = None,
+    structure: bool = False,
 ) -> PortraitCritique | None:
-    """Post-render critique. Returns None when unavailable or on error."""
+    """Post-render / post-structure critique. Returns None when unavailable or on error."""
     p = provider or default_provider()
-    if p == "manual":
-        path = os.environ.get("BOTDRAW_VISION_CRITIQUE_JSON") or ""
-        if not path or not Path(path).exists():
+    system = STRUCTURE_CRITIQUE_SYSTEM if structure else CRITIQUE_SYSTEM
+    if p == "manual" and client_call is _call_vision:
+        path = None
+        if turn is not None:
+            path = resolve_manual_turn_path(int(turn))
+        if path is None:
+            env_key = "BOTDRAW_VISION_CRITIQUE_JSON"
+            if turn is not None and int(turn) >= 3:
+                env_key = "BOTDRAW_VISION_FEEDBACK_JSON"
+            env = os.environ.get(env_key) or ""
+            if not env and turn is not None and int(turn) >= 3:
+                env = os.environ.get("BOTDRAW_VISION_CRITIQUE_JSON") or ""
+            path = Path(env) if env and Path(env).exists() else None
+        if path is None:
             return None
         try:
+            # Scene files are not critiques
+            if "scene" in path.name:
+                return None
             return load_critique_json(path)
         except (ValidationError, json.JSONDecodeError, Exception):
             return None
@@ -587,6 +721,7 @@ def critique_render(
             style_id=style_id,
             client_call=client_call,
             provider=p,
+            system=system,
         )
         data = _extract_json(raw)
         critique = PortraitCritique.model_validate(data)
@@ -604,6 +739,159 @@ def critique_render(
         return None
 
 
+def critique_structure(
+    source_rgb: np.ndarray,
+    ingest_preview_png: bytes,
+    *,
+    style_id: str = "portrait_structure",
+    client_call=_call_vision,
+    provider: ProviderName | None = None,
+    turn: int = 2,
+) -> PortraitCritique | None:
+    """Turn-2 structure critique against ingest Raw SVG / edge preview."""
+    return critique_render(
+        source_rgb,
+        ingest_preview_png,
+        style_id=style_id,
+        client_call=client_call,
+        provider=provider,
+        turn=turn,
+        structure=True,
+    )
+
+
+def apply_structure_critique_to_knobs(
+    source_rgb: np.ndarray,
+    ingest_preview_png: bytes,
+    knobs: dict[str, Any],
+    *,
+    turn: int = 2,
+    provider: ProviderName | None = None,
+    client_call=_call_vision,
+) -> dict[str, Any]:
+    """
+    Studio turn-2 structure gate. Fail closed when critique unavailable.
+
+    May set ``force_reingest`` at most once (caller re-ingests). Never invents knobs.
+    """
+    if int(knobs.get("ai_vision_turn") or 0) >= int(turn):
+        return knobs
+    critique = critique_structure(
+        source_rgb,
+        ingest_preview_png,
+        client_call=client_call,
+        provider=provider,
+        turn=turn,
+    )
+    if critique is None:
+        return {
+            **knobs,
+            "ai_vision_turn": int(turn),
+            "ai_review_status": "structure_unavailable",
+        }
+    ck = critique_to_render_knobs(critique)
+    reingests = int(knobs.get("ai_reingest_count") or 0)
+    if reingests >= VISION_MAX_REINGESTS:
+        ck.pop("force_reingest", None)
+        critique.actions.force_reingest = False
+    history = list(knobs.get("ai_vision_history") or [])
+    history.append(
+        {
+            "turn": int(turn),
+            "kind": "structure",
+            "overall": critique.overall,
+            "summary": critique.summary,
+            "force_reingest": bool(ck.get("force_reingest")),
+            "actions": critique.actions.model_dump(),
+        }
+    )
+    by_turn = dict(knobs.get("ai_critique_by_turn") or {})
+    by_turn[str(int(turn))] = critique.model_dump()
+    return {
+        **knobs,
+        **ck,
+        "ai_vision_turn": int(turn),
+        "ai_vision_history": history,
+        "ai_critique": critique.model_dump(),
+        "ai_critique_by_turn": by_turn,
+        "ai_review_status": "structure",
+    }
+
+
+def run_vision_turns(
+    rgb: np.ndarray,
+    *,
+    ingest_preview_png: bytes | None = None,
+    render_preview_png: bytes | None = None,
+    style_id: str = "portrait_linework",
+    provider: ProviderName | None = None,
+    max_turns: int = VISION_MAX_TURNS,
+    client_call=_call_vision,
+) -> dict[str, Any]:
+    """
+    Orchestrate the studio 3-turn loop (fail closed per turn).
+
+    Turn 1: review_photo → scene knobs
+    Turn 2: critique_structure (needs ingest_preview_png)
+    Turn 3: critique_render confirm (needs render_preview_png); no re-ingest
+
+    Returns ``{scene, critiques, knobs, turns_applied, reingest_allowed}``.
+    """
+    max_turns = max(1, min(int(max_turns), VISION_MAX_TURNS))
+    p = provider or default_provider()
+    out: dict[str, Any] = {
+        "scene": None,
+        "critiques": [],
+        "knobs": {},
+        "turns_applied": [],
+        "reingest_allowed": False,
+    }
+    scene = review_photo(rgb, client_call=client_call, provider=p)
+    if scene is not None:
+        out["scene"] = scene.model_dump()
+        out["knobs"].update(scene_to_ingest_knobs(scene))
+        out["turns_applied"].append(1)
+    if max_turns < 2 or ingest_preview_png is None:
+        return out
+    c2 = critique_structure(
+        rgb,
+        ingest_preview_png,
+        style_id="portrait_structure",
+        client_call=client_call,
+        provider=p,
+        turn=2,
+    )
+    if c2 is not None:
+        out["critiques"].append({"turn": 2, **c2.model_dump()})
+        knobs2 = critique_to_render_knobs(c2)
+        # At most one re-ingest from turn 2
+        if knobs2.get("force_reingest"):
+            out["reingest_allowed"] = True
+        out["knobs"].update(knobs2)
+        out["turns_applied"].append(2)
+    if max_turns < 3 or render_preview_png is None:
+        return out
+    c3 = critique_render(
+        rgb,
+        render_preview_png,
+        style_id=style_id,
+        client_call=client_call,
+        provider=p,
+        turn=3,
+        structure=False,
+    )
+    if c3 is not None:
+        # Turn 3 confirm: restyle knobs only — strip re-ingest
+        c3.actions.force_reingest = False
+        knobs3 = critique_to_render_knobs(c3)
+        knobs3.pop("force_reingest", None)
+        out["critiques"].append({"turn": 3, **c3.model_dump()})
+        out["knobs"].update(knobs3)
+        out["turns_applied"].append(3)
+        out["reingest_allowed"] = False
+    return out
+
+
 def _critique_two_images(
     *,
     source_b64: str,
@@ -611,7 +899,9 @@ def _critique_two_images(
     style_id: str,
     client_call,
     provider: ProviderName | None = None,
+    system: str | None = None,
 ) -> str:
+    sys = system or CRITIQUE_SYSTEM
     prompt = (
         f"Image 1 = source photo. Image 2 = plotter preview "
         f"(style={style_id}). Critique likeness. JSON only."
@@ -619,13 +909,13 @@ def _critique_two_images(
     if client_call is not _call_vision:
         # Tests inject a single-image stub; pass preview only with style context.
         return client_call(
-            system=CRITIQUE_SYSTEM,
+            system=sys,
             prompt=f"Style={style_id}. Critique this plotter preview vs a source portrait. JSON only.",
             image_b64=preview_b64,
             media_type="image/png",
         )
     return client_call(
-        system=CRITIQUE_SYSTEM,
+        system=sys,
         prompt=prompt,
         image_b64=source_b64,
         media_type="image/jpeg",
@@ -676,11 +966,13 @@ def _enrich_actions_from_fixes(critique: PortraitCritique) -> CritiqueActions:
         acts.style_id = "portrait_scribble_tone"
     if "prefer_linework" in fixes and not acts.style_id:
         acts.style_id = "portrait_linework"
-    if "keep_more_edges" in fixes and acts.force_reingest is False:
-        # Structure rescue: severe keep_more_edges → one re-ingest (studio only)
+    if ("keep_more_edges" in fixes or "equalize_structure" in fixes) and acts.force_reingest is False:
+        # Structure rescue: re-ingest once; keep classic unless JSON set a source
         acts.force_reingest = True
         if acts.line_source is None:
-            acts.line_source = "neural"
+            acts.line_source = "classic"
+    if "fix_crop" in fixes and acts.force_reingest is False:
+        acts.force_reingest = True
     return acts
 
 
@@ -747,6 +1039,10 @@ def critique_to_render_knobs(critique: PortraitCritique) -> dict[str, Any]:
         out["hatch_budget_mul"] = float(a.hatch_budget_mul)
     if a.density_mul is not None:
         out["density_mul"] = float(a.density_mul)
+    if a.scan_mode:
+        out["scan_mode"] = a.scan_mode
+    if a.contour_simplify is not None:
+        out["contour_simplify"] = int(a.contour_simplify)
     return out
 
 
@@ -787,11 +1083,24 @@ def maybe_review_and_merge_knobs(
         }
         return rgb, knobs
     scene_knobs = scene_to_ingest_knobs(scene)
+    history = list(knobs.get("ai_vision_history") or [])
+    history.append(
+        {
+            "turn": 1,
+            "kind": "scene",
+            "overall": None,
+            "summary": scene.summary,
+            "force_reingest": False,
+            "actions": {},
+        }
+    )
     merged = {
         **knobs,
         **scene_knobs,
         "ai_review": resolved,
         "ai_review_status": "scene",
+        "ai_vision_turn": max(1, int(knobs.get("ai_vision_turn") or 0)),
+        "ai_vision_history": history,
     }
     # Explicit user line_source / crop wins over scene if already set to neural/classic
     if knobs.get("line_source") in ("neural", "classic"):

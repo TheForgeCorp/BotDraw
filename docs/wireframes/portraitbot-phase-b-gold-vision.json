@@ -1,0 +1,56 @@
+[
+  {
+    "case": "objects/mug",
+    "turn": 1,
+    "kind": "scene",
+    "overall": null,
+    "summary": "Object mug \u2014 classic structure gate, hatch off",
+    "edge_count": 33,
+    "reingest": false
+  },
+  {
+    "case": "objects/mug",
+    "turn": 2,
+    "kind": "structure",
+    "overall": 0.42,
+    "summary": "Turn 2: band L/R verticals missing \u2014 equalize + finer simplify",
+    "edge_count": 36,
+    "reingest": true
+  },
+  {
+    "case": "objects/mug",
+    "turn": 3,
+    "kind": "confirm",
+    "overall": 0.78,
+    "summary": "Turn 3: confirm structure \u2014 accept (no further re-ingest)",
+    "edge_count": 36,
+    "reingest": false
+  },
+  {
+    "case": "people/person-front",
+    "turn": 1,
+    "kind": "scene",
+    "overall": null,
+    "summary": "Object mug \u2014 classic structure gate, hatch off",
+    "edge_count": 61,
+    "reingest": false
+  },
+  {
+    "case": "people/person-front",
+    "turn": 2,
+    "kind": "structure",
+    "overall": 0.42,
+    "summary": "Turn 2: band L/R verticals missing \u2014 equalize + finer simplify",
+    "edge_count": 61,
+    "reingest": true
+  },
+  {
+    "case": "people/person-front",
+    "turn": 3,
+    "kind": "confirm",
+    "overall": 0.78,
+    "summary": "Turn 3: confirm structure \u2014 accept (no further re-ingest)",
+    "edge_count": 61,
+    "reingest": false
+  }
+]

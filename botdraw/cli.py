@@ -22,6 +22,50 @@ models_app = typer.Typer(help="Neural model weight management")
 app.add_typer(models_app, name="models")
 vision_app = typer.Typer(help="Vision review providers (Anthropic / OpenAI / Gemini / manual)")
 app.add_typer(vision_app, name="vision")
+gold_app = typer.Typer(help="PortraitBot Phase B classic gold-set gate")
+app.add_typer(gold_app, name="gold")
+
+
+@gold_app.command("ensure-fixtures")
+def gold_ensure_fixtures(
+    force: bool = typer.Option(False, help="Rewrite PNG fixtures even if present"),
+) -> None:
+    """Write synthetic people/objects PNGs under tests/fixtures/portrait/gold/."""
+    from botdraw.portrait.gold import ensure_gold_fixtures, gold_dir
+
+    path = ensure_gold_fixtures(force=force)
+    print(f"[green]gold fixtures[/green] → {path}")
+    for p in sorted(gold_dir().rglob("*.png")):
+        print(f"  {p.relative_to(gold_dir())}")
+
+
+@gold_app.command("report")
+def gold_report(
+    out: Path = typer.Option(
+        Path("docs/wireframes/portraitbot-phase-b-gold.html"),
+        help="Self-contained HTML review report",
+    ),
+    quality: QualityPreset = typer.Option(QualityPreset.BOOTH_BALANCED, help="Ingest quality"),
+    with_vision_fixtures: bool = typer.Option(
+        False,
+        "--with-vision-fixtures",
+        help="Append studio 3-turn loop summaries (manual JSON; gold gate stays AI-off)",
+    ),
+) -> None:
+    """Run classic gate-1 on the gold set and write an HTML review page."""
+    from botdraw.portrait.gold import write_gold_report
+
+    path, results = write_gold_report(
+        out, quality=quality, with_vision_fixtures=with_vision_fixtures
+    )
+    passed = sum(1 for r in results if r.passed)
+    print(f"[bold]{passed}/{len(results)}[/bold] passed → {path}")
+    for r in results:
+        mark = "PASS" if r.passed else "FAIL"
+        color = "green" if r.passed else "red"
+        print(f"  [{color}]{mark}[/{color}] {r.case.id} · edges={r.edge_count} hatch={r.hatch_count}")
+    if with_vision_fixtures:
+        print("[dim]vision fixtures section appended (manual 3-turn loop)[/dim]")
 
 
 @models_app.command("status")
@@ -62,6 +106,49 @@ def vision_status() -> None:
         )
         if name == "manual" and info.get("scene_json"):
             print(f"    scene_json={info['scene_json']}")
+
+
+@vision_app.command("loop-demo")
+def vision_loop_demo(
+    image: Optional[Path] = typer.Option(
+        None,
+        help="Photo/object image (default: gold mug fixture)",
+    ),
+    out: Path = typer.Option(
+        Path("docs/wireframes/portraitbot-vision-loop-history.html"),
+        help="Visual history HTML (pass-by-pass)",
+    ),
+    turns: int = typer.Option(3, help="Max feedback turns (default 3, hard cap VISION_MAX_TURNS)"),
+    turns_dir: Optional[Path] = typer.Option(
+        None,
+        help="Manual subscription JSON dir (default: tests/fixtures/vision/turns)",
+    ),
+) -> None:
+    """
+    Run the studio structure feedback loop with visual history (manual JSON).
+
+    Default is the 3-turn plan (scene → structure → confirm). No API key required
+    when fixtures are present under BOTDRAW_VISION_TURNS_DIR.
+    """
+    from botdraw.portrait.vision_loop import (
+        DEFAULT_TURNS_DIR,
+        ensure_manual_turn_fixtures,
+        write_vision_history,
+    )
+
+    tdir = turns_dir or DEFAULT_TURNS_DIR
+    ensure_manual_turn_fixtures(root=tdir, force=False)
+    path, history = write_vision_history(
+        out,
+        image_path=image,
+        max_turns=turns,
+        turns_dir=tdir,
+    )
+    print(f"[bold]{len(history)}[/bold] passes → {path}")
+    for p in history:
+        ov = f"{p.overall:.2f}" if p.overall is not None else "—"
+        mark = "re-ingest" if p.reingest else p.kind
+        print(f"  pass {p.turn:02d} ({mark}) overall={ov} edges={p.edge_count} · {p.summary}")
 
 
 @vision_app.command("compare")

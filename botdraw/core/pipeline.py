@@ -166,6 +166,27 @@ def _layered_preview_png(layered: LayeredSVG, palette: PaletteSet, paper_color_h
         return None
 
 
+def _apply_ai_structure_after_ingest(extra: dict[str, Any]) -> dict[str, Any]:
+    """Studio turn 2: critique ingest structure preview (not restyle PNG)."""
+    try:
+        import numpy as np
+
+        from botdraw.portrait.claude_review import apply_structure_critique_to_knobs
+        from botdraw.portrait.vision_loop import structure_preview_png
+
+        pv = extra.get("portrait_vector")
+        if pv is None or int(extra.get("ai_vision_turn") or 0) >= 2:
+            return extra
+        png = structure_preview_png(pv)
+        source = np.asarray(pv.rgb, dtype=np.float32)
+        return apply_structure_critique_to_knobs(source, png, dict(extra), turn=2)
+    except Exception:
+        out = dict(extra)
+        out["ai_vision_turn"] = max(2, int(extra.get("ai_vision_turn") or 0))
+        out["ai_review_status"] = "structure_unavailable"
+        return out
+
+
 def _apply_ai_critique_once(
     extra: dict[str, Any],
     *,
@@ -173,9 +194,13 @@ def _apply_ai_critique_once(
     palette: PaletteSet,
     paper_color_hex: str,
 ) -> dict[str, Any] | None:
-    """Run one critique; return updated extra if actions warrant a redo, else None."""
+    """Turn-3 confirm critique on restyle preview; restyle knobs only (no re-ingest)."""
     try:
-        from botdraw.portrait.claude_review import critique_render, critique_to_render_knobs
+        from botdraw.portrait.claude_review import (
+            VISION_MAX_TURNS,
+            critique_render,
+            critique_to_render_knobs,
+        )
 
         pv = extra.get("portrait_vector")
         if pv is None:
@@ -187,33 +212,68 @@ def _apply_ai_critique_once(
 
         source = np.asarray(pv.rgb, dtype=np.float32)
         style = str(extra.get("style_id") or layered.meta.get("portrait_style") or "portrait_linework")
-        critique = critique_render(source, png, style_id=style)
+        # Confirm is always turn 3 in the 3-turn plan (structure already applied as turn 2)
+        turn = max(3, int(extra.get("ai_vision_turn") or 2) + 1)
+        max_turns = int(extra.get("ai_vision_max_turns") or VISION_MAX_TURNS)
+        if turn > max_turns:
+            out = dict(extra)
+            out["ai_critique_applied"] = True
+            return out
+        critique = critique_render(
+            source,
+            png,
+            style_id=style,
+            turn=turn,
+            structure=False,
+        )
         if critique is None:
             out = dict(extra)
             out["ai_review_status"] = "critique_unavailable"
-            out["ai_critique_applied"] = True  # don't loop
+            out["ai_critique_applied"] = True
+            out["ai_vision_turn"] = turn
             return out
+        # Turn 3 confirm: restyle knobs only — never re-ingest
+        critique.actions.force_reingest = False
         knobs = critique_to_render_knobs(critique)
-        out = {**extra, **knobs, "ai_critique_applied": True}
-        # Only re-render when something actionable changed
+        knobs.pop("force_reingest", None)
+        history = list(extra.get("ai_vision_history") or [])
+        history.append(
+            {
+                "turn": turn,
+                "kind": "confirm",
+                "overall": critique.overall,
+                "summary": critique.summary,
+                "force_reingest": False,
+                "actions": critique.actions.model_dump(),
+            }
+        )
+        by_turn = dict(extra.get("ai_critique_by_turn") or {})
+        by_turn[str(turn)] = critique.model_dump()
+        out = {
+            **extra,
+            **knobs,
+            "ai_vision_turn": turn,
+            "ai_vision_history": history,
+            "ai_critique": critique.model_dump(),
+            "ai_critique_by_turn": by_turn,
+            "ai_review_status": "confirm",
+            "reuse_ingest": True,
+            "ingest_id": getattr(pv, "ingest_id", None),
+        }
+        out.pop("force_reingest", None)
+        # One optional restyle adjust, then done
         actionable = any(
             [
-                knobs.get("force_reingest"),
                 knobs.get("style_id") and knobs.get("style_id") != style,
                 knobs.get("density_mul") and abs(float(knobs["density_mul"]) - 1.0) > 0.05,
                 knobs.get("hatch_budget_mul") and abs(float(knobs["hatch_budget_mul"]) - 1.0) > 0.05,
-                knobs.get("line_source"),
-                knobs.get("max_tone_code"),
             ]
         )
-        if not actionable:
-            # Still persist critique on the accepted render
-            return out
-        # Reuse ingest unless critique demanded reingest
-        if not knobs.get("force_reingest"):
-            out["reuse_ingest"] = True
-            out["ingest_id"] = getattr(pv, "ingest_id", None)
-            out.pop("force_reingest", None)
+        if actionable and not extra.get("ai_confirm_restyle_done"):
+            out["ai_critique_applied"] = False
+            out["ai_confirm_restyle_done"] = True
+        else:
+            out["ai_critique_applied"] = True
         return out
     except Exception:
         return None
@@ -482,8 +542,12 @@ def render_job(
                 auto_frame = auto_frame.lower() not in ("0", "false", "no")
             ai_mode = _ai_review_mode(extra, quality=quality_enum.value)
             extra["ai_review"] = ai_mode
-            # Pre-ingest scene review → knobs (live + studio; fail closed)
-            if ai_review_wants_scene(ai_mode) and not extra.get("ai_critique_applied"):
+            # Pre-ingest scene review → knobs (live + studio; once only)
+            if (
+                ai_review_wants_scene(ai_mode)
+                and not extra.get("ai_critique_applied")
+                and not extra.get("ai_vision_turn")
+            ):
                 extra = _apply_ai_scene_review(
                     extra, image_path=image_path, quality=quality_enum.value
                 )
@@ -520,11 +584,57 @@ def render_job(
             pv = assign_pens(pv, palette, pen_map=extra.get("pen_map"))
             ingest_id = pv.ingest_id
             extra = {**extra, "portrait_vector": pv, "ingest_id": ingest_id}
+            extra.pop("force_reingest", None)
             settings["ingest_id"] = ingest_id
             settings["ingest_cache_hit"] = cache_hit
             settings["crop"] = pv.crop.model_dump()
             if extra.get("ai_scene"):
                 settings["ai_scene"] = extra["ai_scene"]
+
+            # Studio turn 2: structure critique on ingest preview (at most one re-ingest)
+            if (
+                ai_review_wants_critique(ai_mode)
+                and not extra.get("ai_critique_applied")
+                and int(extra.get("ai_vision_turn") or 0) < 2
+            ):
+                extra = _apply_ai_structure_after_ingest(extra)
+                if extra.get("force_reingest"):
+                    extra["ai_reingest_count"] = int(extra.get("ai_reingest_count") or 0) + 1
+                    extra.pop("force_reingest", None)
+                    pv, cache_hit = resolve_portrait_vector(
+                        image_path=image_path,
+                        mode=mode,
+                        quality=quality_enum.value,
+                        paper=paper_enum.value,
+                        crop=extra.get("crop", crop),
+                        reuse_ingest=False,
+                        ingest_id=None,
+                        force_reingest=True,
+                        auto_frame=bool(extra.get("auto_frame", auto_frame))
+                        if extra.get("crop", crop) is None
+                        else False,
+                        posterize_levels=extra.get("posterize_levels"),
+                        filter_speckle=extra.get("filter_speckle"),
+                        min_path_points=extra.get("min_path_points"),
+                        contrast=extra.get("contrast"),
+                        contour_simplify=extra.get("contour_simplify"),
+                        hatch_size=extra.get("hatch_size"),
+                        linedraw_jitter=extra.get("linedraw_jitter"),
+                        ensemble=extra.get("ensemble"),
+                        scan_mode=extra.get("scan_mode"),
+                        line_source=extra.get("line_source"),
+                        max_tone_code=extra.get("max_tone_code"),
+                        suppress_background=extra.get("suppress_background"),
+                        protect_subjects=extra.get("protect_subjects"),
+                        orientation_deg=extra.get("orientation_deg"),
+                        ai_scene=extra.get("ai_scene"),
+                    )
+                    pv = assign_pens(pv, palette, pen_map=extra.get("pen_map"))
+                    ingest_id = pv.ingest_id
+                    extra = {**extra, "portrait_vector": pv, "ingest_id": ingest_id}
+                    settings["ingest_id"] = ingest_id
+                    settings["ingest_cache_hit"] = cache_hit
+                    settings["crop"] = pv.crop.model_dump()
 
         # Density may be nudged by critique hatch_budget_mul / density_mul
         render_density = float(density) * float(extra.get("density_mul") or 1.0)
@@ -546,11 +656,12 @@ def render_job(
             image_path=image_path,
         )
 
-        # One post-render critique loop (studio only); never unbounded; live skips
+        # Studio turn 3: confirm critique on restyle preview (no re-ingest)
         if (
             (app == "portraitbot" or style_id.startswith("portrait_"))
             and ai_review_wants_critique(_ai_review_mode(extra, quality=quality_enum.value))
             and not extra.get("ai_critique_applied")
+            and int(extra.get("ai_vision_turn") or 0) >= 2
         ):
             crit_extra = _apply_ai_critique_once(
                 extra,
@@ -559,29 +670,11 @@ def render_job(
                 paper_color_hex=paper_color_hex,
             )
             if crit_extra is not None:
-                # Live-safe belt: never AI-force reingest outside studio
-                if _ai_review_mode(crit_extra, quality=quality_enum.value) != "studio":
-                    crit_extra.pop("force_reingest", None)
-                redo = bool(
-                    crit_extra.get("force_reingest")
-                    or (
-                        crit_extra.get("style_id")
-                        and crit_extra.get("style_id") != (extra.get("style_id") or style_id)
-                    )
-                    or (
-                        crit_extra.get("density_mul")
-                        and abs(float(crit_extra["density_mul"]) - 1.0) > 0.05
-                    )
-                    or (
-                        crit_extra.get("hatch_budget_mul")
-                        and abs(float(crit_extra["hatch_budget_mul"]) - 1.0) > 0.05
-                    )
-                )
+                redo = bool(not crit_extra.get("ai_critique_applied"))
                 extra = {
                     **crit_extra,
-                    "ai_critique_applied": True,
                     "ai_review": "studio",
-                    "ai_review_status": crit_extra.get("ai_review_status") or "critique",
+                    "ai_review_status": crit_extra.get("ai_review_status") or "confirm",
                 }
                 if redo:
                     extra.pop("portrait_vector", None)
@@ -629,7 +722,19 @@ def render_job(
             "ai_review_status": extra.get("ai_review_status"),
             "ai_scene_summary": (extra.get("ai_scene") or {}).get("summary"),
             "ai_critique_summary": (extra.get("ai_critique") or {}).get("summary"),
+            "ai_vision_turn": extra.get("ai_vision_turn"),
+            "ai_vision_history": extra.get("ai_vision_history"),
+            "ai_critique_by_turn": extra.get("ai_critique_by_turn"),
         }
+
+        if extra.get("ai_scene"):
+            settings["ai_scene"] = extra["ai_scene"]
+        if extra.get("ai_vision_history"):
+            settings["ai_vision_history"] = extra["ai_vision_history"]
+        if extra.get("ai_critique_by_turn"):
+            settings["ai_critique_by_turn"] = extra["ai_critique_by_turn"]
+        if extra.get("ai_vision_turn") is not None:
+            settings["ai_vision_turn"] = extra["ai_vision_turn"]
 
         if extra.get("ai_scene"):
             try:
@@ -638,10 +743,31 @@ def render_job(
                 )
             except Exception:
                 pass
+        by_turn = extra.get("ai_critique_by_turn") or {}
+        if by_turn:
+            try:
+                for t_key, critique_payload in by_turn.items():
+                    (artifact_dir(job.id) / f"ai_critique_t{t_key}.json").write_text(
+                        json.dumps(critique_payload, indent=2), encoding="utf-8"
+                    )
+            except Exception:
+                pass
         if extra.get("ai_critique"):
             try:
+                turn = int(extra.get("ai_vision_turn") or 2)
+                if str(turn) not in by_turn:
+                    (artifact_dir(job.id) / f"ai_critique_t{turn}.json").write_text(
+                        json.dumps(extra["ai_critique"], indent=2), encoding="utf-8"
+                    )
                 (artifact_dir(job.id) / "ai_critique.json").write_text(
                     json.dumps(extra["ai_critique"], indent=2), encoding="utf-8"
+                )
+            except Exception:
+                pass
+        if extra.get("ai_vision_history"):
+            try:
+                (artifact_dir(job.id) / "ai_vision_history.json").write_text(
+                    json.dumps(extra["ai_vision_history"], indent=2), encoding="utf-8"
                 )
             except Exception:
                 pass

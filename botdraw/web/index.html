@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>BotDraw Dev Lab</title>
-  <link rel="stylesheet" href="/static/styles.css?v=20260805b" />
+  <link rel="stylesheet" href="/static/styles.css?v=20260805g" />
 </head>
 <body data-app="genartbot">
   <!--
@@ -81,12 +81,13 @@
       <div class="stage-head">
         <div class="seg stage-seg" id="stage-seg" hidden>
           <button type="button" data-seg="source">Source</button>
-          <button type="button" data-seg="ingest">Ingest</button>
-          <button type="button" data-seg="vector" class="active">Vector</button>
+          <button type="button" data-seg="ingest" class="active">Ingest</button>
+          <button type="button" data-seg="vector">Vector</button>
         </div>
         <div class="stats" id="stats" aria-live="polite">Ready</div>
       </div>
 
+      <div class="stage-body" id="stage-body">
       <div class="paper-desk is-empty" id="paper-desk">
         <div class="sheet-empty" id="sheet-empty">Drop a photo or Vectorize</div>
         <!-- GenArt / R&D / libraries -->
@@ -135,20 +136,20 @@
           <div class="paper-sheet portrait-ingest-sheet" id="portrait-ingest-frame" data-seg-view="ingest" hidden>
             <canvas id="portrait-ingest" width="480" height="640"></canvas>
           </div>
-          <div class="paper-sheet" id="portrait-frame" data-seg-view="vector">
+          <div class="paper-sheet" id="portrait-frame" data-seg-view="vector" hidden>
             <canvas id="portrait-emu" width="480" height="640"></canvas>
           </div>
           <div class="ingest-toggles" id="ingest-toggles" hidden>
             <label><input type="checkbox" id="toggle-edges" checked /> Edges</label>
-            <label><input type="checkbox" id="toggle-hatch" checked /> Hatch</label>
+            <label><input type="checkbox" id="toggle-hatch" /> Hatch</label>
             <label><input type="checkbox" id="toggle-regions" checked /> Regions</label>
             <label><input type="checkbox" id="toggle-crop" checked /> Crop</label>
             <label>Underlay
               <select id="ingest-underlay">
+                <option value="none" selected>None</option>
                 <option value="scan">Scan</option>
                 <option value="tone">Tone grid</option>
                 <option value="photo">Photo</option>
-                <option value="none">None</option>
               </select>
             </label>
             <a id="portrait-dl-ingest-svg" href="#" hidden>Raw SVG</a>
@@ -162,6 +163,17 @@
           <canvas id="lab-ingest" width="360" height="480"></canvas>
           <div class="lab-vector-pane"></div>
         </div>
+      </div>
+
+      <aside class="portrait-calc" id="portrait-calc" hidden aria-label="Calculation window">
+        <div class="portrait-calc-head">
+          <h4>Calculation window</h4>
+          <span class="portrait-calc-live" id="portrait-calc-live">idle</span>
+        </div>
+        <div class="portrait-calc-body" id="portrait-calc-body">
+          <p class="muted">Ingest a photo to see structure, ShadeField, and gate assessment.</p>
+        </div>
+      </aside>
       </div>
 
       <div class="stage-toolbar">
@@ -233,8 +245,8 @@
   </div>
 
   <script src="/static/vendor/d3.min.js"></script>
-  <script src="/static/d3_pattern_lab.js?v=20260805c"></script>
-  <script src="/static/emulator.js?v=20260805c"></script>
-  <script src="/static/app.js?v=20260805c"></script>
+  <script src="/static/d3_pattern_lab.js?v=20260805g"></script>
+  <script src="/static/emulator.js?v=20260805g"></script>
+  <script src="/static/app.js?v=20260805g"></script>
 </body>
 </html>

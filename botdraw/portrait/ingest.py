@@ -996,6 +996,9 @@ def ingest_portrait(
                 "shade_source": "mesh_walks",
             },
             "edge_prep": "prepare_luma_for_edges",
+            "edge_equalize": {
+                "added": int(getattr(refine_edge_polylines, "last_equalize_added", 0) or 0),
+            },
             "mesh": {
                 "cell_px": float(tone_pack.get("mesh_cell_px") or tone_pack["tone_cell_px"]),
                 "link_h": int(np.asarray(tone_pack.get("link_h", [])).sum())

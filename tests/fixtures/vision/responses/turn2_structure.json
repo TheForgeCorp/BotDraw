@@ -1,0 +1,25 @@
+{
+  "overall": 0.42,
+  "issues": [
+    {
+      "code": "band_sides_missing",
+      "severity": 0.85,
+      "region": "mug_band",
+      "fix": "equalize_structure"
+    },
+    {
+      "code": "soft_edges",
+      "severity": 0.6,
+      "region": "silhouette",
+      "fix": "keep_more_edges"
+    }
+  ],
+  "actions": {
+    "force_reingest": true,
+    "line_source": "classic",
+    "scan_mode": "edges",
+    "contour_simplify": 1,
+    "suppress_background": false
+  },
+  "summary": "Turn 2: band L/R verticals missing \u2014 equalize + finer simplify"
+}

@@ -1085,18 +1085,207 @@ def repair_arc_gaps(
     return [c for c in alive if c is not None and len(c) > 1]
 
 
+def _polyline_xy_ends(
+    pts: list[tuple[float, float]],
+) -> tuple[tuple[float, float], tuple[float, float], float, float, float, float]:
+    """Left/right endpoints (by x) plus bbox for a polyline."""
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    minx, maxx = min(xs), max(xs)
+    miny, maxy = min(ys), max(ys)
+    # Prefer actual endpoints; fall back to extreme-x vertices
+    p0, p1 = pts[0], pts[-1]
+    if p0[0] <= p1[0]:
+        left, right = p0, p1
+    else:
+        left, right = p1, p0
+    # If interior vertices extend past endpoints, snap left/right to extremes
+    for p in pts:
+        if p[0] < left[0] - 1e-6:
+            left = p
+        if p[0] > right[0] + 1e-6:
+            right = p
+    return left, right, minx, maxx, miny, maxy
+
+
+def _is_mostly_horizontal(pts: list[tuple[float, float]], *, min_len: float) -> bool:
+    if len(pts) < 2:
+        return False
+    plen = _path_length_px(pts)
+    if plen < min_len:
+        return False
+    _, _, minx, maxx, miny, maxy = _polyline_xy_ends(pts)
+    width = maxx - minx
+    height = maxy - miny
+    if width < min_len * 0.85:
+        return False
+    return height <= max(8.0, 0.35 * width)
+
+
+def _already_bridged(
+    contours: list[list[tuple[float, float]]],
+    p: tuple[float, float],
+    q: tuple[float, float],
+    *,
+    radius: float = 7.0,
+) -> bool:
+    """True if an existing stroke already connects near p↔q (vertical closer)."""
+    mx, my = (p[0] + q[0]) * 0.5, (p[1] + q[1]) * 0.5
+    gap = math.hypot(p[0] - q[0], p[1] - q[1])
+    if gap < 1.0:
+        return True
+    r2 = radius * radius
+    near_p = False
+    near_q = False
+    near_mid_vertical = False
+    for c in contours:
+        if len(c) < 2:
+            continue
+        for i, (x, y) in enumerate(c):
+            if (x - p[0]) ** 2 + (y - p[1]) ** 2 <= r2:
+                near_p = True
+            if (x - q[0]) ** 2 + (y - q[1]) ** 2 <= r2:
+                near_q = True
+            if i > 0:
+                x0, y0 = c[i - 1]
+                # Midpoint of segment near proposed closer midpoint + mostly vertical
+                sx, sy = (x0 + x) * 0.5, (y0 + y) * 0.5
+                if (
+                    (sx - mx) ** 2 + (sy - my) ** 2 <= (radius * 1.5) ** 2
+                    and abs(x - x0) <= abs(y - y0) * 0.75
+                    and abs(y - y0) >= gap * 0.35
+                ):
+                    near_mid_vertical = True
+        if near_p and near_q:
+            return True
+        if near_mid_vertical:
+            return True
+        near_p = near_q = False
+    return False
+
+
+def equalize_parallel_gaps(
+    contours: list[list[tuple[float, float]]],
+    face: np.ndarray | None = None,
+    *,
+    min_h_len: float = 36.0,
+    min_gap: float = 8.0,
+    max_gap: float = 80.0,
+    max_added: int = 24,
+    align_slack: float = 14.0,
+    min_overlap_frac: float = 0.55,
+) -> tuple[list[list[tuple[float, float]]], int]:
+    """
+    Close missing verticals between aligned parallel horizontal strokes.
+
+    Equalizes structure in edge polyline IR (e.g. white band on a mug where
+    L/R contrast never formed). Skips pairs that are both mostly inside the
+    face ROI so facial H pairs (brows/lips) are not boxed.
+    """
+    if len(contours) < 2:
+        return list(contours), 0
+
+    horiz: list[tuple[list[tuple[float, float]], tuple[float, float], tuple[float, float], float, float, float, float]] = []
+    for c in contours:
+        if not _is_mostly_horizontal(c, min_len=min_h_len):
+            continue
+        left, right, minx, maxx, miny, maxy = _polyline_xy_ends(c)
+        horiz.append((c, left, right, minx, maxx, miny, maxy))
+
+    if len(horiz) < 2:
+        return list(contours), 0
+
+    out: list[list[tuple[float, float]]] = [list(c) for c in contours if len(c) > 1]
+    added = 0
+    # Pair upper→lower by mid-y
+    for i in range(len(horiz)):
+        if added >= max_added:
+            break
+        a_pts, a_l, a_r, ax0, ax1, ay0, ay1 = horiz[i]
+        a_ymid = 0.5 * (ay0 + ay1)
+        a_span = max(ax1 - ax0, 1.0)
+        for j in range(i + 1, len(horiz)):
+            if added >= max_added:
+                break
+            b_pts, b_l, b_r, bx0, bx1, by0, by1 = horiz[j]
+            b_ymid = 0.5 * (by0 + by1)
+            dy = abs(b_ymid - a_ymid)
+            if dy < min_gap or dy > max_gap:
+                continue
+            # Prefer true stacked bands (little y-overlap)
+            y_overlap = min(ay1, by1) - max(ay0, by0)
+            if y_overlap > 0.35 * min(ay1 - ay0 + 1.0, by1 - by0 + 1.0):
+                continue
+            b_span = max(bx1 - bx0, 1.0)
+            shorter = min(a_span, b_span)
+            overlap = min(ax1, bx1) - max(ax0, bx0)
+            if overlap < min_overlap_frac * shorter:
+                continue
+            span_delta = abs(a_span - b_span) / max(a_span, b_span)
+            if span_delta > 0.35:
+                continue
+            # Face guard: skip short facial H pairs (brows/lips); allow long
+            # object bands even when they sit inside the bright elliptical prior.
+            if face is not None:
+                fa = _path_face_fraction(a_pts, face)
+                fb = _path_face_fraction(b_pts, face)
+                if fa >= 0.45 and fb >= 0.45:
+                    img_w = float(face.shape[1])
+                    if max(a_span, b_span) < 0.42 * img_w:
+                        continue
+
+            # Order so a is upper
+            if a_ymid <= b_ymid:
+                ul, ur = a_l, a_r
+                ll, lr = b_l, b_r
+            else:
+                ul, ur = b_l, b_r
+                ll, lr = a_l, a_r
+
+            candidates = (
+                (ul, ll),  # left closer
+                (ur, lr),  # right closer
+            )
+            for p, q in candidates:
+                if added >= max_added:
+                    break
+                # Ends should share a column within slack
+                if abs(p[0] - q[0]) > align_slack:
+                    # Nudge to shared x (mean) only if still nearly vertical after
+                    mx = 0.5 * (p[0] + q[0])
+                    p = (mx, p[1])
+                    q = (mx, q[1])
+                gap = math.hypot(p[0] - q[0], p[1] - q[1])
+                if gap < min_gap or gap > max_gap:
+                    continue
+                # Must be predominantly vertical
+                if abs(p[0] - q[0]) > 0.55 * abs(p[1] - q[1]) + 1.0:
+                    continue
+                if _already_bridged(out, p, q):
+                    continue
+                out.append([p, q])
+                added += 1
+
+    return out, added
+
+
 def refine_edge_polylines(
     contours: list[list[tuple[float, float]]],
     lum: np.ndarray,
     *,
     max_paths: int,
 ) -> list[list[tuple[float, float]]]:
-    """Island kill + arc splice + face-weighted budget (final edge pass)."""
+    """Island kill + arc splice + parallel-H equalize + face-weighted budget."""
     face = face_roi_mask(lum)
     cleaned = prune_edge_islands(contours, face)
     cleaned = repair_arc_gaps(cleaned, lum, face)
+    cleaned, n_eq = equalize_parallel_gaps(cleaned, face)
+    refine_edge_polylines.last_equalize_added = n_eq  # type: ignore[attr-defined]
     cleaned = _merge_bidirectional(cleaned, dist_thresh=8.0)
     return allocate_face_budget(cleaned, face, max_paths)
+
+
+refine_edge_polylines.last_equalize_added = 0  # type: ignore[attr-defined]
 
 
 def linedraw_edges_and_hatch(

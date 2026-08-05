@@ -81,6 +81,9 @@ def test_provider_status_and_default(monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     monkeypatch.delenv("BOTDRAW_VISION_SCENE_JSON", raising=False)
+    monkeypatch.delenv("BOTDRAW_VISION_CRITIQUE_JSON", raising=False)
+    monkeypatch.delenv("BOTDRAW_VISION_FEEDBACK_JSON", raising=False)
+    monkeypatch.delenv("BOTDRAW_VISION_TURNS_DIR", raising=False)
     monkeypatch.setenv("BOTDRAW_VISION_PROVIDER", "gemini")
     assert cr.default_provider() == "gemini"
     status = cr.provider_status()
@@ -145,6 +148,9 @@ def test_compare_providers_reports_not_ready(monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     monkeypatch.delenv("BOTDRAW_VISION_SCENE_JSON", raising=False)
+    monkeypatch.delenv("BOTDRAW_VISION_TURNS_DIR", raising=False)
+    monkeypatch.delenv("BOTDRAW_VISION_CRITIQUE_JSON", raising=False)
+    monkeypatch.delenv("BOTDRAW_VISION_FEEDBACK_JSON", raising=False)
     results = cr.compare_providers_scene(_rgb(), providers=["anthropic", "openai", "gemini", "manual"])
     assert "error" in results["anthropic"]
     assert "error" in results["openai"]
@@ -271,7 +277,7 @@ def test_enrich_keep_more_edges_forces_reingest():
     )
     acts = cr._enrich_actions_from_fixes(critique)
     assert acts.force_reingest is True
-    assert acts.line_source == "neural"
+    assert acts.line_source == "classic"
 
 
 def test_manual_critique_json(monkeypatch, tmp_path):
@@ -286,10 +292,10 @@ def test_manual_critique_json(monkeypatch, tmp_path):
 
 
 def test_pipeline_live_skips_critique(monkeypatch):
-    """live mode must not invoke critique_render."""
+    """live mode must not invoke structure or confirm critique."""
     from botdraw.core import pipeline as pipe
 
-    called = {"critique": 0}
+    called = {"critique": 0, "structure": 0}
 
     def fake_scene(extra, *, image_path, quality=None):
         return {
@@ -305,8 +311,13 @@ def test_pipeline_live_skips_critique(monkeypatch):
         called["critique"] += 1
         raise AssertionError("critique must not run in live mode")
 
+    def boom_structure(*args, **kwargs):
+        called["structure"] += 1
+        raise AssertionError("structure critique must not run in live mode")
+
     monkeypatch.setattr(pipe, "_apply_ai_scene_review", fake_scene)
     monkeypatch.setattr(pipe, "_apply_ai_critique_once", boom_critique)
+    monkeypatch.setattr(pipe, "_apply_ai_structure_after_ingest", boom_structure)
 
     job, payload, layers = pipe.render_job(
         app="portraitbot",
@@ -319,8 +330,117 @@ def test_pipeline_live_skips_critique(monkeypatch):
         params_extra={"ai_review": "live", "image_mode": "photo", "line_source": "classic"},
     )
     assert called["critique"] == 0
+    assert called["structure"] == 0
     assert job.status.value == "ready" or str(job.status).endswith("READY")
     assert (layers.get("meta") or {}).get("ai_review") == "live" or True  # meta may nest differently
+
+
+def test_manual_skip_missing_turn(monkeypatch, tmp_path):
+    """Missing turn JSON → fail closed (None), do not invent knobs."""
+    turns = tmp_path / "turns"
+    turns.mkdir()
+    (turns / "turn01_scene.json").write_text(
+        json.dumps(
+            {
+                "orientation_deg": 0,
+                "subjects": [{"kind": "other", "importance": 1.0}],
+                "clutter": [],
+                "lighting": "normal",
+                "ingest": {"line_source": "classic", "suppress_background": False},
+                "summary": "only scene",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("BOTDRAW_VISION_PROVIDER", "manual")
+    monkeypatch.setenv("BOTDRAW_VISION_TURNS_DIR", str(turns))
+    assert cr.resolve_manual_turn_path(2) is None
+    assert cr.resolve_manual_turn_path(3) is None
+    rgb = _rgb()
+    assert cr.critique_structure(rgb, b"\x89PNG\r\n\x1a\n", turn=2) is None
+    assert cr.critique_render(rgb, b"\x89PNG\r\n\x1a\n", style_id="x", turn=3) is None
+
+
+def test_manual_feedback_json_turn3(monkeypatch, tmp_path):
+    path = tmp_path / "feedback.json"
+    path.write_text(
+        json.dumps(
+            {
+                "overall": 0.9,
+                "issues": [],
+                "actions": {"force_reingest": True, "density_mul": 1.2},
+                "summary": "confirm",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("BOTDRAW_VISION_PROVIDER", "manual")
+    monkeypatch.setenv("BOTDRAW_VISION_FEEDBACK_JSON", str(path))
+    monkeypatch.delenv("BOTDRAW_VISION_TURNS_DIR", raising=False)
+    monkeypatch.delenv("BOTDRAW_VISION_CRITIQUE_JSON", raising=False)
+    c = cr.critique_render(_rgb(), b"\x89PNG\r\n\x1a\n", style_id="portrait_linework", turn=3)
+    assert c is not None
+    assert c.summary == "confirm"
+
+
+def test_pipeline_studio_structure_then_confirm(monkeypatch):
+    """Studio: scene once, structure once, confirm once."""
+    from botdraw.core import pipeline as pipe
+    from botdraw.core.models import PaperSize, QualityPreset
+
+    calls = {"scene": 0, "structure": 0, "confirm": 0}
+
+    def fake_scene(extra, *, image_path, quality=None):
+        calls["scene"] += 1
+        return {
+            **extra,
+            "ai_review": "studio",
+            "ai_review_status": "scene",
+            "line_source": "classic",
+            "suppress_background": False,
+            "max_tone_code": 3,
+        }
+
+    def fake_structure(extra):
+        calls["structure"] += 1
+        return {
+            **extra,
+            "ai_vision_turn": 2,
+            "ai_review_status": "structure",
+            "ai_critique": {"overall": 0.4, "issues": [], "actions": {}, "summary": "structure"},
+            "ai_critique_by_turn": {
+                "2": {"overall": 0.4, "issues": [], "actions": {}, "summary": "structure"}
+            },
+        }
+
+    def fake_confirm(extra, *, layered, palette, paper_color_hex):
+        calls["confirm"] += 1
+        return {
+            **extra,
+            "ai_vision_turn": 3,
+            "ai_review_status": "confirm",
+            "ai_critique_applied": True,
+            "ai_critique": {"overall": 0.85, "issues": [], "actions": {}, "summary": "ok"},
+        }
+
+    monkeypatch.setattr(pipe, "_apply_ai_scene_review", fake_scene)
+    monkeypatch.setattr(pipe, "_apply_ai_structure_after_ingest", fake_structure)
+    monkeypatch.setattr(pipe, "_apply_ai_critique_once", fake_confirm)
+
+    job, _payload, _layers = pipe.render_job(
+        app="portraitbot",
+        style_id="portrait_linework",
+        quality=QualityPreset.STUDIO_HQ,
+        paper=PaperSize.A5,
+        seed=1,
+        density=1.0,
+        image_path=None,
+        params_extra={"ai_review": "studio", "image_mode": "photo", "line_source": "classic"},
+    )
+    assert calls["scene"] == 1
+    assert calls["structure"] == 1
+    assert calls["confirm"] == 1
+    assert job is not None
 
 
 def test_pipeline_studio_runs_critique_once(monkeypatch):
@@ -339,20 +459,28 @@ def test_pipeline_studio_runs_critique_once(monkeypatch):
             "max_tone_code": 4,
         }
 
+    def fake_structure(extra):
+        return {
+            **extra,
+            "ai_vision_turn": 2,
+            "ai_review_status": "structure",
+        }
+
     def fake_critique(extra, *, layered, palette, paper_color_hex):
         calls["critique"] += 1
-        # Non-actionable critique → no redo loop
         return {
             **extra,
             "ai_critique": {"overall": 0.9, "issues": [], "actions": {}, "summary": "ok"},
-            "ai_review_status": "critique",
+            "ai_review_status": "confirm",
             "ai_critique_applied": True,
+            "ai_vision_turn": 3,
         }
 
     monkeypatch.setattr(pipe, "_apply_ai_scene_review", fake_scene)
+    monkeypatch.setattr(pipe, "_apply_ai_structure_after_ingest", fake_structure)
     monkeypatch.setattr(pipe, "_apply_ai_critique_once", fake_critique)
 
-    job, payload, _layers = pipe.render_job(
+    job, _payload, _layers = pipe.render_job(
         app="portraitbot",
         style_id="portrait_linework",
         quality=QualityPreset.STUDIO_HQ,
@@ -364,6 +492,104 @@ def test_pipeline_studio_runs_critique_once(monkeypatch):
     )
     assert calls["critique"] == 1
     assert job is not None
+
+
+def test_pipeline_studio_writes_vision_artifacts(monkeypatch, tmp_path):
+    """Full studio path with manual fixtures writes turn artifacts."""
+    import os
+
+    from botdraw.core import pipeline as pipe
+    from botdraw.core.jobs import artifact_dir
+    from botdraw.core.models import PaperSize, QualityPreset
+    from botdraw.portrait.vision_loop import ensure_manual_turn_fixtures
+
+    turns = tmp_path / "turns"
+    ensure_manual_turn_fixtures(root=turns, force=True)
+    monkeypatch.setenv("BOTDRAW_VISION_PROVIDER", "manual")
+    monkeypatch.setenv("BOTDRAW_VISION_TURNS_DIR", str(turns))
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    job, _payload, layers = pipe.render_job(
+        app="portraitbot",
+        style_id="portrait_linework",
+        quality=QualityPreset.STUDIO_HQ,
+        paper=PaperSize.A5,
+        seed=1,
+        density=1.0,
+        image_path=None,
+        params_extra={
+            "ai_review": "studio",
+            "image_mode": "photo",
+            "line_source": "classic",
+            "hatch_size": 0,
+            "scan_mode": "edges",
+        },
+    )
+    ad = artifact_dir(job.id)
+    assert (ad / "ai_scene.json").exists()
+    assert (ad / "ai_critique_t2.json").exists()
+    assert (ad / "ai_critique_t3.json").exists()
+    assert (ad / "ai_vision_history.json").exists()
+    meta = layers.get("meta") or {}
+    assert meta.get("ai_review") == "studio"
+    assert int(meta.get("ai_vision_turn") or 0) >= 2
+    hist = meta.get("ai_vision_history") or []
+    assert any(h.get("turn") == 1 or h.get("kind") == "scene" for h in hist) or hist
+    # Cleanup env pollution for other tests
+    os.environ.pop("BOTDRAW_VISION_TURNS_DIR", None)
+    os.environ.pop("BOTDRAW_VISION_PROVIDER", None)
+
+
+def test_pipeline_skips_structure_when_turn_already_two(monkeypatch):
+    """Ingest→Vectorize carry: ai_vision_turn=2 skips structure, runs confirm."""
+    from botdraw.core import pipeline as pipe
+    from botdraw.core.models import PaperSize, QualityPreset
+
+    calls = {"structure": 0, "confirm": 0}
+
+    def boom_structure(extra):
+        calls["structure"] += 1
+        raise AssertionError("structure must be skipped when turn>=2")
+
+    def fake_confirm(extra, *, layered, palette, paper_color_hex):
+        calls["confirm"] += 1
+        return {
+            **extra,
+            "ai_vision_turn": 3,
+            "ai_critique_applied": True,
+            "ai_review_status": "confirm",
+            "ai_critique": {"overall": 0.8, "issues": [], "actions": {}, "summary": "ok"},
+            "ai_vision_history": list(extra.get("ai_vision_history") or [])
+            + [{"turn": 3, "kind": "confirm", "summary": "ok"}],
+        }
+
+    monkeypatch.setattr(pipe, "_apply_ai_structure_after_ingest", boom_structure)
+    monkeypatch.setattr(pipe, "_apply_ai_critique_once", fake_confirm)
+
+    pipe.render_job(
+        app="portraitbot",
+        style_id="portrait_linework",
+        quality=QualityPreset.STUDIO_HQ,
+        paper=PaperSize.A5,
+        seed=1,
+        density=1.0,
+        image_path=None,
+        params_extra={
+            "ai_review": "studio",
+            "ai_vision_turn": 2,
+            "ai_review_status": "structure",
+            "ai_vision_history": [
+                {"turn": 1, "kind": "scene", "summary": "s"},
+                {"turn": 2, "kind": "structure", "summary": "st"},
+            ],
+            "ai_scene": {"summary": "s"},
+            "image_mode": "photo",
+            "line_source": "classic",
+            "reuse_ingest": False,
+        },
+    )
+    assert calls["structure"] == 0
+    assert calls["confirm"] == 1
 
 
 def test_ingest_accepts_ai_scene_knobs():

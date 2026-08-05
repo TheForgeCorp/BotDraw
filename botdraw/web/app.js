@@ -10,7 +10,7 @@ const downloadSvg = document.getElementById("download-svg");
 const railInspector = document.getElementById("rail-inspector");
 const textDragHandle = document.getElementById("text-drag-handle");
 const stageSegEl = document.getElementById("stage-seg");
-let portraitStageSeg = "vector";
+let portraitStageSeg = "ingest";
 player.onStats = (m) => { statsEl.textContent = m; };
 lettersPlayer.onStats = (m) => { statsEl.textContent = m; };
 portraitPlayer.onStats = (m) => { statsEl.textContent = m; };
@@ -31,16 +31,26 @@ let portraitIngestPreview = null; // last ingest API payload
 let portraitShowEdges = true;
 let portraitShowRegions = true;
 let portraitShowCrop = true;
-let portraitShowHatch = true;
-let portraitHatchEnabled = true;
+let portraitShowHatch = false;
+let portraitHatchEnabled = false; // Phase B gate-1: structure first
 let portraitEnsemble = null; // null = auto (studio-hq photo on); bool overrides
-let portraitScanMode = "auto"; // Inkscape Trace Bitmap–inspired filter
+let portraitScanMode = "edges"; // Phase B default
 let portraitPathSimplify = 2; // contour_simplify / Path→Simplify strength (1=finest)
-let portraitLineSource = "auto"; // auto | neural | classic
+let portraitLineSource = "classic"; // Phase B classic baseline
 let portraitAiReview = "off"; // off | live (scene) | studio (scene+critique)
-let portraitIngestUnderlay = "scan"; // scan | tone | photo | none
+let portraitVisionState = null; // carried ingest→vectorize: turns, history, critiques
+let portraitIngestUnderlay = "none"; // structure-first underlay
 let portraitIngestTimer = null;
 let portraitPenMap = null;
+let portraitGateChecks = {
+  identity: false,
+  noise: false,
+  budget: false,
+  crop: false,
+  classic: false,
+};
+const PORTRAIT_BUDGET = { "booth-fast": 800, "booth-balanced": 2500, "studio-hq": 8000 };
+const PORTRAIT_PITCH_MM = { 1: 1.7, 2: 1.15, 3: 0.8, 4: 0.55 };
 const PORTRAIT_LINE_TYPES = [
   "solid", "dashed", "dotted", "dash_dot", "zigzag", "triangle", "wave", "square_wave",
   "half_circle", "scallop_alt", "beads", "double", "railroad", "stitch", "hatch_tick",
@@ -528,9 +538,173 @@ function syncZoomLabel(z) {
   if (loupe) loupe.classList.toggle("active", !!stagePlayer().loupeOn);
 }
 
+function portraitGatePassed() {
+  return Object.values(portraitGateChecks).every(Boolean);
+}
+
+function syncPortraitApplyGate() {
+  const root = portraitContentRoot();
+  const applyBtn = root?.querySelector("#portrait-apply");
+  const status = root?.querySelector("#portrait-gate-status");
+  const passed = portraitGatePassed();
+  if (applyBtn) applyBtn.disabled = !(portraitIngestId && passed);
+  if (status) {
+    status.textContent = !portraitIngestId
+      ? "Ingest first — then mark gate checks"
+      : passed
+        ? "Gate passed — Apply restyle unlocked"
+        : "Gate open — mark all checks to unlock Apply";
+    status.classList.toggle("ok", !!(portraitIngestId && passed));
+  }
+  root?.querySelectorAll("[data-gate-key]").forEach((el) => {
+    const key = el.dataset.gateKey;
+    el.closest(".chk")?.classList.toggle("pass", !!portraitGateChecks[key]);
+  });
+}
+
+function updatePortraitCalc(preview) {
+  const body = document.getElementById("portrait-calc-body");
+  const live = document.getElementById("portrait-calc-live");
+  if (!body) return;
+  const data = preview || portraitIngestPreview;
+  if (!data) {
+    body.innerHTML = `<p class="muted">Ingest a photo to see structure, ShadeField, and gate assessment.</p>`;
+    if (live) {
+      live.textContent = "idle";
+      live.classList.remove("is-live");
+    }
+    return;
+  }
+  const meta = data.meta || {};
+  const tg = meta.tone_grid || {};
+  const hist = tg.code_hist || {};
+  const quality = data.quality || state.quality || "booth-balanced";
+  const budget = PORTRAIT_BUDGET[quality] || 2500;
+  const edgeCount = Number(data.edge_count || 0);
+  const hatchCount = Number(data.hatch_count || 0);
+  const regionCount = Number(data.region_count || 0);
+  const lineSource = meta.line_source || portraitLineSource || "classic";
+  const scanMode = data.scan_mode || meta.scan_mode || portraitScanMode || "auto";
+  const extractor = meta.edge_extractor || (lineSource === "neural" ? "neural" : "linedraw");
+  const totalPaths = edgeCount + hatchCount;
+  const budgetOk = totalPaths <= budget;
+  const identityOk = edgeCount >= 200;
+  const classicOk = lineSource === "classic" || lineSource === "auto";
+  const toneOn = hatchCount > 0;
+  const maxHist = Math.max(1, ...[0, 1, 2, 3, 4, 5].map((c) => Number(hist[String(c)] || hist[c] || 0)));
+  const histRows = [0, 1, 2, 3, 4, 5]
+    .map((c) => {
+      const n = Number(hist[String(c)] || hist[c] || 0);
+      const pct = Math.round((n / maxHist) * 100);
+      return `<div class="calc-bar-row"><span>c${c}</span><div class="calc-bar"><i class="c${c}" style="width:${pct}%"></i></div><span>${n}</span></div>`;
+    })
+    .join("");
+  const pitchRows = [1, 2, 3, 4]
+    .map((c) => `<span>code ${c}</span><span>${PORTRAIT_PITCH_MM[c].toFixed(2)} mm</span>`)
+    .join("");
+  const page = data.page_mm ? `${data.page_mm[0]}×${data.page_mm[1]} mm` : "—";
+  const timingRaw = data.timing_s;
+  const timing =
+    timingRaw && typeof timingRaw === "object" && timingRaw.total != null
+      ? `${timingRaw.total}s`
+      : typeof timingRaw === "number"
+        ? `${timingRaw}s`
+        : "—";
+  const badge = (ok, active = true) =>
+    !active
+      ? `<span class="calc-badge skip">n/a</span>`
+      : ok
+        ? `<span class="calc-badge pass">pass</span>`
+        : `<span class="calc-badge fail">watch</span>`;
+
+  const vision = portraitVisionState || {
+    ai_review: data.ai_review || meta.ai_review,
+    ai_review_status: data.ai_review_status || meta.ai_review_status,
+    ai_vision_turn: data.ai_vision_turn ?? meta.ai_vision_turn,
+    ai_vision_history: data.ai_vision_history || meta.ai_vision_history || [],
+    ai_scene: data.ai_scene || meta.ai_scene,
+    ai_critique: data.ai_critique || meta.ai_critique,
+  };
+  const histTurns = Array.isArray(vision.ai_vision_history) ? vision.ai_vision_history : [];
+  const visionRows = histTurns.length
+    ? histTurns
+        .map((t) => {
+          const kind = t.kind || (t.turn === 1 ? "scene" : t.turn === 2 ? "structure" : "confirm");
+          const ov = t.overall != null ? Number(t.overall).toFixed(2) : "—";
+          const re = t.force_reingest || t.reingest ? " · re-ingest" : "";
+          const sum = t.summary ? String(t.summary).slice(0, 56) : "";
+          return `<div class="calc-assess-row"><span>T${t.turn} ${kind}${re}</span><span class="mono">${ov}${sum ? ` · ${sum}` : ""}</span></div>`;
+        })
+        .join("")
+    : vision.ai_review && vision.ai_review !== "off"
+      ? `<div class="calc-assess-row"><span>${vision.ai_review}</span><span>${vision.ai_review_status || "pending"}</span></div>`
+      : `<p class="muted" style="margin:0;font-size:0.8rem">AI off — studio runs a 3-turn loop (scene → structure → confirm).</p>`;
+
+  body.innerHTML = `
+    <div class="calc-sec">
+      <div class="lab">Pipeline</div>
+      <ol class="calc-pipe">
+        <li class="done"><span class="step">Load / crop</span><span class="detail">${data.width_px || "?"}×${data.height_px || "?"} · ${page}</span></li>
+        <li class="done"><span class="step">Scan field</span><span class="detail">${scanMode}</span></li>
+        <li class="done"><span class="step">Structure</span><span class="detail">${extractor} → ${edgeCount} polys</span></li>
+        <li class="${toneOn ? "done" : ""}"><span class="step">ShadeField</span><span class="detail">${toneOn ? `${hatchCount} hatch · cell ${tg.cell_mm != null ? Number(tg.cell_mm).toFixed(2) + " mm" : "—"}` : "hatch off (gate-1)"}</span></li>
+        <li class="done"><span class="step">Emit IR</span><span class="detail">ingest ${data.ingest_id || "?"}${data.cache_hit ? " · cache" : ""}</span></li>
+      </ol>
+    </div>
+    <div class="calc-sec">
+      <div class="lab">AI vision turns</div>
+      <div class="calc-kv">
+        <span>mode</span><span>${vision.ai_review || "off"}</span>
+        <span>status</span><span>${vision.ai_review_status || "—"}</span>
+        <span>turn</span><span>${vision.ai_vision_turn != null ? vision.ai_vision_turn : "—"} / 3</span>
+      </div>
+      <div class="calc-assess">${visionRows}</div>
+    </div>
+    <div class="calc-sec">
+      <div class="lab">Structure</div>
+      <div class="calc-kv">
+        <span>line_source</span><span>${lineSource}</span>
+        <span>edge_extractor</span><span>${extractor}</span>
+        <span>edge_polylines</span><span>${edgeCount}</span>
+        <span>regions</span><span>${regionCount}</span>
+        <span>timing</span><span>${timing}</span>
+      </div>
+    </div>
+    <div class="calc-sec">
+      <div class="lab">ShadeField mesh</div>
+      <div class="calc-kv">
+        <span>hatch_polylines</span><span>${hatchCount}</span>
+        <span>tone_cell_mm</span><span>${tg.cell_mm != null ? Number(tg.cell_mm).toFixed(2) : "—"}</span>
+        <span>max_tone_code</span><span>${tg.max_code ?? meta.max_tone_code ?? "—"}</span>
+        <span>penmanship</span><span>${toneOn ? "hatch" : "none"}</span>
+      </div>
+      <div class="calc-hist">${histRows}</div>
+    </div>
+    <div class="calc-sec">
+      <div class="lab">Pitch map (mm)</div>
+      <div class="calc-kv">${pitchRows}
+        <span>path budget</span><span class="${budgetOk ? "ok" : "warn"}">${totalPaths} / ${budget}</span>
+      </div>
+    </div>
+    <div class="calc-sec">
+      <div class="lab">Model assessment</div>
+      <div class="calc-assess">
+        <div class="calc-assess-row"><span>Identity (edge count)</span>${badge(identityOk)}</div>
+        <div class="calc-assess-row"><span>Path budget</span>${badge(budgetOk)}</div>
+        <div class="calc-assess-row"><span>Classic baseline</span>${badge(classicOk)}</div>
+        <div class="calc-assess-row"><span>Tone form (gate-2)</span>${badge(toneOn && hatchCount > 50, toneOn)}</div>
+      </div>
+    </div>
+  `;
+  if (live) {
+    live.textContent = "live";
+    live.classList.add("is-live");
+  }
+}
+
 function setPortraitStageSeg(seg) {
   const prev = portraitStageSeg;
-  portraitStageSeg = seg || "vector";
+  portraitStageSeg = seg || "ingest";
   if (stageSegEl) {
     stageSegEl.querySelectorAll("button").forEach((b) => {
       b.classList.toggle("active", b.dataset.seg === portraitStageSeg);
@@ -567,6 +741,7 @@ function setPortraitStageSeg(seg) {
     portraitPlayer.syncSize();
     portraitPlayer.fitZoom();
   });
+  updatePortraitCalc(portraitIngestPreview);
 }
 
 function setShellForApp(app) {
@@ -591,6 +766,9 @@ function setShellForApp(app) {
   if (lettersSheet) lettersSheet.hidden = !letters;
   if (portraitSheet) portraitSheet.hidden = !portrait;
   if (stageSegEl) stageSegEl.hidden = !portrait;
+  const portraitCalc = document.getElementById("portrait-calc");
+  if (portraitCalc) portraitCalc.hidden = !portrait;
+  if (portrait && portraitCalc) updatePortraitCalc(portraitIngestPreview);
 
   const exportPack = document.getElementById("export-pack");
   const letterSvg = document.getElementById("letters-dl-svg");
@@ -1404,7 +1582,7 @@ function renderPortrait() {
   });
   root.innerHTML = `
     <h3>Portrait</h3>
-    <p class="muted">Upload → Ingest → Vectorize. Stage switches Source · Ingest · Vector.</p>
+    <p class="muted">Phase B: Source → Ingest (gate) → Apply. Structure first; tone optional.</p>
     <div class="group">
       <div class="group-block">
         <div class="group-title">Image</div>
@@ -1414,7 +1592,7 @@ function renderPortrait() {
         </div>
         <div class="row" style="margin-top:0.35rem">
           <label><input type="checkbox" id="auto-frame" ${portraitAutoFrame ? "checked" : ""}/> Auto frame</label>
-          <label><input type="checkbox" id="hatch-shading" ${portraitHatchEnabled ? "checked" : ""}/> Hatch</label>
+          <label><input type="checkbox" id="hatch-shading" ${portraitHatchEnabled ? "checked" : ""}/> Tone / hatch</label>
           <button type="button" class="btn btn-ghost" id="reset-frame">Reset frame</button>
         </div>
       </div>
@@ -1450,10 +1628,19 @@ function renderPortrait() {
         <div class="pen-chips">${penList}</div>
       </div>
     </div>
+    <div class="gate-panel" id="portrait-gate">
+      <div class="group-title">Gate checklist</div>
+      <label class="chk"><input type="checkbox" data-gate-key="identity" ${portraitGateChecks.identity ? "checked" : ""}/> Identity (structure alone)</label>
+      <label class="chk"><input type="checkbox" data-gate-key="noise" ${portraitGateChecks.noise ? "checked" : ""}/> Noise / travel OK</label>
+      <label class="chk"><input type="checkbox" data-gate-key="budget" ${portraitGateChecks.budget ? "checked" : ""}/> Path budget OK</label>
+      <label class="chk"><input type="checkbox" data-gate-key="crop" ${portraitGateChecks.crop ? "checked" : ""}/> Crop OK</label>
+      <label class="chk"><input type="checkbox" data-gate-key="classic" ${portraitGateChecks.classic ? "checked" : ""}/> Classic-only pass</label>
+      <div class="gate-status" id="portrait-gate-status">Ingest first — then mark gate checks</div>
+    </div>
     <div class="row" style="margin-top:0.35rem; gap:0.35rem; flex-wrap:wrap">
-      <button type="button" class="btn" id="portrait-ingest-btn">Ingest</button>
-      <button type="button" class="btn btn-primary primary" id="portrait-go">Vectorize</button>
-      <button type="button" class="btn" id="portrait-apply" ${portraitIngestId ? "" : "disabled"}>Apply</button>
+      <button type="button" class="btn btn-primary primary" id="portrait-ingest-btn">Ingest</button>
+      <button type="button" class="btn" id="portrait-apply" disabled>Apply</button>
+      <button type="button" class="btn" id="portrait-go">Vectorize</button>
     </div>
     <details class="advanced">
       <summary>Advanced</summary>
@@ -1480,9 +1667,9 @@ function renderPortrait() {
             ${field(
               "Line source",
               `<select id="line-source">
-                <option value="auto"${portraitLineSource === "auto" ? " selected" : ""}>Auto</option>
-                <option value="neural"${portraitLineSource === "neural" ? " selected" : ""}>Neural</option>
                 <option value="classic"${portraitLineSource === "classic" ? " selected" : ""}>Classic</option>
+                <option value="neural"${portraitLineSource === "neural" ? " selected" : ""}>Neural</option>
+                <option value="auto"${portraitLineSource === "auto" ? " selected" : ""}>Auto</option>
               </select>`
             )}
             ${field(
@@ -1494,7 +1681,7 @@ function renderPortrait() {
               </select>`
             )}
           </div>
-          <p class="muted" id="ai-review-hint">Live = scene only; Studio may re-ingest once.</p>
+          <p class="muted" id="ai-review-hint">Phase B gate: AI off. Live = scene only; Studio may re-ingest once.</p>
           <label title="5+1 ensemble"><input type="checkbox" id="ensemble-5plus1" ${
             portraitEnsemble === true || (portraitEnsemble == null && state.quality === "studio-hq" && portraitImageMode === "photo") ? "checked" : ""
           }/> Ensemble (5+1)</label>
@@ -1595,6 +1782,13 @@ function renderPortrait() {
   if (hatchCb) {
     hatchCb.onchange = () => {
       portraitHatchEnabled = !!hatchCb.checked;
+      portraitShowHatch = !!portraitHatchEnabled;
+      const thToggle = document.getElementById("toggle-hatch");
+      if (thToggle) {
+        thToggle.checked = portraitShowHatch;
+        thToggle.disabled = !portraitHatchEnabled;
+      }
+      updatePortraitCalc(portraitIngestPreview);
       if (portraitIngestTimer) clearTimeout(portraitIngestTimer);
       portraitIngestTimer = setTimeout(() => {
         runPortraitIngest({ forceReingest: true }).catch((err) => {
@@ -1604,6 +1798,27 @@ function renderPortrait() {
       }, 300);
     };
   }
+  root.querySelectorAll("[data-gate-key]").forEach((el) => {
+    const key = el.dataset.gateKey;
+    if (!key || !(key in portraitGateChecks)) return;
+    el.checked = !!portraitGateChecks[key];
+    el.onchange = () => {
+      portraitGateChecks[key] = !!el.checked;
+      syncPortraitApplyGate();
+    };
+  });
+  const lineSrcEl = root.querySelector("#line-source");
+  if (lineSrcEl) {
+    lineSrcEl.value = portraitLineSource;
+    lineSrcEl.onchange = () => {
+      const next = String(lineSrcEl.value || "").trim().toLowerCase();
+      portraitLineSource = ["classic", "neural", "auto"].includes(next) ? next : "classic";
+      portraitForceReingest = true;
+      updatePortraitCalc(portraitIngestPreview);
+    };
+  }
+  syncPortraitApplyGate();
+  updatePortraitCalc(portraitIngestPreview);
   const ensCb = root.querySelector("#ensemble-5plus1");
   if (ensCb) {
     ensCb.onchange = () => {
@@ -1627,9 +1842,9 @@ function renderPortrait() {
     if (m === "live") {
       aiHintEl.textContent = "Live: scene knobs only (no critique / no AI re-ingest).";
     } else if (m === "studio") {
-      aiHintEl.textContent = "Studio: scene + one critique; keep_more_edges may re-ingest once.";
+      aiHintEl.textContent = "Studio: 3-turn loop (scene → structure critique → confirm). At most one AI re-ingest. Visual history: botdraw vision loop-demo.";
     } else {
-      aiHintEl.textContent = "AI review off. Live = crop/suppress/tone only; Studio may re-ingest once for fidelity.";
+      aiHintEl.textContent = "AI review off. Live = crop/suppress/tone only; Studio = 3-turn scene/structure/confirm (manual JSON or API).";
     }
   };
   if (aiReviewEl) {
@@ -1682,8 +1897,12 @@ function renderPortrait() {
     try {
       portraitFile = raw ? await snapshotPortraitFile(raw) : null;
       portraitIngestId = null;
+      portraitIngestPreview = null;
       portraitForceReingest = true;
       portraitCrop = null;
+      Object.keys(portraitGateChecks).forEach((k) => {
+        portraitGateChecks[k] = false;
+      });
     } catch (e) {
       portraitFile = null;
       if (portraitStatsEl) portraitStatsEl.textContent = portraitNetworkErrorMessage(e);
@@ -1691,6 +1910,8 @@ function renderPortrait() {
       return;
     }
     drawPortraitSourcePreview(portraitFile);
+    updatePortraitCalc(null);
+    syncPortraitApplyGate();
     const drop = root.querySelector("#portrait-drop");
     if (drop) {
       drop.classList.toggle("has-file", !!portraitFile);
@@ -1715,8 +1936,10 @@ function renderPortrait() {
   }
   if (th) {
     th.checked = portraitShowHatch;
+    th.disabled = !portraitHatchEnabled;
     th.onchange = () => {
       portraitShowHatch = th.checked;
+      updatePortraitCalc(portraitIngestPreview);
       drawPortraitIngestPreview(portraitIngestPreview);
     };
   }
@@ -1763,12 +1986,26 @@ function renderPortrait() {
     runPortraitIngest({ forceReingest: true }).catch((e) => {
       setDeskState({ loading: false, empty: !portraitIngestPreview, hint: "Drop a photo, then Ingest" });
       if (portraitStatsEl) portraitStatsEl.textContent = portraitNetworkErrorMessage(e);
+      updatePortraitCalc(portraitIngestPreview);
+      syncPortraitApplyGate();
       console.error(e);
     });
   root.querySelector("#portrait-go").onclick = () => run({ reuse: !!portraitIngestId });
-  root.querySelector("#portrait-apply").onclick = () => run({ reuse: true });
+  root.querySelector("#portrait-apply").onclick = () => {
+    if (!portraitIngestId || !portraitGatePassed()) {
+      syncPortraitApplyGate();
+      return;
+    }
+    run({ reuse: true });
+  };
   root.querySelector("#portrait-reingest").onclick = () =>
-    runPortraitIngest({ forceReingest: true }).then(() => run({ forceReingest: false, reuse: true })).catch((e) => {
+    runPortraitIngest({ forceReingest: true }).then(() => {
+      if (!portraitGatePassed()) {
+        syncPortraitApplyGate();
+        return null;
+      }
+      return run({ forceReingest: false, reuse: true });
+    }).catch((e) => {
       if (portraitStatsEl) portraitStatsEl.textContent = portraitNetworkErrorMessage(e);
       console.error(e);
     });
@@ -1837,6 +2074,16 @@ async function runPortraitIngest(opts = {}) {
   portraitForceReingest = false;
   portraitIngestPreview = data;
   portraitIngestId = data.ingest_id || null;
+  portraitVisionState = {
+    ai_review: data.ai_review || portraitAiReview,
+    ai_review_status: data.ai_review_status,
+    ai_vision_turn: data.ai_vision_turn,
+    ai_vision_history: data.ai_vision_history || [],
+    ai_scene: data.ai_scene,
+    ai_critique: data.ai_critique,
+    ai_critique_by_turn: data.ai_critique_by_turn,
+    ai_reingest_count: data.ai_reingest_count,
+  };
   if (data.crop) portraitCrop = data.crop;
   drawPortraitSourcePreview(portraitFile, data.crop);
   drawPortraitIngestPreview(data);
@@ -1875,8 +2122,8 @@ async function runPortraitIngest(opts = {}) {
         : (toneN ? `Tone codes ${toneN}` : "");
     }
   }
-  const applyBtn = root.querySelector("#portrait-apply");
-  if (applyBtn) applyBtn.disabled = !portraitIngestId;
+  updatePortraitCalc(data);
+  syncPortraitApplyGate();
   return data;
 }
 
@@ -1913,6 +2160,17 @@ function collectPortraitExtra(root, { reuse = false, forceReingest = false } = {
   const aiEl = root.querySelector("#ai-review");
   if (aiEl) portraitAiReview = aiEl.value || "off";
   if (portraitAiReview && portraitAiReview !== "off") extra.ai_review = portraitAiReview;
+  // Carry studio turns 1–2 from Ingest into Vectorize so turn 3 confirm runs once
+  if (portraitVisionState && portraitAiReview === "studio") {
+    const vs = portraitVisionState;
+    if (vs.ai_vision_turn != null) extra.ai_vision_turn = vs.ai_vision_turn;
+    if (vs.ai_vision_history) extra.ai_vision_history = vs.ai_vision_history;
+    if (vs.ai_scene) extra.ai_scene = vs.ai_scene;
+    if (vs.ai_critique) extra.ai_critique = vs.ai_critique;
+    if (vs.ai_critique_by_turn) extra.ai_critique_by_turn = vs.ai_critique_by_turn;
+    if (vs.ai_reingest_count != null) extra.ai_reingest_count = vs.ai_reingest_count;
+    if (vs.ai_review_status) extra.ai_review_status = vs.ai_review_status;
+  }
   if (portraitCrop) extra.crop = portraitCrop;
   if (portraitPenMap) extra.pen_map = portraitPenMap;
   if (reuse && portraitIngestId && !forceReingest && !portraitForceReingest) {
@@ -2024,11 +2282,28 @@ async function renderPortraitJob(opts = {}) {
     {
       ai_review: layerMeta.ai_review || settings.params_extra?.ai_review || settings.ai_review,
       ai_review_status: layerMeta.ai_review_status || settings.params_extra?.ai_review_status,
-      ai_scene: settings.ai_scene,
+      ai_scene: settings.ai_scene || settings.params_extra?.ai_scene,
       ai_critique: settings.ai_critique || settings.params_extra?.ai_critique,
+      ai_vision_turn: layerMeta.ai_vision_turn ?? settings.params_extra?.ai_vision_turn,
+      ai_vision_history: layerMeta.ai_vision_history || settings.params_extra?.ai_vision_history,
     },
     layerMeta
   );
+  // Merge confirm turn into carried vision state for calc pane
+  const pe = settings.params_extra || {};
+  if (pe.ai_vision_history || layerMeta.ai_vision_history) {
+    portraitVisionState = {
+      ...(portraitVisionState || {}),
+      ai_review: pe.ai_review || layerMeta.ai_review || portraitAiReview,
+      ai_review_status: pe.ai_review_status || layerMeta.ai_review_status,
+      ai_vision_turn: pe.ai_vision_turn ?? layerMeta.ai_vision_turn,
+      ai_vision_history: pe.ai_vision_history || layerMeta.ai_vision_history || [],
+      ai_scene: pe.ai_scene || settings.ai_scene,
+      ai_critique: pe.ai_critique || settings.ai_critique,
+      ai_critique_by_turn: pe.ai_critique_by_turn,
+    };
+    updatePortraitCalc(portraitIngestPreview);
+  }
   if (portraitStatsEl) {
     const budgetLabel = budget?.label || `passes ${data.layers?.pass_count ?? "?"}`;
     const warn = budget?.over_budget ? " · over budget" : "";
@@ -2045,12 +2320,16 @@ function portraitAiReviewStatusChip(data, meta) {
   const mode = data?.ai_review || meta?.ai_review;
   if (!mode || mode === "off" || mode === false) return "";
   const status = data?.ai_review_status || meta?.ai_review_status || "";
+  const turn = data?.ai_vision_turn ?? meta?.ai_vision_turn;
+  const hist = data?.ai_vision_history || meta?.ai_vision_history || [];
   const sceneSum = (data?.ai_scene || meta?.ai_scene || {}).summary;
   const critSum = (data?.ai_critique || meta?.ai_critique || {}).summary
     || meta?.ai_critique_summary
     || data?.ai_critique_summary;
   let chip = ` · ai:${mode}`;
   if (status) chip += `/${status}`;
+  if (turn != null) chip += ` · t${turn}/3`;
+  if (Array.isArray(hist) && hist.length) chip += ` · ${hist.length} passes`;
   if (critSum) chip += ` · “${String(critSum).slice(0, 48)}”`;
   else if (sceneSum) chip += ` · “${String(sceneSum).slice(0, 48)}”`;
   return chip;
