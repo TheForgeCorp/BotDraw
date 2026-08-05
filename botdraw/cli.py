@@ -113,16 +113,17 @@ def vision_loop_demo(
         Path("docs/wireframes/portraitbot-vision-loop-history.html"),
         help="Visual history HTML (pass-by-pass)",
     ),
-    turns: int = typer.Option(10, help="Max feedback turns (cap 10)"),
+    turns: int = typer.Option(3, help="Max feedback turns (default 3, hard cap VISION_MAX_TURNS)"),
     turns_dir: Optional[Path] = typer.Option(
         None,
         help="Manual subscription JSON dir (default: tests/fixtures/vision/turns)",
     ),
 ) -> None:
     """
-    Run a 10-turn structure feedback loop with visual history (manual JSON).
+    Run the studio structure feedback loop with visual history (manual JSON).
 
-    Uses BOTDRAW_VISION_PROVIDER=manual fixtures — no API key required.
+    Default is the 3-turn plan (scene → structure → confirm). No API key required
+    when fixtures are present under BOTDRAW_VISION_TURNS_DIR.
     """
     from botdraw.portrait.vision_loop import (
         DEFAULT_TURNS_DIR,

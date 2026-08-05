@@ -1,3 +1,4 @@
-# Turns 2–10 — Structure / confirm critiques
+# Turn 2 — Structure critique
 
-Paste source photo + structure preview. Use STRUCTURE_CRITIQUE_SYSTEM / CRITIQUE_SYSTEM JSON schemas. Save as turnNN_critique.json.
+Paste source photo + ingest structure preview. Use STRUCTURE_CRITIQUE_SYSTEM.
+Save as BOTDRAW_VISION_CRITIQUE_JSON or turns/turn02_critique.json.

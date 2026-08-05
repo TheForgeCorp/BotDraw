@@ -1809,9 +1809,9 @@ function renderPortrait() {
     if (m === "live") {
       aiHintEl.textContent = "Live: scene knobs only (no critique / no AI re-ingest).";
     } else if (m === "studio") {
-      aiHintEl.textContent = "Studio: up to 10-turn loop (scene → structure critiques → confirm). Visual history via botdraw vision loop-demo.";
+      aiHintEl.textContent = "Studio: 3-turn loop (scene → structure critique → confirm). At most one AI re-ingest. Visual history: botdraw vision loop-demo.";
     } else {
-      aiHintEl.textContent = "AI review off. Live = crop/suppress/tone only; Studio = up to 10 feedback turns (manual JSON or API).";
+      aiHintEl.textContent = "AI review off. Live = crop/suppress/tone only; Studio = 3-turn scene/structure/confirm (manual JSON or API).";
     }
   };
   if (aiReviewEl) {

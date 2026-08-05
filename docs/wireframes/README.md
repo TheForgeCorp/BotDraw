@@ -5,7 +5,7 @@
 | [portraitbot-phase-b.html](portraitbot-phase-b.html) | Low-fi wireframe plan |
 | [portraitbot-phase-b-mockup.html](portraitbot-phase-b-mockup.html) | DESIGN.md Operate mockup (interactive stages, gate, channels) |
 | [portraitbot-phase-b-gold.html](portraitbot-phase-b-gold.html) | Classic gold-gate review (people + objects, source + Raw SVG) |
-| [portraitbot-vision-loop-history.html](portraitbot-vision-loop-history.html) | 10-turn AI vision loop visual history (pass-by-pass) |
+| [portraitbot-vision-loop-history.html](portraitbot-vision-loop-history.html) | 3-turn AI vision loop visual history (scene → structure → confirm) |
 
 ## Review links (remote)
 

@@ -1,7 +1,8 @@
-"""Studio vision feedback loop (up to 10 turns) + visual pass history.
+"""Studio vision feedback loop (3 turns) + visual pass history.
 
-Turn 1 = pre-scene. Turns 2..N = structure/restyle critiques with optional
-re-ingest (capped). Manual/subscription JSON via BOTDRAW_VISION_TURNS_DIR.
+Turn 1 = pre-scene. Turn 2 = structure critique (ingest preview; at most one
+re-ingest). Turn 3 = confirm (restyle knobs only; no re-ingest).
+Manual/subscription JSON via BOTDRAW_VISION_TURNS_DIR.
 """
 
 from __future__ import annotations
@@ -22,11 +23,8 @@ from botdraw.core.models import QualityPreset
 from botdraw.portrait.claude_review import (
     VISION_MAX_REINGESTS,
     VISION_MAX_TURNS,
-    PortraitCritique,
-    PortraitScene,
     critique_render,
     critique_to_render_knobs,
-    load_manual_turn,
     review_photo,
     scene_to_ingest_knobs,
 )
@@ -92,9 +90,11 @@ def structure_preview_png(pv, *, max_side: int = 480) -> bytes:
 
 
 def ensure_manual_turn_fixtures(*, root: Path | None = None, force: bool = False) -> Path:
-    """Write 10-turn subscription-shaped JSON fixtures (improving overall scores)."""
+    """Write 3-turn subscription-shaped JSON fixtures (scene → structure → confirm)."""
     base = Path(root) if root else DEFAULT_TURNS_DIR
     base.mkdir(parents=True, exist_ok=True)
+    responses = REPO_ROOT / "tests" / "fixtures" / "vision" / "responses"
+    responses.mkdir(parents=True, exist_ok=True)
     prompts = REPO_ROOT / "docs" / "vision" / "prompts"
     prompts.mkdir(parents=True, exist_ok=True)
 
@@ -112,153 +112,83 @@ def ensure_manual_turn_fixtures(*, root: Path | None = None, force: bool = False
         },
         "summary": "Object mug — classic structure gate, hatch off",
     }
-    scene_path = base / "turn01_scene.json"
-    if force or not scene_path.exists():
-        scene_path.write_text(json.dumps(scene, indent=2) + "\n", encoding="utf-8")
+    turn2 = {
+        "overall": 0.42,
+        "issues": [
+            {
+                "code": "band_sides_missing",
+                "severity": 0.85,
+                "region": "mug_band",
+                "fix": "equalize_structure",
+            },
+            {
+                "code": "soft_edges",
+                "severity": 0.6,
+                "region": "silhouette",
+                "fix": "keep_more_edges",
+            },
+        ],
+        "actions": {
+            "force_reingest": True,
+            "line_source": "classic",
+            "scan_mode": "edges",
+            "contour_simplify": 1,
+            "suppress_background": False,
+        },
+        "summary": "Turn 2: band L/R verticals missing — equalize + finer simplify",
+    }
+    turn3 = {
+        "overall": 0.78,
+        "issues": [],
+        "actions": {
+            "force_reingest": False,
+            "line_source": "classic",
+            "density_mul": 1.0,
+        },
+        "summary": "Turn 3: confirm structure — accept (no further re-ingest)",
+    }
 
-    # Progressive critiques: rising overall, early re-ingests, then refine-only
-    critiques = [
-        # turn 2
-        {
-            "overall": 0.38,
-            "issues": [
-                {
-                    "code": "band_sides_missing",
-                    "severity": 0.85,
-                    "region": "mug_band",
-                    "fix": "equalize_structure",
-                },
-                {
-                    "code": "soft_edges",
-                    "severity": 0.6,
-                    "region": "silhouette",
-                    "fix": "keep_more_edges",
-                },
-            ],
-            "actions": {
-                "force_reingest": True,
-                "line_source": "classic",
-                "scan_mode": "edges",
-                "contour_simplify": 1,
-                "suppress_background": False,
-            },
-            "summary": "Pass 2: band L/R verticals missing — equalize + finer simplify",
-        },
-        {
-            "overall": 0.48,
-            "issues": [
-                {
-                    "code": "band_sides_weak",
-                    "severity": 0.7,
-                    "region": "mug_band",
-                    "fix": "equalize_structure",
-                }
-            ],
-            "actions": {
-                "force_reingest": True,
-                "line_source": "classic",
-                "scan_mode": "auto",
-                "contour_simplify": 1,
-            },
-            "summary": "Pass 3: sides improved; try auto scan for residual gaps",
-        },
-        {
-            "overall": 0.55,
-            "issues": [
-                {
-                    "code": "crop_loose",
-                    "severity": 0.55,
-                    "region": "frame",
-                    "fix": "fix_crop",
-                }
-            ],
-            "actions": {
-                "force_reingest": True,
-                "line_source": "classic",
-                "scan_mode": "edges",
-                "contour_simplify": 1,
-            },
-            "summary": "Pass 4: tighten crop; keep classic edges",
-        },
-        {
-            "overall": 0.62,
-            "issues": [
-                {
-                    "code": "handle_thin",
-                    "severity": 0.5,
-                    "region": "handle",
-                    "fix": "keep_more_edges",
-                }
-            ],
-            "actions": {
-                "force_reingest": True,
-                "line_source": "classic",
-                "scan_mode": "edges",
-                "contour_simplify": 1,
-            },
-            "summary": "Pass 5: recover handle continuity",
-        },
-        {
-            "overall": 0.68,
-            "issues": [
-                {
-                    "code": "rim_gap",
-                    "severity": 0.45,
-                    "region": "rim",
-                    "fix": "equalize_structure",
-                }
-            ],
-            "actions": {
-                "force_reingest": True,
-                "line_source": "classic",
-                "scan_mode": "edges",
-                "contour_simplify": 2,
-            },
-            "summary": "Pass 6: last structure re-ingest — rim closure",
-        },
-        {
-            "overall": 0.74,
-            "issues": [],
-            "actions": {
-                "force_reingest": False,
-                "line_source": "classic",
-                "density_mul": 1.05,
-            },
-            "summary": "Pass 7: structure OK — light density nudge only",
-        },
-        {
-            "overall": 0.78,
-            "issues": [],
-            "actions": {"force_reingest": False, "density_mul": 1.0},
-            "summary": "Pass 8: confirm structure; hold knobs",
-        },
-        {
-            "overall": 0.82,
-            "issues": [],
-            "actions": {"force_reingest": False},
-            "summary": "Pass 9: likeness plateau — diminishing returns",
-        },
-        {
-            "overall": 0.84,
-            "issues": [],
-            "actions": {"force_reingest": False},
-            "summary": "Pass 10: accept — quality return flattening",
-        },
-    ]
-    for i, crit in enumerate(critiques, start=2):
-        path = base / f"turn{i:02d}_critique.json"
+    files = {
+        "turn01_scene.json": scene,
+        "turn02_critique.json": turn2,
+        "turn03_critique.json": turn3,
+    }
+    for name, payload in files.items():
+        path = base / name
         if force or not path.exists():
-            path.write_text(json.dumps(crit, indent=2) + "\n", encoding="utf-8")
+            path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        # Plan mirror under responses/
+        alias = {
+            "turn01_scene.json": "turn1_scene.json",
+            "turn02_critique.json": "turn2_structure.json",
+            "turn03_critique.json": "turn3_confirm.json",
+        }[name]
+        rpath = responses / alias
+        if force or not rpath.exists():
+            rpath.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+    # Drop legacy 10-turn fixtures if regenerating
+    if force:
+        for stale in base.glob("turn*.json"):
+            if stale.name not in files:
+                stale.unlink(missing_ok=True)
 
     (prompts / "turn1_scene.md").write_text(
         "# Turn 1 — Scene (paste into Claude.ai with the photo)\n\n"
-        "Use the BotDraw SCENE_SYSTEM schema. Prefer classic for object structure tests.\n",
+        "Use the BotDraw SCENE_SYSTEM schema. Prefer classic for object structure tests.\n"
+        "Save JSON as BOTDRAW_VISION_SCENE_JSON or turns/turn01_scene.json.\n",
         encoding="utf-8",
     )
     (prompts / "turn2_structure.md").write_text(
-        "# Turns 2–10 — Structure / confirm critiques\n\n"
-        "Paste source photo + structure preview. Use STRUCTURE_CRITIQUE_SYSTEM / "
-        "CRITIQUE_SYSTEM JSON schemas. Save as turnNN_critique.json.\n",
+        "# Turn 2 — Structure critique\n\n"
+        "Paste source photo + ingest structure preview. Use STRUCTURE_CRITIQUE_SYSTEM.\n"
+        "Save as BOTDRAW_VISION_CRITIQUE_JSON or turns/turn02_critique.json.\n",
+        encoding="utf-8",
+    )
+    (prompts / "turn3_confirm.md").write_text(
+        "# Turn 3 — Confirm (restyle knobs only; no re-ingest)\n\n"
+        "Paste source + latest preview. Use CRITIQUE_SYSTEM. Set force_reingest false.\n"
+        "Save as BOTDRAW_VISION_FEEDBACK_JSON or turns/turn03_critique.json.\n",
         encoding="utf-8",
     )
     return base
@@ -282,176 +212,180 @@ def run_vision_structure_loop(
     import os
 
     max_turns = max(1, min(int(max_turns), VISION_MAX_TURNS))
-    if turns_dir is not None:
-        os.environ["BOTDRAW_VISION_TURNS_DIR"] = str(turns_dir)
-        os.environ.setdefault("BOTDRAW_VISION_PROVIDER", "manual")
+    prev_turns = os.environ.get("BOTDRAW_VISION_TURNS_DIR")
+    prev_provider = os.environ.get("BOTDRAW_VISION_PROVIDER")
+    try:
+        if turns_dir is not None:
+            os.environ["BOTDRAW_VISION_TURNS_DIR"] = str(turns_dir)
+            os.environ.setdefault("BOTDRAW_VISION_PROVIDER", "manual")
 
-    history: list[VisionPass] = []
-    knobs: dict[str, Any] = {
-        "line_source": "classic",
-        "scan_mode": "edges",
-        "hatch_size": 0,
-        "ensemble": False,
-        "contour_simplify": 2,
-    }
+        history: list[VisionPass] = []
+        knobs: dict[str, Any] = {
+            "line_source": "classic",
+            "scan_mode": "edges",
+            "hatch_size": 0,
+            "ensemble": False,
+            "contour_simplify": 2,
+        }
 
-    # --- Turn 1: scene ---
-    if image_array is not None:
-        rgb0 = np.asarray(image_array, dtype=np.float32)
-    elif image_path is not None:
-        rgb0 = np.asarray(Image.open(image_path).convert("RGB"), dtype=np.float32)
-    else:
-        from botdraw.styles.image_utils import synthetic_portrait
+        # --- Turn 1: scene ---
+        if image_array is not None:
+            rgb0 = np.asarray(image_array, dtype=np.float32)
+        elif image_path is not None:
+            rgb0 = np.asarray(Image.open(image_path).convert("RGB"), dtype=np.float32)
+        else:
+            from botdraw.styles.image_utils import synthetic_portrait
 
-        rgb0 = synthetic_portrait(480)
+            rgb0 = synthetic_portrait(480)
 
-    scene = review_photo(rgb0, provider="manual")
-    if scene is None:
-        # Fail closed: still allow loop with classic defaults
-        scene_summary = "scene unavailable — classic defaults"
-        scene_dump = None
-    else:
-        scene_knobs = scene_to_ingest_knobs(scene)
-        # Phase B classic wins unless scene explicitly classic/auto
-        if scene_knobs.get("line_source") in ("classic", "auto", "neural"):
-            knobs["line_source"] = (
-                "classic" if scene_knobs.get("line_source") != "neural" else "classic"
-            )
-        if scene_knobs.get("crop"):
-            knobs["crop"] = scene_knobs["crop"]
-            knobs["auto_frame"] = False
-        scene_summary = scene.summary or "scene applied"
-        scene_dump = scene.model_dump()
-
-    pv = ingest_portrait(
-        image_path=image_path,
-        image_array=None if image_path else rgb0,
-        mode="photo",
-        quality=quality,
-        paper=paper,
-        auto_frame=knobs.get("auto_frame", True) if knobs.get("crop") is None else False,
-        crop=knobs.get("crop"),
-        hatch_size=0,
-        line_source=knobs.get("line_source", "classic"),
-        scan_mode=knobs.get("scan_mode", "edges"),
-        ensemble=False,
-        contour_simplify=knobs.get("contour_simplify", 2),
-    )
-    preview = structure_preview_png(pv)
-    history.append(
-        VisionPass(
-            turn=1,
-            kind="scene",
-            summary=scene_summary,
-            overall=None,
-            edge_count=len(pv.edge_polylines_mm),
-            hatch_count=len(pv.hatch_polylines_mm),
-            knobs=dict(knobs),
-            scene=scene_dump,
-            preview_png_b64=base64.b64encode(preview).decode("ascii"),
-            source_png_b64=_png_b64_from_rgb(np.asarray(pv.rgb, dtype=np.float32)),
-            reingest=False,
-        )
-    )
-
-    reingests = 0
-    source_rgb = np.asarray(pv.rgb, dtype=np.float32)
-
-    for turn in range(2, max_turns + 1):
-        allow_reingest = reingests < VISION_MAX_REINGESTS
-        critique = critique_render(
-            source_rgb,
-            preview,
-            style_id="portrait_structure",
-            provider="manual",
-            turn=turn,
-            structure=True,
-        )
-        if critique is None:
-            history.append(
-                VisionPass(
-                    turn=turn,
-                    kind="structure" if turn < max_turns else "confirm",
-                    summary="critique unavailable — stop",
-                    overall=None,
-                    edge_count=len(pv.edge_polylines_mm),
-                    hatch_count=len(pv.hatch_polylines_mm),
-                    knobs=dict(knobs),
-                    preview_png_b64=base64.b64encode(preview).decode("ascii"),
-                    source_png_b64=history[0].source_png_b64,
+        scene = review_photo(rgb0, provider="manual")
+        if scene is None:
+            # Fail closed: still allow loop with classic defaults
+            scene_summary = "scene unavailable — classic defaults"
+            scene_dump = None
+        else:
+            scene_knobs = scene_to_ingest_knobs(scene)
+            # Phase B classic wins unless scene explicitly classic/auto
+            if scene_knobs.get("line_source") in ("classic", "auto", "neural"):
+                knobs["line_source"] = (
+                    "classic" if scene_knobs.get("line_source") != "neural" else "classic"
                 )
-            )
-            break
+            if scene_knobs.get("crop"):
+                knobs["crop"] = scene_knobs["crop"]
+                knobs["auto_frame"] = False
+            scene_summary = scene.summary or "scene applied"
+            scene_dump = scene.model_dump()
 
-        ck = critique_to_render_knobs(critique)
-        # Cap re-ingests for late turns
-        if not allow_reingest:
-            ck.pop("force_reingest", None)
-            critique.actions.force_reingest = False
-
-        did_reingest = False
-        for key in (
-            "line_source",
-            "scan_mode",
-            "contour_simplify",
-            "suppress_background",
-            "max_tone_code",
-            "density_mul",
-        ):
-            if key in ck and ck[key] is not None:
-                knobs[key] = ck[key]
-
-        if ck.get("force_reingest") and allow_reingest:
-            did_reingest = True
-            reingests += 1
-            pv = ingest_portrait(
-                image_path=image_path,
-                image_array=None if image_path else rgb0,
-                mode="photo",
-                quality=quality,
-                paper=paper,
-                auto_frame=knobs.get("auto_frame", True) if knobs.get("crop") is None else False,
-                crop=knobs.get("crop"),
-                hatch_size=0,
-                line_source=knobs.get("line_source", "classic"),
-                scan_mode=knobs.get("scan_mode", "edges"),
-                ensemble=False,
-                contour_simplify=int(knobs.get("contour_simplify") or 2),
-            )
-            source_rgb = np.asarray(pv.rgb, dtype=np.float32)
-            preview = structure_preview_png(pv)
-
+        pv = ingest_portrait(
+            image_path=image_path,
+            image_array=None if image_path else rgb0,
+            mode="photo",
+            quality=quality,
+            paper=paper,
+            auto_frame=knobs.get("auto_frame", True) if knobs.get("crop") is None else False,
+            crop=knobs.get("crop"),
+            hatch_size=0,
+            line_source=knobs.get("line_source", "classic"),
+            scan_mode=knobs.get("scan_mode", "edges"),
+            ensemble=False,
+            contour_simplify=knobs.get("contour_simplify", 2),
+        )
+        preview = structure_preview_png(pv)
         history.append(
             VisionPass(
-                turn=turn,
-                kind="confirm" if turn >= max_turns - 1 else "structure",
-                summary=critique.summary or f"pass {turn}",
-                overall=float(critique.overall),
+                turn=1,
+                kind="scene",
+                summary=scene_summary,
+                overall=None,
                 edge_count=len(pv.edge_polylines_mm),
                 hatch_count=len(pv.hatch_polylines_mm),
                 knobs=dict(knobs),
-                critique=critique.model_dump(),
+                scene=scene_dump,
                 preview_png_b64=base64.b64encode(preview).decode("ascii"),
-                source_png_b64=history[0].source_png_b64,
-                reingest=did_reingest,
+                source_png_b64=_png_b64_from_rgb(np.asarray(pv.rgb, dtype=np.float32)),
+                reingest=False,
             )
         )
 
-        # Early stop if scores plateau high with no actions
-        if (
-            turn >= 4
-            and critique.overall >= 0.8
-            and not critique.actions.force_reingest
-            and not critique.issues
-        ):
-            # Still continue so history shows full N for quality-return chart unless
-            # remaining turn files are missing — fixtures exist through 10.
-            pass
+        reingests = 0
+        source_rgb = np.asarray(pv.rgb, dtype=np.float32)
 
-    # stash label on first pass knobs for HTML
-    if history:
-        history[0].knobs["case_label"] = case_label
-    return history
+        for turn in range(2, max_turns + 1):
+            # Turn 3+ confirm: never re-ingest; turn 2 allows at most VISION_MAX_REINGESTS
+            allow_reingest = turn < max_turns and reingests < VISION_MAX_REINGESTS
+            is_confirm = turn >= max_turns
+            critique = critique_render(
+                source_rgb,
+                preview,
+                style_id="portrait_structure" if not is_confirm else "portrait_linework",
+                provider="manual",
+                turn=turn,
+                structure=not is_confirm,
+            )
+            if critique is None:
+                history.append(
+                    VisionPass(
+                        turn=turn,
+                        kind="confirm" if is_confirm else "structure",
+                        summary="critique unavailable — stop",
+                        overall=None,
+                        edge_count=len(pv.edge_polylines_mm),
+                        hatch_count=len(pv.hatch_polylines_mm),
+                        knobs=dict(knobs),
+                        preview_png_b64=base64.b64encode(preview).decode("ascii"),
+                        source_png_b64=history[0].source_png_b64,
+                    )
+                )
+                break
+
+            if is_confirm:
+                critique.actions.force_reingest = False
+            ck = critique_to_render_knobs(critique)
+            if not allow_reingest:
+                ck.pop("force_reingest", None)
+                critique.actions.force_reingest = False
+
+            did_reingest = False
+            for key in (
+                "line_source",
+                "scan_mode",
+                "contour_simplify",
+                "suppress_background",
+                "max_tone_code",
+                "density_mul",
+            ):
+                if key in ck and ck[key] is not None:
+                    knobs[key] = ck[key]
+
+            if ck.get("force_reingest") and allow_reingest:
+                did_reingest = True
+                reingests += 1
+                pv = ingest_portrait(
+                    image_path=image_path,
+                    image_array=None if image_path else rgb0,
+                    mode="photo",
+                    quality=quality,
+                    paper=paper,
+                    auto_frame=knobs.get("auto_frame", True) if knobs.get("crop") is None else False,
+                    crop=knobs.get("crop"),
+                    hatch_size=0,
+                    line_source=knobs.get("line_source", "classic"),
+                    scan_mode=knobs.get("scan_mode", "edges"),
+                    ensemble=False,
+                    contour_simplify=int(knobs.get("contour_simplify") or 2),
+                )
+                source_rgb = np.asarray(pv.rgb, dtype=np.float32)
+                preview = structure_preview_png(pv)
+
+            history.append(
+                VisionPass(
+                    turn=turn,
+                    kind="confirm" if is_confirm else "structure",
+                    summary=critique.summary or f"pass {turn}",
+                    overall=float(critique.overall),
+                    edge_count=len(pv.edge_polylines_mm),
+                    hatch_count=len(pv.hatch_polylines_mm),
+                    knobs=dict(knobs),
+                    critique=critique.model_dump(),
+                    preview_png_b64=base64.b64encode(preview).decode("ascii"),
+                    source_png_b64=history[0].source_png_b64,
+                    reingest=did_reingest,
+                )
+            )
+
+        # stash label on first pass knobs for HTML
+        if history:
+            history[0].knobs["case_label"] = case_label
+        return history
+    finally:
+        if prev_turns is None:
+            os.environ.pop("BOTDRAW_VISION_TURNS_DIR", None)
+        else:
+            os.environ["BOTDRAW_VISION_TURNS_DIR"] = prev_turns
+        if prev_provider is None:
+            os.environ.pop("BOTDRAW_VISION_PROVIDER", None)
+        else:
+            os.environ["BOTDRAW_VISION_PROVIDER"] = prev_provider
 
 
 def render_vision_history_html(
@@ -578,9 +512,8 @@ def render_vision_history_html(
     <p class="eyebrow">BotDraw · PortraitBot · studio vision loop</p>
     <h1>{html.escape(title)}</h1>
     <p class="lede">
-      Iterative improvement across {len(history)} passes (max {VISION_MAX_TURNS}).
-      Turn 1 = scene; later turns = structure critique with capped re-ingest.
-      Manual/subscription JSON stand-in until ANTHROPIC_API_KEY is wired.
+      Iterative improvement across {len(history)} passes (studio cap {VISION_MAX_TURNS}:
+      scene → structure → confirm). Manual/subscription JSON stand-in until API key.
     </p>
     <p class="lede" style="font-family:var(--mono);font-size:0.8rem">generated {html.escape(generated)}</p>
     {spark}

@@ -1,18 +1,10 @@
 {
-  "overall": 0.48,
-  "issues": [
-    {
-      "code": "band_sides_weak",
-      "severity": 0.7,
-      "region": "mug_band",
-      "fix": "equalize_structure"
-    }
-  ],
+  "overall": 0.78,
+  "issues": [],
   "actions": {
-    "force_reingest": true,
+    "force_reingest": false,
     "line_source": "classic",
-    "scan_mode": "auto",
-    "contour_simplify": 1
+    "density_mul": 1.0
   },
-  "summary": "Pass 3: sides improved; try auto scan for residual gaps"
+  "summary": "Turn 3: confirm structure \u2014 accept (no further re-ingest)"
 }

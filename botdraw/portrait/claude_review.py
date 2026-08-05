@@ -8,7 +8,8 @@ The vision model is a reviewer + controller, not a stroke engine:
 Modes (``ai_review``):
 - ``off`` — no vision
 - ``live`` — scene knobs only (booth-safe; never critique / AI re-ingest)
-- ``studio`` — scene + one critique; structure fixes may re-ingest once
+- ``studio`` — scene + structure critique + confirm (3 turns max);
+  structure fixes may re-ingest once
 
 Bool ``true`` resolves by quality: booth-* → live, studio-hq → studio.
 
@@ -17,7 +18,8 @@ Providers (env ``BOTDRAW_VISION_PROVIDER`` or per-call):
 - ``openai`` — OPENAI_API_KEY
 - ``gemini`` — GEMINI_API_KEY or GOOGLE_API_KEY
 - ``manual`` — load JSON from BOTDRAW_VISION_SCENE_JSON /
-  BOTDRAW_VISION_CRITIQUE_JSON (subscription/chat while API keys pending)
+  BOTDRAW_VISION_CRITIQUE_JSON / BOTDRAW_VISION_FEEDBACK_JSON
+  (or BOTDRAW_VISION_TURNS_DIR) for subscription/chat while API keys pending
 
 Fail closed: missing key/package/API errors return None and callers keep
 the current neural/classic path. Action/fix keys are a closed dictionary
@@ -76,9 +78,9 @@ ALLOWED_ACTION_KEYS = frozenset(
     }
 )
 
-# Dev / studio feedback loop — pass history visualizes quality return
-VISION_MAX_TURNS = 10
-VISION_MAX_REINGESTS = 5
+# Studio feedback loop: scene → structure critique → confirm (hard cap)
+VISION_MAX_TURNS = 3
+VISION_MAX_REINGESTS = 1
 
 SCENE_SYSTEM = """You review a portrait photograph for a pen-plotter pipeline.
 Return ONLY valid JSON matching this schema (no markdown):
@@ -297,24 +299,35 @@ def provider_status() -> dict[str, dict[str, Any]]:
     # manual / subscription JSON (multi-turn dir or single files)
     scene_path = os.environ.get("BOTDRAW_VISION_SCENE_JSON") or ""
     critique_path = os.environ.get("BOTDRAW_VISION_CRITIQUE_JSON") or ""
+    feedback_path = os.environ.get("BOTDRAW_VISION_FEEDBACK_JSON") or ""
     turns_dir = os.environ.get("BOTDRAW_VISION_TURNS_DIR") or ""
-    turns_ready = False
-    if turns_dir and Path(turns_dir).is_dir():
-        turns_ready = (Path(turns_dir) / "turn01_scene.json").exists() or (
-            Path(turns_dir) / "turn01.json"
-        ).exists()
+    tdir = Path(turns_dir) if turns_dir else None
+    turn1_ready = bool(
+        (scene_path and Path(scene_path).exists())
+        or (tdir and ((tdir / "turn01_scene.json").exists() or (tdir / "turn01.json").exists()))
+    )
+    turn2_ready = bool(
+        (critique_path and Path(critique_path).exists())
+        or (tdir and (tdir / "turn02_critique.json").exists())
+    )
+    turn3_ready = bool(
+        (feedback_path and Path(feedback_path).exists())
+        or (tdir and (tdir / "turn03_critique.json").exists())
+    )
     out["manual"] = {
         "key": True,
         "package": True,
-        "ready": bool((scene_path and Path(scene_path).exists()) or turns_ready),
+        "ready": turn1_ready,
         "model": "subscription-json",
         "scene_json": scene_path or None,
         "critique_json": critique_path or None,
+        "feedback_json": feedback_path or None,
         "turns_dir": turns_dir or None,
-        "critique_ready": bool(
-            (critique_path and Path(critique_path).exists())
-            or turns_ready
-        ),
+        "turn1_ready": turn1_ready,
+        "turn2_ready": turn2_ready,
+        "turn3_ready": turn3_ready,
+        "critique_ready": turn2_ready,
+        "feedback_ready": turn3_ready,
         "max_turns": VISION_MAX_TURNS,
     }
     return out
@@ -676,12 +689,17 @@ def critique_render(
     """Post-render / post-structure critique. Returns None when unavailable or on error."""
     p = provider or default_provider()
     system = STRUCTURE_CRITIQUE_SYSTEM if structure else CRITIQUE_SYSTEM
-    if p == "manual":
+    if p == "manual" and client_call is _call_vision:
         path = None
         if turn is not None:
             path = resolve_manual_turn_path(int(turn))
         if path is None:
-            env = os.environ.get("BOTDRAW_VISION_CRITIQUE_JSON") or ""
+            env_key = "BOTDRAW_VISION_CRITIQUE_JSON"
+            if turn is not None and int(turn) >= 3:
+                env_key = "BOTDRAW_VISION_FEEDBACK_JSON"
+            env = os.environ.get(env_key) or ""
+            if not env and turn is not None and int(turn) >= 3:
+                env = os.environ.get("BOTDRAW_VISION_CRITIQUE_JSON") or ""
             path = Path(env) if env and Path(env).exists() else None
         if path is None:
             return None
@@ -719,6 +737,158 @@ def critique_render(
         return critique
     except (ValidationError, json.JSONDecodeError, Exception):
         return None
+
+
+def critique_structure(
+    source_rgb: np.ndarray,
+    ingest_preview_png: bytes,
+    *,
+    style_id: str = "portrait_structure",
+    client_call=_call_vision,
+    provider: ProviderName | None = None,
+    turn: int = 2,
+) -> PortraitCritique | None:
+    """Turn-2 structure critique against ingest Raw SVG / edge preview."""
+    return critique_render(
+        source_rgb,
+        ingest_preview_png,
+        style_id=style_id,
+        client_call=client_call,
+        provider=provider,
+        turn=turn,
+        structure=True,
+    )
+
+
+def apply_structure_critique_to_knobs(
+    source_rgb: np.ndarray,
+    ingest_preview_png: bytes,
+    knobs: dict[str, Any],
+    *,
+    turn: int = 2,
+    provider: ProviderName | None = None,
+    client_call=_call_vision,
+) -> dict[str, Any]:
+    """
+    Studio turn-2 structure gate. Fail closed when critique unavailable.
+
+    May set ``force_reingest`` at most once (caller re-ingests). Never invents knobs.
+    """
+    if int(knobs.get("ai_vision_turn") or 0) >= int(turn):
+        return knobs
+    critique = critique_structure(
+        source_rgb,
+        ingest_preview_png,
+        client_call=client_call,
+        provider=provider,
+        turn=turn,
+    )
+    if critique is None:
+        return {
+            **knobs,
+            "ai_vision_turn": int(turn),
+            "ai_review_status": "structure_unavailable",
+        }
+    ck = critique_to_render_knobs(critique)
+    reingests = int(knobs.get("ai_reingest_count") or 0)
+    if reingests >= VISION_MAX_REINGESTS:
+        ck.pop("force_reingest", None)
+        critique.actions.force_reingest = False
+    history = list(knobs.get("ai_vision_history") or [])
+    history.append(
+        {
+            "turn": int(turn),
+            "overall": critique.overall,
+            "summary": critique.summary,
+            "force_reingest": bool(ck.get("force_reingest")),
+            "actions": critique.actions.model_dump(),
+        }
+    )
+    by_turn = dict(knobs.get("ai_critique_by_turn") or {})
+    by_turn[str(int(turn))] = critique.model_dump()
+    return {
+        **knobs,
+        **ck,
+        "ai_vision_turn": int(turn),
+        "ai_vision_history": history,
+        "ai_critique": critique.model_dump(),
+        "ai_critique_by_turn": by_turn,
+        "ai_review_status": "structure",
+    }
+
+
+def run_vision_turns(
+    rgb: np.ndarray,
+    *,
+    ingest_preview_png: bytes | None = None,
+    render_preview_png: bytes | None = None,
+    style_id: str = "portrait_linework",
+    provider: ProviderName | None = None,
+    max_turns: int = VISION_MAX_TURNS,
+    client_call=_call_vision,
+) -> dict[str, Any]:
+    """
+    Orchestrate the studio 3-turn loop (fail closed per turn).
+
+    Turn 1: review_photo → scene knobs
+    Turn 2: critique_structure (needs ingest_preview_png)
+    Turn 3: critique_render confirm (needs render_preview_png); no re-ingest
+
+    Returns ``{scene, critiques, knobs, turns_applied, reingest_allowed}``.
+    """
+    max_turns = max(1, min(int(max_turns), VISION_MAX_TURNS))
+    p = provider or default_provider()
+    out: dict[str, Any] = {
+        "scene": None,
+        "critiques": [],
+        "knobs": {},
+        "turns_applied": [],
+        "reingest_allowed": False,
+    }
+    scene = review_photo(rgb, client_call=client_call, provider=p)
+    if scene is not None:
+        out["scene"] = scene.model_dump()
+        out["knobs"].update(scene_to_ingest_knobs(scene))
+        out["turns_applied"].append(1)
+    if max_turns < 2 or ingest_preview_png is None:
+        return out
+    c2 = critique_structure(
+        rgb,
+        ingest_preview_png,
+        style_id="portrait_structure",
+        client_call=client_call,
+        provider=p,
+        turn=2,
+    )
+    if c2 is not None:
+        out["critiques"].append({"turn": 2, **c2.model_dump()})
+        knobs2 = critique_to_render_knobs(c2)
+        # At most one re-ingest from turn 2
+        if knobs2.get("force_reingest"):
+            out["reingest_allowed"] = True
+        out["knobs"].update(knobs2)
+        out["turns_applied"].append(2)
+    if max_turns < 3 or render_preview_png is None:
+        return out
+    c3 = critique_render(
+        rgb,
+        render_preview_png,
+        style_id=style_id,
+        client_call=client_call,
+        provider=p,
+        turn=3,
+        structure=False,
+    )
+    if c3 is not None:
+        # Turn 3 confirm: restyle knobs only — strip re-ingest
+        c3.actions.force_reingest = False
+        knobs3 = critique_to_render_knobs(c3)
+        knobs3.pop("force_reingest", None)
+        out["critiques"].append({"turn": 3, **c3.model_dump()})
+        out["knobs"].update(knobs3)
+        out["turns_applied"].append(3)
+        out["reingest_allowed"] = False
+    return out
 
 
 def _critique_two_images(

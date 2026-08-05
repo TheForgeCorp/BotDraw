@@ -3,7 +3,8 @@
   "issues": [],
   "actions": {
     "force_reingest": false,
+    "line_source": "classic",
     "density_mul": 1.0
   },
-  "summary": "Pass 8: confirm structure; hold knobs"
+  "summary": "Turn 3: confirm structure \u2014 accept (no further re-ingest)"
 }

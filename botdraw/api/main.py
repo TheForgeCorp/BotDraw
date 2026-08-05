@@ -449,6 +449,100 @@ def _merge_ai_scene_into_knobs(
         return {**knobs, "ai_review_status": "scene_failed"}
 
 
+def _apply_studio_structure_gate(
+    knobs: dict[str, Any],
+    pv: Any,
+    *,
+    image_path: str | None = None,
+    image_bytes: bytes | None = None,
+    image_mode: str = "photo",
+    quality: str = "booth-balanced",
+    paper: str = "A4",
+    resolve_kw: dict[str, Any] | None = None,
+) -> tuple[Any, dict[str, Any], bool]:
+    """
+    Studio ingest: turns 1–2 only (scene already merged). Structure critique + at most
+    one re-ingest. Turn 3 stays on full Vectorize/render.
+    """
+    from botdraw.portrait.claude_review import ai_review_wants_critique, resolve_ai_review_mode
+    from botdraw.portrait.vision_loop import structure_preview_png
+    from botdraw.portrait.claude_review import apply_structure_critique_to_knobs
+    from botdraw.portrait import resolve_portrait_vector
+    import numpy as np
+
+    mode = resolve_ai_review_mode(knobs.get("ai_review"), quality=quality)
+    knobs = {**knobs, "ai_review": mode}
+    if not ai_review_wants_critique(mode):
+        return pv, knobs, False
+    if int(knobs.get("ai_vision_turn") or 0) >= 2:
+        return pv, knobs, False
+    try:
+        png = structure_preview_png(pv)
+        source = np.asarray(pv.rgb, dtype=np.float32)
+        knobs = apply_structure_critique_to_knobs(source, png, knobs, turn=2)
+    except Exception:
+        knobs = {
+            **knobs,
+            "ai_vision_turn": 2,
+            "ai_review_status": "structure_unavailable",
+        }
+        return pv, knobs, False
+
+    hit = False
+    if knobs.get("force_reingest"):
+        knobs = {
+            **knobs,
+            "ai_reingest_count": int(knobs.get("ai_reingest_count") or 0) + 1,
+        }
+        knobs.pop("force_reingest", None)
+        rkw = dict(resolve_kw or {})
+        for key in (
+            "scan_mode",
+            "contour_simplify",
+            "line_source",
+            "max_tone_code",
+            "suppress_background",
+            "protect_subjects",
+            "orientation_deg",
+            "ai_scene",
+        ):
+            if key in knobs and knobs[key] is not None:
+                rkw[key] = knobs[key]
+        crop = knobs.get("crop")
+        auto_frame = knobs.get("auto_frame", True)
+        pv, hit = resolve_portrait_vector(
+            image_path=image_path,
+            mode=image_mode,
+            quality=quality,
+            paper=paper,
+            crop=crop,
+            reuse_ingest=False,
+            ingest_id=None,
+            force_reingest=True,
+            auto_frame=bool(auto_frame) if crop is None else False,
+            image_bytes=image_bytes,
+            **rkw,
+        )
+    return pv, knobs, hit
+
+
+def _portrait_ai_fields(knobs: dict[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "ai_review": knobs.get("ai_review") or "off",
+    }
+    if knobs.get("ai_review_status"):
+        out["ai_review_status"] = knobs["ai_review_status"]
+    if knobs.get("ai_scene"):
+        out["ai_scene"] = knobs["ai_scene"]
+    if knobs.get("ai_critique"):
+        out["ai_critique"] = knobs["ai_critique"]
+    if knobs.get("ai_vision_turn") is not None:
+        out["ai_vision_turn"] = knobs["ai_vision_turn"]
+    if knobs.get("ai_vision_history"):
+        out["ai_vision_history"] = knobs["ai_vision_history"]
+    return out
+
+
 @app.post("/api/portrait/ingest")
 def api_portrait_ingest_json(body: PortraitIngestRequest):
     """Ingest only (no style/ornament) — synthetic face when no upload."""
@@ -502,13 +596,20 @@ def api_portrait_ingest_json(body: PortraitIngestRequest):
             auto_frame=auto_frame if crop is None else False,
             **resolve_kw,
         )
+    knobs = {**knobs, "crop": crop, "auto_frame": auto_frame}
+    pv, knobs, struct_hit = _apply_studio_structure_gate(
+        knobs,
+        pv,
+        image_mode=body.image_mode,
+        quality=body.quality.value,
+        paper=body.paper.value,
+        resolve_kw=resolve_kw,
+    )
+    if struct_hit:
+        hit = struct_hit
     data = _portrait_ingest_response(pv, include_preview_png=body.include_preview_png)
     data["cache_hit"] = hit
-    data["ai_review"] = knobs.get("ai_review") or "off"
-    if knobs.get("ai_review_status"):
-        data["ai_review_status"] = knobs["ai_review_status"]
-    if knobs.get("ai_scene"):
-        data["ai_scene"] = knobs["ai_scene"]
+    data.update(_portrait_ai_fields(knobs))
     return data
 
 
@@ -609,20 +710,36 @@ async def api_portrait_ingest_upload(
         image_bytes=raw,
         **resolve_kw,
     )
+    knobs = {**knobs, "crop": crop_obj, "auto_frame": auto_frame}
+    pv, knobs, struct_hit = _apply_studio_structure_gate(
+        knobs,
+        pv,
+        image_path=str(tmp),
+        image_bytes=raw,
+        image_mode=image_mode or "photo",
+        quality=quality,
+        paper=paper,
+        resolve_kw=resolve_kw,
+    )
+    if struct_hit:
+        hit = struct_hit
     data = _portrait_ingest_response(pv, include_preview_png=include_preview_png)
     data["cache_hit"] = hit
-    data["ai_review"] = knobs.get("ai_review") or "off"
-    if knobs.get("ai_review_status"):
-        data["ai_review_status"] = knobs["ai_review_status"]
-    if knobs.get("ai_scene"):
-        data["ai_scene"] = knobs["ai_scene"]
-    # Persist scene JSON on the ingest artifact for debugging
-    if knobs.get("ai_scene") and pv.ingest_id:
+    data.update(_portrait_ai_fields(knobs))
+    # Persist scene / structure critique JSON on the ingest artifact for debugging
+    if pv.ingest_id:
         try:
             from botdraw.core.jobs import artifact_dir as _ad
 
-            scene_path = _ad(f"ingest-{pv.ingest_id}") / "ai_scene.json"
-            scene_path.write_text(json.dumps(knobs["ai_scene"], indent=2), encoding="utf-8")
+            ad = _ad(f"ingest-{pv.ingest_id}")
+            if knobs.get("ai_scene"):
+                (ad / "ai_scene.json").write_text(
+                    json.dumps(knobs["ai_scene"], indent=2), encoding="utf-8"
+                )
+            if knobs.get("ai_critique"):
+                (ad / "ai_critique_t2.json").write_text(
+                    json.dumps(knobs["ai_critique"], indent=2), encoding="utf-8"
+                )
         except Exception:
             pass
     return data
