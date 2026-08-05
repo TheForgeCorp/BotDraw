@@ -23,7 +23,8 @@ Open `http://127.0.0.1:8080` — **Dev Lab** UI for vectorization, palette layer
 - Center: emulator with play/pause and pen-up ghost
 - Right: **Layers** (solo/hide passes), **JSON** inspector, **Job** dump
 - Export bar: pack / settings / layers / motion / palette JSON; import settings JSON before render
-- **Palettes** tab: edit pens (color, width, opacity, nib) and save as a new preset
+- **Library** tab: Pens (palette editor), Paper stocks, and Line ornaments
+- **Tools** tab: audio → vector, handwriting, job reload, AxiDraw stub
 
 ### Upload an image
 - **GenArtBot / PortraitBot / R&D Lab:** use **Upload image** in the left panel, pick a style, then render.

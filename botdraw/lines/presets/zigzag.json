@@ -1,0 +1,12 @@
+{
+  "id": "zigzag",
+  "name": "Zigzag",
+  "line_type": "zigzag",
+  "line_spacing_mm": 1.2,
+  "pattern_period_mm": 2.5,
+  "pattern_amplitude_mm": 1.2,
+  "dash_mm": 2.0,
+  "gap_mm": 1.2,
+  "ornament_target": "all",
+  "notes": ""
+}

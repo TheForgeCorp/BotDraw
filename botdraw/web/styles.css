@@ -623,3 +623,44 @@ button.loading::after {
   border-radius: var(--radius-m);
   padding: 12px;
 }
+
+/* ---------- library ---------- */
+
+.library-tabs { margin: 4px 0 14px; }
+.library-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0 12px;
+}
+.library-list button {
+  font-size: 11.5px;
+  padding: 4px 10px;
+  border-radius: 999px;
+}
+.library-list button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+.paper-swatch {
+  width: 100%;
+  height: 56px;
+  border-radius: var(--radius-m);
+  border: 1px solid var(--hairline-strong);
+  box-shadow: var(--shadow-1);
+  margin-bottom: 12px;
+}
+.line-preview-frame {
+  background: var(--surface-2);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-m);
+  padding: 10px;
+  margin-bottom: 12px;
+}
+.line-preview-frame img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: var(--radius-s);
+}
