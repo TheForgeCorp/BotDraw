@@ -10,6 +10,7 @@ import numpy as np
 from botdraw.core.models import (
     QUALITY_LIMITS,
     LayeredSVG,
+    Orientation,
     PaperSize,
     PaletteSet,
     Polyline,
@@ -41,11 +42,11 @@ class _Stipple:
     category = "artistic"
     description = "Weighted Voronoi-ish stipple quantized to palette pens"
 
-    def render(self, *, palette, params, paper=PaperSize.A4, image_path=None, image_array=None):
+    def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
         rgb = _img(params, image_path, image_array)
         lum = luminance(rgb)
         h, w = lum.shape
-        pw, ph = page_size(paper)
+        pw, ph = page_size(paper, orientation)
         limits = QUALITY_LIMITS[params.quality]
         n = int(limits["max_dots"] * params.density)
         rng = _rng(params.seed)
@@ -103,11 +104,11 @@ class _Flow:
     category = "artistic"
     description = "Noise-driven particle trails mapped to palette"
 
-    def render(self, *, palette, params, paper=PaperSize.A4, image_path=None, image_array=None):
+    def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
         rgb = _img(params, image_path, image_array)
         lum = luminance(rgb)
         h, w = lum.shape
-        pw, ph = page_size(paper)
+        pw, ph = page_size(paper, orientation)
         rng = _rng(params.seed)
         pens = ink_pens(palette)
         limits = QUALITY_LIMITS[params.quality]
@@ -148,11 +149,11 @@ class _Hatch:
     category = "artistic"
     description = "Cross-hatch density from tone with multi-pen layers"
 
-    def render(self, *, palette, params, paper=PaperSize.A4, image_path=None, image_array=None):
+    def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
         rgb = _img(params, image_path, image_array)
         lum = luminance(rgb)
         h, w = lum.shape
-        pw, ph = page_size(paper)
+        pw, ph = page_size(paper, orientation)
         pens = ink_pens(palette)[:3] or ink_pens(palette)
         step = max(2, int(8 / params.density))
         buckets: dict[str, list[Polyline]] = {p.id: [] for p in pens}
@@ -181,11 +182,11 @@ class _Contour:
     category = "artistic"
     description = "Luminance band contours in multi-pen"
 
-    def render(self, *, palette, params, paper=PaperSize.A4, image_path=None, image_array=None):
+    def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
         rgb = _img(params, image_path, image_array)
         lum = luminance(rgb)
         h, w = lum.shape
-        pw, ph = page_size(paper)
+        pw, ph = page_size(paper, orientation)
         pens = ink_pens(palette)
         bands = np.linspace(40, 220, min(8, max(3, len(pens) * 2)))
         passes = []
@@ -217,8 +218,8 @@ class _Abstract:
     category = "artistic"
     description = "Recursive subdivision and circle packing with palette pens"
 
-    def render(self, *, palette, params, paper=PaperSize.A4, image_path=None, image_array=None):
-        pw, ph = page_size(paper)
+    def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
+        pw, ph = page_size(paper, orientation)
         rng = _rng(params.seed)
         pens = ink_pens(palette)
         polys_by: dict[str, list[Polyline]] = {p.id: [] for p in pens}
@@ -262,11 +263,11 @@ class _Squiggle:
     category = "artistic"
     description = "Luminance-modulated sine paths"
 
-    def render(self, *, palette, params, paper=PaperSize.A4, image_path=None, image_array=None):
+    def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
         rgb = _img(params, image_path, image_array)
         lum = luminance(rgb)
         h, w = lum.shape
-        pw, ph = page_size(paper)
+        pw, ph = page_size(paper, orientation)
         pens = ink_pens(palette)
         step_y = max(2, int(6 / params.density))
         buckets: dict[str, list[Polyline]] = {p.id: [] for p in pens}
@@ -295,10 +296,10 @@ class _Mosaic:
     category = "artistic"
     description = "Facet regions with boundary + fill pens"
 
-    def render(self, *, palette, params, paper=PaperSize.A4, image_path=None, image_array=None):
+    def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
         rgb = _img(params, image_path, image_array)
         h, w = rgb.shape[:2]
-        pw, ph = page_size(paper)
+        pw, ph = page_size(paper, orientation)
         rng = _rng(params.seed)
         pens = ink_pens(palette)
         border = pens[0]

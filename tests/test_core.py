@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 from botdraw.core.motion_plan import SCHEMA_VERSION, compile_motion_plan
-from botdraw.core.models import StyleParams, PaperSize, QualityPreset
+from botdraw.core.models import Orientation, StyleParams, PaperSize, QualityPreset, paper_dims
 from botdraw.core.optimize import optimize_layered
 from botdraw.core.overlays import OverlayPassComposer
 from botdraw.core.pipeline import render_job
@@ -17,6 +17,76 @@ def test_styles_registered():
     assert "brick" in ids
     assert "portrait_cubism" in ids
     assert "hilbert" in ids
+    assert "mandelbrot" in ids
+    fractal_ids = {s["id"] for s in list_styles(category="fractal")}
+    assert fractal_ids >= {
+        "mandelbrot",
+        "hilbert_curve",
+        "peano",
+        "moore",
+        "gosper",
+        "dragon",
+        "levy_c",
+        "sierpinski_arrowhead",
+        "koch",
+        "fibonacci_word",
+        "quadratic_koch",
+        "terdragon",
+    }
+
+
+def test_mandelbrot_renders_nonempty():
+    ensure_styles_loaded()
+    palette = load_palette("default-6")
+    layered = get_style("mandelbrot").render(
+        palette=palette,
+        params=StyleParams(seed=42, quality=QualityPreset.BOOTH_FAST, density=0.6),
+        paper=PaperSize.A5,
+    )
+    assert layered.meta.get("style") == "mandelbrot"
+    assert layered.passes
+    assert sum(len(p.polylines) for p in layered.passes) >= 1
+    assert all(len(pl.points) >= 2 for p in layered.passes for pl in p.polylines)
+
+
+def test_hilbert_curve_single_stroke():
+    ensure_styles_loaded()
+    palette = load_palette("default-6")
+    layered = get_style("hilbert_curve").render(
+        palette=palette,
+        params=StyleParams(seed=7, quality=QualityPreset.BOOTH_FAST, density=1.0),
+        paper=PaperSize.A5,
+    )
+    assert layered.meta.get("style") == "hilbert_curve"
+    assert layered.meta.get("order") == 5
+    assert len(layered.passes) == 1
+    assert len(layered.passes[0].polylines) == 1
+    assert len(layered.passes[0].polylines[0].points) == 4**5  # order n → 4^n vertices
+
+
+def test_fractal_single_stroke_styles_render():
+    ensure_styles_loaded()
+    palette = load_palette("default-6")
+    params = StyleParams(seed=3, quality=QualityPreset.BOOTH_FAST, density=1.0)
+    for style_id in (
+        "peano",
+        "moore",
+        "gosper",
+        "dragon",
+        "levy_c",
+        "sierpinski_arrowhead",
+        "koch",
+        "fibonacci_word",
+        "quadratic_koch",
+        "terdragon",
+    ):
+        layered = get_style(style_id).render(palette=palette, params=params, paper=PaperSize.A5)
+        assert layered.meta.get("style") == style_id
+        assert layered.meta.get("single_stroke") is True
+        assert len(layered.passes) == 1
+        assert len(layered.passes[0].polylines) == 1
+        assert len(layered.passes[0].polylines[0].points) >= 8
+
 
 
 def test_overlay_highlight():
@@ -66,6 +136,59 @@ def test_export_pack_and_layers_summary():
     assert all("color_hex" in p and "pen_id" in p for p in layers["passes"])
     assert payload["layers"]["pass_count"] == layers["pass_count"]
     assert any(seg.get("pass_id") for seg in payload["segments"])
+
+
+def test_paper_dims_orientation():
+    assert paper_dims(PaperSize.A4) == (210.0, 297.0)
+    assert paper_dims(PaperSize.A4, Orientation.PORTRAIT) == (210.0, 297.0)
+    assert paper_dims(PaperSize.A4, Orientation.LANDSCAPE) == (297.0, 210.0)
+    assert paper_dims(PaperSize.LETTER, Orientation.LANDSCAPE) == (279.4, 215.9)
+
+
+def test_render_job_landscape():
+    job, payload, layers = render_job(
+        app="test",
+        style_id="stipple",
+        paper="A4",
+        orientation="landscape",
+        seed=5,
+        quality=QualityPreset.BOOTH_FAST,
+    )
+    assert payload["width_mm"] == 297.0
+    assert payload["height_mm"] == 210.0
+    assert layers["width_mm"] == 297.0
+    assert job.orientation == Orientation.LANDSCAPE
+    settings = json.loads((Path(job.preview_path).parent / "settings.json").read_text())
+    assert settings["orientation"] == "landscape"
+    assert settings["paper_mm"] == [297.0, 210.0]
+    # All geometry must stay on the landscape page
+    for seg in payload["segments"]:
+        for x, y in ((seg["x0"], seg["y0"]), (seg["x1"], seg["y1"])):
+            assert -1 <= x <= 298
+            assert -1 <= y <= 211
+
+
+def test_render_job_portrait_default():
+    job, payload, _layers = render_job(
+        app="test", style_id="stipple", paper="A4", seed=5, quality=QualityPreset.BOOTH_FAST
+    )
+    assert payload["width_mm"] == 210.0
+    assert payload["height_mm"] == 297.0
+    assert job.orientation == Orientation.PORTRAIT
+
+
+def test_style_engines_accept_orientation():
+    ensure_styles_loaded()
+    palette = load_palette("default-6")
+    for style_id in ("abstract", "blueprint", "truchet"):
+        layered = get_style(style_id).render(
+            palette=palette,
+            params=StyleParams(seed=2, quality=QualityPreset.BOOTH_FAST, density=0.5),
+            paper=PaperSize.A5,
+            orientation=Orientation.LANDSCAPE,
+        )
+        assert layered.width_mm == 210.0
+        assert layered.height_mm == 148.0
 
 
 def test_motion_schema_file_exists():

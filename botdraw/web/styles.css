@@ -526,6 +526,19 @@ details.advanced .group { margin-top: 0.15rem; }
 .portrait-drop.has-file { border-style: solid; color: var(--text); }
 .group .portrait-drop { background: var(--soft); }
 
+.fractal-ref {
+  margin: 0.45rem 0 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--soft);
+}
+.fractal-ref img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
 .mode-toggle { margin: 0.35rem 0 0.55rem; }
 .mode-toggle button.active {
   background: var(--ink);

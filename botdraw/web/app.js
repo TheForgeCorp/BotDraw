@@ -219,6 +219,7 @@ function readMargins() {
 
 const state = {
   paper: "A4",
+  orientation: "portrait",
   quality: "booth-balanced",
   seed: 42,
   density: 1.0,
@@ -414,6 +415,7 @@ function num(id, fallback = 0) {
 
 function syncStateFromForm() {
   if (controls.querySelector("#paper")) state.paper = val("paper", state.paper);
+  if (controls.querySelector("#orientation")) state.orientation = val("orientation", state.orientation);
   if (controls.querySelector("#quality")) state.quality = val("quality", state.quality);
   if (controls.querySelector("#seed")) state.seed = num("seed", state.seed);
   if (controls.querySelector("#density")) state.density = num("density", state.density);
@@ -1609,11 +1611,15 @@ function commonDevOpts() {
         <div class="group-title">Render</div>
         <div class="grid-2">
           ${field("Paper", `<select id="paper"><option>A4</option><option>Letter</option><option>A3</option><option>A5</option><option>Card</option></select>`)}
-          ${field("Quality", `<select id="quality"><option value="booth-fast">booth-fast</option><option value="booth-balanced">booth-balanced</option><option value="studio-hq">studio-hq</option></select>`)}
+          ${field("Orientation", `<select id="orientation"><option value="portrait">Portrait</option><option value="landscape">Landscape</option></select>`)}
         </div>
         <div class="grid-2">
+          ${field("Quality", `<select id="quality"><option value="booth-fast">booth-fast</option><option value="booth-balanced">booth-balanced</option><option value="studio-hq">studio-hq</option></select>`)}
           ${field("Seed", `<input id="seed" type="number" value="${state.seed}" />`)}
+        </div>
+        <div class="grid-2">
           ${field("Density", `<input id="density" type="number" step="0.1" value="${state.density}" />`)}
+          <span></span>
         </div>
       </div>
       <div class="group-block">
@@ -1661,8 +1667,10 @@ function animateSheetSwap(el) {
 function applyCommonDefaults() {
   const paper = controls.querySelector("#paper");
   const quality = controls.querySelector("#quality");
+  const orientation = controls.querySelector("#orientation");
   if (paper) paper.value = state.paper;
   if (quality) quality.value = state.quality;
+  if (orientation) orientation.value = state.orientation || "portrait";
   const palette = controls.querySelector("#palette");
   if (palette) {
     palette.onchange = () => {
@@ -1679,6 +1687,7 @@ function applyCommonDefaults() {
       const obj = JSON.parse(text);
       Object.assign(state, {
         paper: obj.paper || state.paper,
+        orientation: obj.orientation || state.orientation,
         quality: obj.quality || state.quality,
         seed: obj.seed ?? state.seed,
         density: obj.density ?? state.density,
@@ -1724,6 +1733,7 @@ async function renderWithSettings({ appName, busyText = "Rendering…", extraFor
     fd.append("palette_id", selectedPaletteId);
     fd.append("quality", state.quality);
     fd.append("paper", state.paper);
+    fd.append("orientation", state.orientation || "portrait");
     fd.append("seed", String(state.seed));
     fd.append("density", String(state.density));
     fd.append("pen_up_speed_mm_s", String(state.pen_up_speed_mm_s));
@@ -1740,6 +1750,7 @@ async function renderWithSettings({ appName, busyText = "Rendering…", extraFor
       style_id: selectedStyle,
       palette_id: selectedPaletteId,
       paper: state.paper,
+      orientation: state.orientation || "portrait",
       quality: state.quality,
       seed: state.seed,
       density: state.density,
@@ -1806,6 +1817,51 @@ function renderGenArt() {
   controls.querySelector("#go").onclick = () => {
     setDeskState({ loading: true, empty: false, hint: "Vectorizing…" });
     renderWithSettings({ appName: "genartbot", busyText: "Vectorizing GenArt…" })
+      .then(() => setDeskState({ loading: false, empty: false }))
+      .catch((e) => {
+        setDeskState({ loading: false, empty: !lastPayload });
+        statsEl.textContent = String(e.message || e);
+        console.error(e);
+      });
+  };
+}
+
+function renderFractal() {
+  const list = styles.filter((s) => s.category === "fractal");
+  if (!list.find((s) => s.id === selectedStyle)) selectedStyle = list[0]?.id || "hilbert_curve";
+  setDeskState({
+    empty: !lastPayload || currentApp !== "fractalbot",
+    loading: false,
+    hint: "Pick a fractal, then Vectorize",
+  });
+  controls.innerHTML = `
+    <h3>Fractal</h3>
+    <p class="muted">Escape-time + single-stroke space-filling / L-system curves for plotter wall art.</p>
+    <div class="fractal-ref">
+      <img src="/static/previews/single_line_fractals.png" alt="Single-line fractal family" />
+    </div>
+    <div class="group">
+      <div class="group-block">
+        <div class="group-title">Style</div>
+        ${styleButtons(list)}
+      </div>
+    </div>
+    <div class="row actions">
+      <button type="button" class="btn btn-primary primary" id="go">Vectorize</button>
+    </div>
+    ${commonDevOpts()}
+  `;
+  bindStyleGrid();
+  applyCommonDefaults();
+  // Fractals don't use photo ingest — hide source block if present
+  const photo = controls.querySelector("#photo");
+  if (photo) {
+    const srcBlock = photo.closest(".group-block");
+    if (srcBlock) srcBlock.hidden = true;
+  }
+  controls.querySelector("#go").onclick = () => {
+    setDeskState({ loading: true, empty: false, hint: "Vectorizing…" });
+    renderWithSettings({ appName: "fractalbot", busyText: "Vectorizing fractal…" })
       .then(() => setDeskState({ loading: false, empty: false }))
       .catch((e) => {
         setDeskState({ loading: false, empty: !lastPayload });
@@ -3045,6 +3101,7 @@ async function renderControls() {
     try { linesCatalog = await api("/api/lines"); } catch (_) { linesCatalog = []; }
   }
   if (currentApp === "genartbot") return renderGenArt();
+  if (currentApp === "fractalbot") return renderFractal();
   if (currentApp === "portraitbot") return renderPortrait();
   if (currentApp === "lettersbot") return renderLetters();
   if (currentApp === "rdlab") return renderRdlab();

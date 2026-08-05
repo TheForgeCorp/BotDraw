@@ -9,7 +9,14 @@ from typing import Any
 
 import numpy as np
 
-from botdraw.core.models import LayeredSVG, PAPER_MM, PaperSize, PassLayer, Polyline
+from botdraw.core.models import (
+    LayeredSVG,
+    Orientation,
+    PaperSize,
+    PassLayer,
+    Polyline,
+    paper_dims,
+)
 from botdraw.core.overlays import OverlayPassComposer
 from botdraw.core.svg import make_pass
 from botdraw.letters.fonts import glyph_for, load_font
@@ -388,7 +395,7 @@ def render_letter_layers(
     *,
     palette_id: str = "wedding-highlight",
     paper: PaperSize = PaperSize.A5,
-    orientation: str = "portrait",
+    orientation: Orientation | str = "portrait",
     margins: Margins | None = None,
     seed: int = 7,
     guest_quote: str | None = None,
@@ -396,9 +403,12 @@ def render_letter_layers(
     """Compose text-pass and line layers into one LayeredSVG."""
     margins = margins or Margins()
     palette = load_palette(palette_id)
-    pw, ph = PAPER_MM[paper]
-    if orientation.lower() == "landscape":
-        pw, ph = ph, pw
+    orient_enum = (
+        Orientation.LANDSCAPE
+        if str(getattr(orientation, "value", orientation)).lower() == "landscape"
+        else Orientation.PORTRAIT
+    )
+    pw, ph = paper_dims(paper, orient_enum)
 
     max_width = max(10.0, pw - margins.left - margins.right)
     passes: list[PassLayer] = []
@@ -615,6 +625,7 @@ def render_letter(
     *,
     palette_id: str = "wedding-highlight",
     paper: PaperSize = PaperSize.A5,
+    orientation: Orientation | str = Orientation.PORTRAIT,
     language: str = "en",
     highlight_words: list[str] | None = None,
     guest_quote: str | None = None,
@@ -624,12 +635,15 @@ def render_letter(
     tracking: float = 0.15,
     humanize: float = 0.08,
     font_name: str = "simplex",
-    orientation: str = "portrait",
     margin_mm: float = 18.0,
     margins: Margins | None = None,
     pen_id: str | None = None,
 ) -> LayeredSVG:
     """Backward-compatible single-layer render."""
+    if isinstance(orientation, Orientation):
+        orient_s = orientation.value
+    else:
+        orient_s = str(orientation or "portrait")
     palette = load_palette(palette_id)
     ink = next((p for p in palette.pens if p.profile.nib_type.value != "highlighter"), palette.pens[0])
     high = next((p for p in palette.pens if p.profile.nib_type.value == "highlighter"), None)
@@ -653,7 +667,7 @@ def render_letter(
         layers,
         palette_id=palette_id,
         paper=paper,
-        orientation=orientation,
+        orientation=orient_s,
         margins=m,
         seed=seed,
         guest_quote=guest_quote,

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from botdraw.core.models import LayeredSVG, PaperSize, StyleParams
+from botdraw.core.models import LayeredSVG, Orientation, PaperSize, StyleParams
 from botdraw.portrait.restyle import render_from_vector
 from botdraw.styles import register
 
@@ -14,7 +14,17 @@ class _PortraitRestyler:
         self.category = "portrait"
         self.description = description
 
-    def render(self, *, palette, params, paper=PaperSize.A4, image_path=None, image_array=None):
+    def render(
+        self,
+        *,
+        palette,
+        params,
+        paper=PaperSize.A4,
+        orientation=Orientation.PORTRAIT,
+        image_path=None,
+        image_array=None,
+    ):
+        del orientation  # paper dims come from ingest / PortraitVector
         pv = (params.extra or {}).get("portrait_vector")
         if pv is None:
             # Fallback: ingest on the fly for GenArt-like calls without pipeline wiring
