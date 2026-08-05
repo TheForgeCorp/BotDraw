@@ -30,7 +30,13 @@ from botdraw.letters import (
 )
 from botdraw.letters.fonts import list_fonts
 from botdraw.llm import draft_wedding_letter, is_loaded, try_local_ollama, unload
-from botdraw.palettes import calibrate_pen, create_palette, list_palette_ids, load_palette
+from botdraw.palettes import (
+    calibrate_pen,
+    create_palette,
+    delete_palette,
+    list_palette_ids,
+    load_palette,
+)
 from botdraw.plotter.axidraw import AxiDrawDriverStub
 from botdraw.plotter.emulator import EmulatorDriver, plan_to_emulator_payload
 from botdraw.core.motion_plan import MotionPlan
@@ -782,6 +788,17 @@ def api_palette_save(body: PaletteSaveRequest):
         paper_notes=body.paper_notes,
     )
     return palette.model_dump()
+
+
+@app.delete("/api/palettes/{palette_id}")
+def api_palette_delete(palette_id: str):
+    try:
+        delete_palette(palette_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    return {"ok": True, "id": palette_id}
 
 
 @app.post("/api/render")

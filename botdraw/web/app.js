@@ -63,6 +63,8 @@ let styles = [];
 let palettes = [];
 let selectedStyle = "stipple";
 let selectedPaletteId = "default-6";
+let selectedSamplePenId = null;
+let penSamplePaperId = "natural-cream";
 let lastJob = null;
 let lastPayload = null;
 let lastLayers = null;
@@ -412,26 +414,6 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
-/* ---------------- app tabs / inspector tabs ---------------- */
-
-document.querySelectorAll("#tabs button").forEach((btn) => {
-  btn.onclick = () => {
-    document.querySelectorAll("#tabs button").forEach((b) => b.classList.remove("active"));
-    btn.classList.add("active");
-    currentApp = btn.dataset.app;
-    renderControls();
-  };
-});
-
-document.querySelectorAll(".insp-tabs button").forEach((btn) => {
-  btn.onclick = () => {
-    document.querySelectorAll(".insp-tabs button").forEach((b) => b.classList.remove("active"));
-    btn.classList.add("active");
-    inspTab = btn.dataset.insp;
-    renderInspector();
-  };
-});
-
 /* ---------------- helpers ---------------- */
 
 function downloadJson(filename, obj) {
@@ -515,7 +497,9 @@ function segVal(id, fallback) {
 function syncStateFromForm() {
   if (controls.querySelector("#paper")) state.paper = val("paper", state.paper);
   if (controls.querySelector("#orient")) state.orientation = segVal("orient", state.orientation);
+  else if (controls.querySelector("#orientation")) state.orientation = val("orientation", state.orientation);
   if (controls.querySelector("#quality-seg")) state.quality = segVal("quality-seg", state.quality);
+  else if (controls.querySelector("#quality")) state.quality = val("quality", state.quality);
   if (controls.querySelector("#seed")) state.seed = num("seed", state.seed);
   if (controls.querySelector("#density")) state.density = num("density", state.density);
   if (controls.querySelector("#pen_up")) state.pen_up_speed_mm_s = num("pen_up", state.pen_up_speed_mm_s);
@@ -525,8 +509,17 @@ function syncStateFromForm() {
 }
 
 function setExportEnabled(on) {
-  ["export-pack", "export-more"].forEach((id) => {
-    document.getElementById(id).disabled = !on;
+  [
+    "export-pack",
+    "export-more",
+    "export-settings",
+    "export-layers",
+    "export-motion",
+    "export-palette",
+    "copy-json",
+  ].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.disabled = !on;
   });
 }
 
@@ -757,7 +750,9 @@ function setShellForApp(app) {
   if (controlsEl) controlsEl.hidden = !lab;
   if (lettersRail) lettersRail.hidden = !letters;
   if (portraitContent) portraitContent.hidden = !portrait;
-  if (railInspector) railInspector.hidden = !lab;
+  // Library tabs keep the full rail for inspectors; Pens uses a 50/50 sample board.
+  const hideInspector = app === "palettes" || app === "papers" || app === "lines";
+  if (railInspector) railInspector.hidden = !lab || hideInspector;
 
   const labSheet = document.getElementById("lab-sheet");
   const lettersSheet = document.getElementById("letters-sheet");
@@ -849,52 +844,6 @@ document.querySelectorAll(".insp-tabs button, #insp-tabs button").forEach((btn) 
     renderInspector();
   };
 });
-
-function downloadJson(filename, obj) {
-  const blob = new Blob([JSON.stringify(obj, null, 2)], { type: "application/json" });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(a.href);
-}
-
-async function api(path, opts) {
-  const res = await fetch(path, opts);
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
-}
-
-function field(label, html) {
-  return `<label>${label}</label>${html}`;
-}
-
-function val(id, fallback = "") {
-  const el = controls.querySelector(`#${id}`);
-  return el ? el.value : fallback;
-}
-
-function num(id, fallback = 0) {
-  return Number(val(id, fallback));
-}
-
-function syncStateFromForm() {
-  if (controls.querySelector("#paper")) state.paper = val("paper", state.paper);
-  if (controls.querySelector("#orientation")) state.orientation = val("orientation", state.orientation);
-  if (controls.querySelector("#quality")) state.quality = val("quality", state.quality);
-  if (controls.querySelector("#seed")) state.seed = num("seed", state.seed);
-  if (controls.querySelector("#density")) state.density = num("density", state.density);
-  if (controls.querySelector("#pen_up")) state.pen_up_speed_mm_s = num("pen_up", state.pen_up_speed_mm_s);
-  if (controls.querySelector("#pen_down")) state.pen_down_speed_mm_s = num("pen_down", state.pen_down_speed_mm_s);
-  if (controls.querySelector("#rpm")) state.rpm = num("rpm", state.rpm);
-  if (controls.querySelector("#palette")) selectedPaletteId = val("palette", selectedPaletteId);
-}
-
-function setExportEnabled(on) {
-  ["export-pack", "export-settings", "export-layers", "export-motion", "export-palette", "copy-json"].forEach((id) => {
-    document.getElementById(id).disabled = !on;
-  });
-}
 
 function loadResult(data, opts = {}) {
   const autoplay = opts.autoplay !== false;
@@ -3472,101 +3421,563 @@ function renderRdlab() {
   };
 }
 
-function renderPalettes() {
-  const palette = currentPalette();
-  const pensHtml = (palette?.pens || []).map((pen, idx) => `
+const PEN_NIB_STYLES = ["fineliner", "marker", "brush", "calligraphy", "highlighter"];
+
+function penBlockHtml(pen, idx) {
+  const nib = (pen.profile?.nib_type) || "fineliner";
+  return `
     <div class="pen-block" data-idx="${idx}">
-      <div class="grid-2">
-        ${field("id", `<input data-k="id" value="${pen.id}" />`)}
-        ${field("name", `<input data-k="name" value="${pen.name}" />`)}
+      <div class="pen-block-head">
+        <span class="pen-swatch" style="background:${pen.color_hex || "#333"}"></span>
+        <strong>${pen.name || pen.id || `Pen ${idx + 1}`}</strong>
+        <button type="button" class="pen-remove" data-remove-pen title="Remove pen">Remove</button>
       </div>
       <div class="grid-2">
-        ${field("color", `<input data-k="color_hex" type="color" value="${pen.color_hex}" />`)}
-        ${field("width mm", `<input data-k="width_mm" type="number" step="0.1" value="${pen.profile?.width_mm ?? 0.5}" />`)}
+        ${field("id", `<input data-k="id" value="${pen.id || `pen${idx + 1}`}" />`)}
+        ${field("name", `<input data-k="name" value="${pen.name || `Pen ${idx + 1}`}" />`)}
+      </div>
+      <div class="grid-2">
+        ${field("color", `<input data-k="color_hex" type="color" value="${pen.color_hex || "#1a1a1a"}" />`)}
+        ${field("width mm", `<input data-k="width_mm" type="number" step="0.1" min="0.1" value="${pen.profile?.width_mm ?? 0.5}" />`)}
       </div>
       <div class="grid-2">
         ${field("opacity", `<input data-k="opacity" type="number" step="0.05" min="0" max="1" value="${pen.profile?.opacity ?? 1}" />`)}
         ${field("nib", `<select data-k="nib_type">
-          ${["fineliner","marker","brush","calligraphy","highlighter"].map((n) =>
-            `<option ${((pen.profile?.nib_type) || "fineliner") === n ? "selected" : ""}>${n}</option>`
+          ${PEN_NIB_STYLES.map((n) =>
+            `<option value="${n}" ${nib === n ? "selected" : ""}>${n}</option>`
           ).join("")}
         </select>`)}
       </div>
     </div>
-  `).join("");
+  `;
+}
+
+function collectPensFromEditor() {
+  return [...controls.querySelectorAll(".pen-block")].map((block) => {
+    const get = (k) => block.querySelector(`[data-k="${k}"]`)?.value;
+    return {
+      id: get("id"),
+      name: get("name"),
+      color_hex: get("color_hex"),
+      profile: {
+        width_mm: Number(get("width_mm")),
+        opacity: Number(get("opacity")),
+        nib_type: get("nib_type"),
+      },
+    };
+  }).filter((p) => p.id);
+}
+
+function paperOptionsHtml(selectedId) {
+  const list = papers.length ? papers : [{ id: "natural-cream", name: "Natural Cream", color_hex: "#f7f1e8" }];
+  return list
+    .map(
+      (p) =>
+        `<option value="${p.id}" ${p.id === selectedId ? "selected" : ""}>${p.name}</option>`
+    )
+    .join("");
+}
+
+function resolvePenSamplePaper() {
+  const stock = papers.find((p) => p.id === penSamplePaperId) || papers[0];
+  return {
+    id: stock?.id || "natural-cream",
+    color_hex: stock?.color_hex || "#f7f1e8",
+  };
+}
+
+function _seg(kind, x0, y0, x1, y1, pen, widthMm, opacity) {
+  const dist = Math.hypot(x1 - x0, y1 - y0);
+  const speed = kind === "pen_down" ? 25 : 100;
+  return {
+    kind,
+    x0,
+    y0,
+    x1,
+    y1,
+    duration_s: Math.max(0.01, dist / speed),
+    pen_id: pen.id,
+    pass_id: "sample",
+    opacity: opacity ?? pen.profile?.opacity ?? 1,
+    width_mm: widthMm ?? pen.profile?.width_mm ?? 0.5,
+    color_hex: pen.color_hex || "#1a1a1a",
+  };
+}
+
+function _strokePoly(points, pen, widthMm, opacity, segs) {
+  if (!points || points.length < 2) return;
+  let cx = segs.length ? segs[segs.length - 1].x1 : points[0][0];
+  let cy = segs.length ? segs[segs.length - 1].y1 : points[0][1];
+  const [sx, sy] = points[0];
+  if (Math.hypot(sx - cx, sy - cy) > 0.05) {
+    segs.push(_seg("pen_up", cx, cy, sx, sy, pen, widthMm, opacity));
+  }
+  for (let i = 1; i < points.length; i++) {
+    const [x0, y0] = points[i - 1];
+    const [x1, y1] = points[i];
+    segs.push(_seg("pen_down", x0, y0, x1, y1, pen, widthMm, opacity));
+  }
+}
+
+function _circlePoints(cx, cy, r, n = 48) {
+  const pts = [];
+  for (let i = 0; i <= n; i++) {
+    const a = (i / n) * Math.PI * 2;
+    pts.push([cx + Math.cos(a) * r, cy + Math.sin(a) * r]);
+  }
+  return pts;
+}
+
+function _starPoints(cx, cy, rOuter, rInner, spikes = 5) {
+  const pts = [];
+  for (let i = 0; i < spikes * 2; i++) {
+    const a = -Math.PI / 2 + (i * Math.PI) / spikes;
+    const r = i % 2 === 0 ? rOuter : rInner;
+    pts.push([cx + Math.cos(a) * r, cy + Math.sin(a) * r]);
+  }
+  pts.push(pts[0]);
+  return pts;
+}
+
+function nibStyleWidths(baseW, style) {
+  const w = Math.max(0.2, Number(baseW) || 0.5);
+  switch (style) {
+    case "marker":
+      return Array(5).fill(w * 1.55);
+    case "brush":
+      return [w * 0.55, w * 0.9, w * 1.45, w * 1.1, w * 0.7];
+    case "calligraphy":
+      return [w * 1.2, w * 1.35, w * 1.5, w * 1.35, w * 1.2];
+    case "highlighter":
+      return Array(5).fill(Math.max(1.6, w * 3.2));
+    default:
+      return Array(5).fill(w * 0.85);
+  }
+}
+
+function nibStyleOpacity(baseOp, style) {
+  const o = Math.min(1, Math.max(0.08, Number(baseOp) ?? 1));
+  if (style === "highlighter") return Math.min(0.42, o * 0.45);
+  if (style === "brush") return Math.min(1, o * 0.92);
+  return o;
+}
+
+/** Build a live sample board: top = 5 nib styles × 5 lines; BL shapes; BR pattern. */
+function buildPenSampleBoard(pen, paperColorHex) {
+  const W = 148;
+  const H = 210;
+  const segs = [];
+  const baseW = pen.profile?.width_mm ?? 0.5;
+  const baseOp = pen.profile?.opacity ?? 1;
+  const x0 = 14;
+  const x1 = W - 14;
+
+  // Top: each nib style as five strokes
+  let y = 16;
+  for (const style of PEN_NIB_STYLES) {
+    const widths = nibStyleWidths(baseW, style);
+    const op = nibStyleOpacity(baseOp, style);
+    const rowH = 14;
+    for (let i = 0; i < 5; i++) {
+      const yy = y + 2 + i * 2.2;
+      if (style === "calligraphy") {
+        // Slight slant per segment to suggest a chisel nib
+        const mid = (x0 + x1) / 2;
+        _strokePoly(
+          [
+            [x0, yy + 0.6],
+            [mid, yy - 0.4],
+            [x1, yy + 0.6],
+          ],
+          pen,
+          widths[i],
+          op,
+          segs
+        );
+      } else if (style === "brush") {
+        // Pressure swell in the middle
+        const mid = (x0 + x1) / 2;
+        _strokePoly([[x0, yy], [mid, yy]], pen, widths[i] * 0.7, op, segs);
+        _strokePoly([[mid, yy], [x1, yy]], pen, widths[i], op, segs);
+      } else {
+        _strokePoly([[x0, yy], [x1, yy]], pen, widths[i], op, segs);
+      }
+    }
+    y += rowH;
+  }
+
+  const splitY = 98;
+  const midX = W / 2;
+  // Divider
+  _strokePoly(
+    [[12, splitY], [W - 12, splitY]],
+    pen,
+    Math.max(0.25, baseW * 0.5),
+    Math.min(0.35, baseOp),
+    segs
+  );
+  _strokePoly(
+    [[midX, splitY + 4], [midX, H - 12]],
+    pen,
+    Math.max(0.25, baseW * 0.5),
+    Math.min(0.35, baseOp),
+    segs
+  );
+
+  // Bottom-left: 2D outlines
+  const blCx = midX / 2;
+  const blCy = (splitY + H - 10) / 2;
+  _strokePoly(_circlePoints(blCx - 12, blCy - 22, 9), pen, baseW, baseOp, segs);
+  _strokePoly(
+    [
+      [blCx + 4, blCy - 31],
+      [blCx + 22, blCy - 31],
+      [blCx + 22, blCy - 13],
+      [blCx + 4, blCy - 13],
+      [blCx + 4, blCy - 31],
+    ],
+    pen,
+    baseW,
+    baseOp,
+    segs
+  );
+  _strokePoly(
+    [
+      [blCx - 22, blCy + 2],
+      [blCx - 4, blCy + 2],
+      [blCx - 13, blCy + 20],
+      [blCx - 22, blCy + 2],
+    ],
+    pen,
+    baseW,
+    baseOp,
+    segs
+  );
+  _strokePoly(_starPoints(blCx + 12, blCy + 14, 12, 5), pen, baseW, baseOp, segs);
+  _strokePoly(
+    [
+      [blCx - 8, blCy + 34],
+      [blCx + 8, blCy + 28],
+      [blCx + 20, blCy + 40],
+      [blCx, blCy + 46],
+      [blCx - 8, blCy + 34],
+    ],
+    pen,
+    baseW,
+    baseOp,
+    segs
+  );
+
+  // Bottom-right: single hatch pattern block
+  const rx0 = midX + 10;
+  const rx1 = W - 12;
+  const ry0 = splitY + 12;
+  const ry1 = H - 14;
+  _strokePoly(
+    [
+      [rx0, ry0],
+      [rx1, ry0],
+      [rx1, ry1],
+      [rx0, ry1],
+      [rx0, ry0],
+    ],
+    pen,
+    baseW * 0.9,
+    baseOp,
+    segs
+  );
+  const pitch = 3.2;
+  for (let x = rx0 + pitch; x < rx1; x += pitch) {
+    _strokePoly([[x, ry0], [x, ry1]], pen, baseW * 0.55, baseOp * 0.85, segs);
+  }
+  for (let yH = ry0 + pitch; yH < ry1; yH += pitch) {
+    _strokePoly([[rx0, yH], [rx1, yH]], pen, baseW * 0.45, baseOp * 0.7, segs);
+  }
+
+  const down = segs.filter((s) => s.kind === "pen_down");
+  const travel = down.reduce((a, s) => a + Math.hypot(s.x1 - s.x0, s.y1 - s.y0), 0);
+  return {
+    schema_version: "1.0.0",
+    width_mm: W,
+    height_mm: H,
+    paper_color_hex: paperColorHex || "#f7f1e8",
+    stats: {
+      path_length_mm: travel,
+      pen_up_travel_mm: 0,
+      pen_down_travel_mm: travel,
+      estimated_time_s: travel / 25,
+      stroke_count: down.length,
+      pass_count: 1,
+      pen_ids: [pen.id],
+    },
+    palette: [
+      {
+        id: pen.id,
+        name: pen.name,
+        color_hex: pen.color_hex,
+        profile: pen.profile,
+      },
+    ],
+    segments: segs,
+    settings: { app: "palettes", sample: "pen-board" },
+  };
+}
+
+function activeSamplePenFromEditor() {
+  const pens = collectPensFromEditor();
+  if (!pens.length) {
+    const fallback = currentPalette()?.pens?.[0];
+    return fallback
+      ? {
+          id: fallback.id,
+          name: fallback.name,
+          color_hex: fallback.color_hex,
+          profile: fallback.profile || { width_mm: 0.5, opacity: 1, nib_type: "fineliner" },
+        }
+      : {
+          id: "ink",
+          name: "Ink",
+          color_hex: "#1a1a1a",
+          profile: { width_mm: 0.5, opacity: 1, nib_type: "fineliner" },
+        };
+  }
+  const id = selectedSamplePenId || pens[0].id;
+  return pens.find((p) => p.id === id) || pens[0];
+}
+
+function refreshPenSampleBoard(opts = {}) {
+  const skipEnd = opts.skipEnd !== false;
+  const pen = activeSamplePenFromEditor();
+  const paper = resolvePenSamplePaper();
+  const board = buildPenSampleBoard(pen, paper.color_hex);
+  lastPayload = board;
+  lastLayers = null;
+  lastSettings = board.settings;
+  const pl = player;
+  pl.load(board, { paperColor: paper.color_hex });
+  pl.setPaperColor(paper.color_hex);
+  setDeskState({ loading: false, empty: false });
+  if (skipEnd) pl.skipEnd();
+  else pl.play();
+  statsEl.textContent = `Sample · ${pen.name || pen.id} on ${paper.id} · ${board.stats.stroke_count} strokes`;
+}
+
+function bindPenSampleLiveUpdates() {
+  const refresh = () => refreshPenSampleBoard({ skipEnd: true });
+  controls.querySelectorAll("#pen-editor input, #pen-editor select").forEach((el) => {
+    el.addEventListener("input", refresh);
+    el.addEventListener("change", refresh);
+  });
+  controls.querySelectorAll(".pen-remove").forEach((btn) => {
+    btn.onclick = (e) => {
+      e.preventDefault();
+      const block = btn.closest(".pen-block");
+      if (!block) return;
+      const blocks = controls.querySelectorAll(".pen-block");
+      if (blocks.length <= 1) {
+        statsEl.textContent = "Keep at least one pen in the palette";
+        return;
+      }
+      block.remove();
+      syncSamplePenSelect();
+      refresh();
+    };
+  });
+}
+
+function syncSamplePenSelect() {
+  const sel = controls.querySelector("#sample_pen");
+  if (!sel) return;
+  const pens = collectPensFromEditor();
+  const keep = selectedSamplePenId && pens.some((p) => p.id === selectedSamplePenId)
+    ? selectedSamplePenId
+    : pens[0]?.id;
+  selectedSamplePenId = keep || null;
+  sel.innerHTML = pens
+    .map((p) => `<option value="${p.id}" ${p.id === selectedSamplePenId ? "selected" : ""}>${p.name} (${p.id})</option>`)
+    .join("");
+}
+
+function renderPalettes() {
+  const palette = currentPalette() || {
+    id: "custom-palette",
+    name: "Custom palette",
+    paper_notes: "",
+    pens: [
+      {
+        id: "ink",
+        name: "Ink",
+        color_hex: "#1a1a1a",
+        profile: { width_mm: 0.45, opacity: 1, nib_type: "fineliner" },
+      },
+    ],
+  };
+  if (!selectedSamplePenId || !(palette.pens || []).some((p) => p.id === selectedSamplePenId)) {
+    selectedSamplePenId = palette.pens?.[0]?.id || null;
+  }
+  if (!penSamplePaperId && papers[0]) penSamplePaperId = papers[0].id;
+  const paper = resolvePenSamplePaper();
+  const pensHtml = (palette.pens || []).map((pen, idx) => penBlockHtml(pen, idx)).join("");
+  const samplePenOpts = (palette.pens || [])
+    .map(
+      (p) =>
+        `<option value="${p.id}" ${p.id === selectedSamplePenId ? "selected" : ""}>${p.name} (${p.id})</option>`
+    )
+    .join("");
 
   controls.innerHTML = `
     <h3>Pen Library</h3>
-    <p class="muted">Customize pens and save palette sets for all bots.</p>
-    ${field("Load palette", paletteSelectHtml())}
+    <p class="muted">Edit pens, pick paper, and preview styles on the sample board.</p>
+    <div class="group">
+      <div class="group-block">
+        ${field("Palette", paletteSelectHtml())}
+        <div class="row actions">
+          <button type="button" id="new-pal">New</button>
+          <button type="button" class="primary" id="save-pal">Save</button>
+          <button type="button" id="delete-pal">Delete</button>
+        </div>
+      </div>
+      <div class="group-block">
+        ${field("Id", `<input id="pal_id" value="${palette.id || ""}" />`)}
+        ${field("Name", `<input id="pal_name" value="${palette.name || ""}" />`)}
+        ${field("Notes", `<input id="paper_notes" value="${palette.paper_notes || ""}" />`)}
+      </div>
+    </div>
+    <div class="group">
+      <div class="group-block">
+        ${field("Sample pen", `<select id="sample_pen">${samplePenOpts}</select>`)}
+        ${field("Paper", `<select id="pen_paper">${paperOptionsHtml(penSamplePaperId)}</select>`)}
+        <div class="paper-swatch pen-paper-swatch" id="pen-paper-swatch" style="background:${paper.color_hex}"></div>
+      </div>
+    </div>
     ${penChipsHtml(palette)}
-    ${field("New palette id", `<input id="new_id" value="${palette?.id || "custom"}-dev" />`)}
-    ${field("Name", `<input id="new_name" value="${palette?.name || "Custom"} (edited)" />`)}
-    ${field("Paper notes", `<input id="paper_notes" value="${palette?.paper_notes || ""}" />`)}
     <div class="pen-editor" id="pen-editor">${pensHtml}</div>
-    <div class="row">
-      <button class="primary" id="save-pal">Save palette JSON</button>
-      <button id="export-pal-local">Download current JSON</button>
-      <button id="add-pen">Add pen</button>
+    <div class="row actions">
+      <button type="button" id="add-pen">Add pen</button>
+      <button type="button" id="export-pal-local">Download JSON</button>
+      <button type="button" id="replay-sample">Replay sample</button>
     </div>
   `;
+
   controls.querySelector("#palette").onchange = () => {
     selectedPaletteId = val("palette");
+    selectedSamplePenId = null;
     renderControls();
   };
+  controls.querySelector("#sample_pen").onchange = () => {
+    selectedSamplePenId = val("sample_pen");
+    refreshPenSampleBoard({ skipEnd: true });
+  };
+  const paperSel = controls.querySelector("#pen_paper");
+  paperSel.onchange = () => {
+    penSamplePaperId = val("pen_paper");
+    const stock = resolvePenSamplePaper();
+    const sw = controls.querySelector("#pen-paper-swatch");
+    if (sw) sw.style.background = stock.color_hex;
+    refreshPenSampleBoard({ skipEnd: true });
+  };
   controls.querySelector("#export-pal-local").onclick = () => {
-    downloadJson(`${selectedPaletteId}.json`, currentPalette());
+    downloadJson(`${val("pal_id", selectedPaletteId)}.json`, {
+      id: val("pal_id", selectedPaletteId),
+      name: val("pal_name", "Custom"),
+      paper_notes: val("paper_notes", ""),
+      pens: collectPensFromEditor(),
+    });
+  };
+  controls.querySelector("#replay-sample").onclick = () => {
+    refreshPenSampleBoard({ skipEnd: false });
   };
   controls.querySelector("#add-pen").onclick = () => {
     const editor = controls.querySelector("#pen-editor");
     const idx = editor.querySelectorAll(".pen-block").length;
-    editor.insertAdjacentHTML("beforeend", `
-      <div class="pen-block" data-idx="${idx}">
-        <div class="grid-2">
-          ${field("id", `<input data-k="id" value="pen${idx + 1}" />`)}
-          ${field("name", `<input data-k="name" value="Pen ${idx + 1}" />`)}
-        </div>
-        <div class="grid-2">
-          ${field("color", `<input data-k="color_hex" type="color" value="#336699" />`)}
-          ${field("width mm", `<input data-k="width_mm" type="number" step="0.1" value="0.5" />`)}
-        </div>
-        <div class="grid-2">
-          ${field("opacity", `<input data-k="opacity" type="number" step="0.05" min="0" max="1" value="1" />`)}
-          ${field("nib", `<select data-k="nib_type"><option>fineliner</option><option>marker</option><option>brush</option><option>calligraphy</option><option>highlighter</option></select>`)}
-        </div>
-      </div>`);
-  };
-  controls.querySelector("#save-pal").onclick = async () => {
-    const pens = [...controls.querySelectorAll(".pen-block")].map((block) => {
-      const get = (k) => block.querySelector(`[data-k="${k}"]`).value;
-      return {
-        id: get("id"),
-        name: get("name"),
-        color_hex: get("color_hex"),
-        profile: {
-          width_mm: Number(get("width_mm")),
-          opacity: Number(get("opacity")),
-          nib_type: get("nib_type"),
+    editor.insertAdjacentHTML(
+      "beforeend",
+      penBlockHtml(
+        {
+          id: `pen${idx + 1}`,
+          name: `Pen ${idx + 1}`,
+          color_hex: "#336699",
+          profile: { width_mm: 0.5, opacity: 1, nib_type: "fineliner" },
         },
-      };
-    });
-    const body = {
-      id: val("new_id"),
-      name: val("new_name"),
-      paper_notes: val("paper_notes"),
-      pens,
-    };
-    const saved = await api("/api/palettes/save", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    palettes = await api("/api/palettes");
-    selectedPaletteId = saved.id;
-    downloadJson(`${saved.id}.json`, saved);
-    statsEl.textContent = `Saved palette ${saved.id}`;
+        idx
+      )
+    );
+    syncSamplePenSelect();
+    bindPenSampleLiveUpdates();
+    refreshPenSampleBoard({ skipEnd: true });
+  };
+  controls.querySelector("#new-pal").onclick = () => {
+    const stamp = Date.now().toString(36).slice(-4);
+    selectedPaletteId = `custom-${stamp}`;
+    selectedSamplePenId = "ink";
+    palettes = [
+      ...palettes.filter((p) => p.id !== selectedPaletteId),
+      {
+        id: selectedPaletteId,
+        name: "New palette",
+        paper_notes: "",
+        pens: [
+          {
+            id: "ink",
+            name: "Ink",
+            color_hex: "#1a1a1a",
+            profile: { width_mm: 0.45, opacity: 1, nib_type: "fineliner" },
+          },
+        ],
+      },
+    ];
+    statsEl.textContent = "New palette — save to keep";
     renderControls();
   };
+  controls.querySelector("#save-pal").onclick = async () => {
+    const pens = collectPensFromEditor();
+    if (!pens.length) {
+      statsEl.textContent = "Add at least one pen before saving";
+      return;
+    }
+    const body = {
+      id: val("pal_id", selectedPaletteId),
+      name: val("pal_name", "Custom"),
+      paper_notes: val("paper_notes", ""),
+      pens,
+    };
+    try {
+      const saved = await api("/api/palettes/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      palettes = await api("/api/palettes");
+      selectedPaletteId = saved.id;
+      selectedSamplePenId = saved.pens?.[0]?.id || selectedSamplePenId;
+      statsEl.textContent = `Saved palette ${saved.id}`;
+      await renderControls();
+    } catch (e) {
+      statsEl.textContent = String(e.message || e);
+      console.error(e);
+    }
+  };
+  controls.querySelector("#delete-pal").onclick = async () => {
+    const id = val("pal_id", selectedPaletteId);
+    if (!id) return;
+    try {
+      await api(`/api/palettes/${encodeURIComponent(id)}`, { method: "DELETE" });
+      palettes = await api("/api/palettes");
+      selectedPaletteId = palettes[0]?.id || "default-6";
+      selectedSamplePenId = null;
+      statsEl.textContent = `Deleted palette ${id}`;
+      await renderControls();
+    } catch (e) {
+      const msg = String(e.message || e);
+      statsEl.textContent = /403|preset|Cannot delete/i.test(msg)
+        ? `Cannot delete preset palette: ${id}`
+        : msg;
+      console.error(e);
+    }
+  };
+
+  bindPenSampleLiveUpdates();
+  refreshPenSampleBoard({ skipEnd: true });
 }
 
 function fillPaperForm(stock) {
