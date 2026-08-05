@@ -8,17 +8,20 @@ from botdraw.styles.geom.sampling import (
     weighted_sites,
 )
 from botdraw.styles.geom.util import (
+    MARK_KINDS,
     budget_take,
     circle_points,
     clip_segment,
     clip_polyline,
     hatch_rect,
     margin_box,
+    mark_polyline,
     rect_outline,
     sample_polyline,
 )
 
 __all__ = [
+    "MARK_KINDS",
     "budget_take",
     "circle_points",
     "clip_polyline",
@@ -27,6 +30,7 @@ __all__ = [
     "density_grid",
     "hatch_rect",
     "margin_box",
+    "mark_polyline",
     "marching_squares",
     "poisson_disc",
     "rect_outline",

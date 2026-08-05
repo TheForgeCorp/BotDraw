@@ -254,10 +254,18 @@ async def api_render_upload(
     density: float = Form(1.0),
     pen_up_speed_mm_s: float = Form(100.0),
     pen_down_speed_mm_s: float = Form(25.0),
+    params_extra: str = Form("{}"),
     file: UploadFile = File(...),
 ):
     from botdraw.core.jobs import artifact_dir
     from uuid import uuid4
+
+    try:
+        extras = json.loads(params_extra or "{}")
+        if not isinstance(extras, dict):
+            raise ValueError("params_extra must be a JSON object")
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise HTTPException(400, f"Invalid params_extra: {exc}") from exc
 
     tmp = artifact_dir(uuid4().hex[:8]) / (file.filename or "upload.png")
     tmp.write_bytes(await file.read())
@@ -271,6 +279,7 @@ async def api_render_upload(
         seed=seed,
         density=density,
         image_path=str(tmp),
+        params_extra=extras,
         pen_up_speed_mm_s=pen_up_speed_mm_s,
         pen_down_speed_mm_s=pen_down_speed_mm_s,
     )

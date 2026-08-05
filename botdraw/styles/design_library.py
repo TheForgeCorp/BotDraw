@@ -10,9 +10,36 @@ from botdraw.core.models import LayeredSVG, Orientation, PaperSize, Polyline, St
 from botdraw.core.svg import make_pass
 from botdraw.palettes import ink_pens
 from botdraw.styles import page_size, register
+from botdraw.styles.geom import MARK_KINDS, mark_polyline
 
 # Golden angle (degrees) — most irrational rotation; Fibonacci spiral families
 GOLDEN_ANGLE_DEG = 137.5
+
+
+def _extra_int(extra: dict, key: str, default: int, *, lo: int | None = None, hi: int | None = None) -> int:
+    raw = extra.get(key, default)
+    if raw is None:
+        raw = default
+    val = int(raw)
+    if lo is not None:
+        val = max(lo, val)
+    if hi is not None:
+        val = min(hi, val)
+    return val
+
+
+def _extra_float(
+    extra: dict, key: str, default: float, *, lo: float | None = None, hi: float | None = None
+) -> float:
+    raw = extra.get(key, default)
+    if raw is None:
+        raw = default
+    val = float(raw)
+    if lo is not None:
+        val = max(lo, val)
+    if hi is not None:
+        val = min(hi, val)
+    return val
 
 
 def evolve_cellular_automaton(
@@ -154,7 +181,7 @@ class _Phyllotaxis:
     category = "design"
     description = (
         "Sunflower seed packing — Vogel model with golden angle 137.5°; "
-        "r = c√n, θ = n·137.5°; Fibonacci spiral families (default 900 points)"
+        "r = c√n, θ = n·α°; marks: circle/square/diamond/triangle/star/cross"
     )
 
     def render(
@@ -169,10 +196,19 @@ class _Phyllotaxis:
     ):
         del image_path, image_array
         extra = params.extra or {}
-        base_n = int(extra.get("n_points") or extra.get("points") or 900)
-        angle_deg = float(extra.get("angle_deg") or GOLDEN_ANGLE_DEG)
-        dens = max(0.5, float(params.density or 1.0))
-        n_points = max(50, int(round(base_n * dens)))
+        # Points knob is authoritative; density scales mark size only
+        if "n_points" in extra and extra["n_points"] is not None:
+            n_points = _extra_int(extra, "n_points", 900, lo=50, hi=4000)
+        elif "points" in extra and extra["points"] is not None:
+            n_points = _extra_int(extra, "points", 900, lo=50, hi=4000)
+        else:
+            n_points = 900
+        angle_deg = _extra_float(extra, "angle_deg", GOLDEN_ANGLE_DEG, lo=1.0, hi=179.0)
+        mark = str(extra.get("mark") or "circle").lower().strip()
+        if mark not in MARK_KINDS:
+            mark = "circle"
+        mark_scale = _extra_float(extra, "mark_scale", 1.0, lo=0.2, hi=4.0)
+        dens = max(0.3, float(params.density or 1.0))
 
         # Build in polar model space with c=1, then fit to page
         raw = phyllotaxis_points(n_points, angle_deg=angle_deg, scale=1.0)
@@ -185,21 +221,16 @@ class _Phyllotaxis:
         page_scale = (usable * 0.5) / max_r
         cx, cy = pw / 2, ph / 2
 
-        # Dot radius scales gently with density / count so 900 pts stay readable
-        dot_r = max(0.25, min(0.85, 7.5 / math.sqrt(n_points)))
-        circle_steps = 8
+        base_r = max(0.25, min(1.2, 7.5 / math.sqrt(n_points)))
+        mark_r = base_r * dens * mark_scale
+        closed = mark != "cross"
         polys: list[Polyline] = []
         for x, y in raw:
             px = cx + x * page_scale
             py = cy + y * page_scale
-            ring = [
-                (
-                    px + dot_r * math.cos(t),
-                    py + dot_r * math.sin(t),
-                )
-                for t in np.linspace(0, 2 * math.pi, circle_steps, endpoint=False)
-            ]
-            polys.append(Polyline(points=ring + [ring[0]], pen_id=pen.id, closed=True))
+            pts = mark_polyline(px, py, mark_r, mark)
+            if len(pts) >= 2:
+                polys.append(Polyline(points=pts, pen_id=pen.id, closed=closed))
 
         return LayeredSVG(
             width_mm=pw,
@@ -212,7 +243,9 @@ class _Phyllotaxis:
                 "subsection": "math_derived",
                 "n_points": n_points,
                 "angle_deg": angle_deg,
-                "equation": "r = c√n ; θ = n × 137.5°",
+                "mark": mark,
+                "mark_scale": mark_scale,
+                "equation": f"r = c√n ; θ = n × {angle_deg}°",
                 "strokes": len(polys),
             },
         )

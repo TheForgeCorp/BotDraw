@@ -40,6 +40,71 @@ def rect_outline(x0: float, y0: float, x1: float, y1: float) -> list[tuple[float
     return [(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)]
 
 
+MARK_KINDS = ("circle", "square", "diamond", "triangle", "star", "cross")
+
+
+def mark_polyline(
+    cx: float,
+    cy: float,
+    size: float,
+    kind: str = "circle",
+) -> list[tuple[float, float]]:
+    """
+    Closed (or multi-segment via repeated points) glyph centered at (cx, cy).
+
+    `size` is a characteristic radius in the same units as cx/cy.
+    Unknown kinds fall back to circle. Cross returns a single polyline that
+    traces both arms (open arms joined through the center).
+    """
+    s = max(0.05, float(size))
+    k = (kind or "circle").lower().strip()
+    if k not in MARK_KINDS:
+        k = "circle"
+
+    if k == "circle":
+        return circle_points(cx, cy, s, n=16, closed=True)
+
+    if k == "square":
+        return rect_outline(cx - s * 0.75, cy - s * 0.75, cx + s * 0.75, cy + s * 0.75)
+
+    if k == "diamond":
+        return [
+            (cx, cy - s),
+            (cx + s, cy),
+            (cx, cy + s),
+            (cx - s, cy),
+            (cx, cy - s),
+        ]
+
+    if k == "triangle":
+        return [
+            (cx, cy - s),
+            (cx + s * 0.866, cy + s * 0.5),
+            (cx - s * 0.866, cy + s * 0.5),
+            (cx, cy - s),
+        ]
+
+    if k == "star":
+        # 5-point star (outer/inner radius)
+        pts: list[tuple[float, float]] = []
+        outer, inner = s, s * 0.4
+        for i in range(10):
+            r = outer if i % 2 == 0 else inner
+            ang = -math.pi / 2 + i * math.pi / 5
+            pts.append((cx + r * math.cos(ang), cy + r * math.sin(ang)))
+        pts.append(pts[0])
+        return pts
+
+    # cross — horizontal then vertical through center (one continuous stroke)
+    return [
+        (cx - s, cy),
+        (cx + s, cy),
+        (cx, cy),
+        (cx, cy - s),
+        (cx, cy + s),
+    ]
+
+
 def hatch_rect(
     x0: float, y0: float, x1: float, y1: float, spacing: float
 ) -> list[list[tuple[float, float]]]:

@@ -345,15 +345,17 @@ function styleButtons(list) {
 function bindStyleGrid() {
   controls.querySelectorAll("[data-style]").forEach((btn) => {
     btn.onclick = () => {
+      if (currentApp === "design") syncDesignKnobState();
       selectedStyle = btn.dataset.style;
       renderControls();
     };
   });
 }
 
-async function renderWithSettings({ appName, busyText = "Rendering…", extraFormData }) {
+async function renderWithSettings({ appName, busyText = "Rendering…", extraFormData, paramsExtra }) {
   syncStateFromForm();
   const file = controls.querySelector("#photo")?.files?.[0];
+  const extras = paramsExtra && typeof paramsExtra === "object" ? paramsExtra : {};
   statsEl.textContent = busyText;
   let data;
   if (file) {
@@ -369,6 +371,7 @@ async function renderWithSettings({ appName, busyText = "Rendering…", extraFor
     fd.append("density", String(state.density));
     fd.append("pen_up_speed_mm_s", String(state.pen_up_speed_mm_s));
     fd.append("pen_down_speed_mm_s", String(state.pen_down_speed_mm_s));
+    fd.append("params_extra", JSON.stringify(extras));
     if (extraFormData) Object.entries(extraFormData).forEach(([k, v]) => fd.append(k, v));
     data = await api("/api/render/upload", { method: "POST", body: fd });
   } else {
@@ -386,6 +389,7 @@ async function renderWithSettings({ appName, busyText = "Rendering…", extraFor
         density: state.density,
         pen_up_speed_mm_s: state.pen_up_speed_mm_s,
         pen_down_speed_mm_s: state.pen_down_speed_mm_s,
+        params_extra: extras,
       }),
     });
   }
@@ -463,76 +467,108 @@ function renderFractal() {
     withBusy("#go", () => renderWithSettings({ appName: "fractalbot", busyText: "Rendering fractal…" }));
 }
 
-function designLibraryParams() {
+const designKnobState = {
+  phyllotaxis: { n_points: 900, angle_deg: 137.5, mark: "circle", mark_scale: 1.0 },
+  modular_chords: { n_points: 200, k: 77 },
+  prime_sieve: { max_n: 212, grid_cols: 6, show_arcs: true, show_sieve: true },
+  rule30: { cols: 120, rows: 90, rule: 30 },
+};
+
+function syncDesignKnobState() {
   if (selectedStyle === "phyllotaxis") {
-    return {
-      n_points: Number(controls.querySelector("#phy-points")?.value || 900),
-      angle_deg: Number(controls.querySelector("#phy-angle")?.value || 137.5),
+    designKnobState.phyllotaxis = {
+      n_points: Number(controls.querySelector("#phy-points")?.value ?? designKnobState.phyllotaxis.n_points),
+      angle_deg: Number(controls.querySelector("#phy-angle")?.value ?? designKnobState.phyllotaxis.angle_deg),
+      mark: controls.querySelector("#phy-mark")?.value || designKnobState.phyllotaxis.mark,
+      mark_scale: Number(controls.querySelector("#phy-mark-scale")?.value ?? designKnobState.phyllotaxis.mark_scale),
     };
+    return;
   }
   if (selectedStyle === "modular_chords") {
-    return {
-      n_points: Number(controls.querySelector("#mod-n")?.value || 200),
-      k: Number(controls.querySelector("#mod-k")?.value || 77),
+    designKnobState.modular_chords = {
+      n_points: Number(controls.querySelector("#mod-n")?.value ?? designKnobState.modular_chords.n_points),
+      k: Number(controls.querySelector("#mod-k")?.value ?? designKnobState.modular_chords.k),
     };
+    return;
   }
   if (selectedStyle === "prime_sieve") {
-    return {
-      max_n: Number(controls.querySelector("#sieve-n")?.value || 212),
-      grid_cols: Number(controls.querySelector("#sieve-cols")?.value || 6),
+    designKnobState.prime_sieve = {
+      max_n: Number(controls.querySelector("#sieve-n")?.value ?? designKnobState.prime_sieve.max_n),
+      grid_cols: Number(controls.querySelector("#sieve-cols")?.value ?? designKnobState.prime_sieve.grid_cols),
       show_arcs: !!controls.querySelector("#sieve-arcs")?.checked,
       show_sieve: !!controls.querySelector("#sieve-grid")?.checked,
     };
+    return;
   }
-  return {
-    cols: Number(controls.querySelector("#ca-cols")?.value || 120),
-    rows: Number(controls.querySelector("#ca-rows")?.value || 90),
-    rule: Number(controls.querySelector("#ca-rule")?.value || 30),
+  designKnobState.rule30 = {
+    cols: Number(controls.querySelector("#ca-cols")?.value ?? designKnobState.rule30.cols),
+    rows: Number(controls.querySelector("#ca-rows")?.value ?? designKnobState.rule30.rows),
+    rule: Number(controls.querySelector("#ca-rule")?.value ?? designKnobState.rule30.rule),
   };
+}
+
+function designLibraryParams() {
+  syncDesignKnobState();
+  if (selectedStyle === "phyllotaxis") return { ...designKnobState.phyllotaxis };
+  if (selectedStyle === "modular_chords") return { ...designKnobState.modular_chords };
+  if (selectedStyle === "prime_sieve") return { ...designKnobState.prime_sieve };
+  return { ...designKnobState.rule30 };
 }
 
 function designLibraryKnobsHtml() {
   if (selectedStyle === "phyllotaxis") {
+    const k = designKnobState.phyllotaxis;
+    const marks = ["circle", "square", "diamond", "triangle", "star", "cross"];
+    const markOpts = marks
+      .map((m) => `<option value="${m}" ${m === k.mark ? "selected" : ""}>${m}</option>`)
+      .join("");
     return `
       <h4>Sunflower</h4>
-      <p class="muted">r = c√n · θ = n × golden angle — Fibonacci spiral families.</p>
+      <p class="muted">r = c√n · θ = n × angle — Points sets count; Density / Mark scale size only.</p>
       <div class="grid-2">
-        ${field("Points", `<input id="phy-points" type="number" min="50" max="4000" value="900" />`)}
-        ${field("Angle °", `<input id="phy-angle" type="number" min="1" max="179" step="0.1" value="137.5" />`)}
+        ${field("Points", `<input id="phy-points" type="number" min="50" max="4000" value="${k.n_points}" />`)}
+        ${field("Angle °", `<input id="phy-angle" type="number" min="1" max="179" step="0.1" value="${k.angle_deg}" />`)}
+      </div>
+      <div class="grid-2">
+        ${field("Mark", `<select id="phy-mark">${markOpts}</select>`)}
+        ${field("Mark scale", `<input id="phy-mark-scale" type="number" min="0.2" max="4" step="0.1" value="${k.mark_scale}" />`)}
       </div>
     `;
   }
   if (selectedStyle === "modular_chords") {
+    const k = designKnobState.modular_chords;
     return `
       <h4>Circle steps</h4>
       <p class="muted">i → (i + k) mod N — petals from periodicity, dense ring from chord interference.</p>
       <div class="grid-2">
-        ${field("N points", `<input id="mod-n" type="number" min="12" max="2000" value="200" />`)}
-        ${field("Step k", `<input id="mod-k" type="number" min="1" max="1999" value="77" />`)}
+        ${field("N points", `<input id="mod-n" type="number" min="12" max="2000" value="${k.n_points}" />`)}
+        ${field("Step k", `<input id="mod-k" type="number" min="1" max="1999" value="${k.k}" />`)}
       </div>
     `;
   }
   if (selectedStyle === "prime_sieve") {
+    const k = designKnobState.prime_sieve;
     return `
       <h4>Prime sieve</h4>
       <p class="muted">Left: arc spire between primes. Right: circled primes / struck composites. Cols=6 → vertical lanes.</p>
       <div class="grid-2">
-        ${field("Max n", `<input id="sieve-n" type="number" min="10" max="2000" value="212" />`)}
-        ${field("Grid cols", `<input id="sieve-cols" type="number" min="2" max="20" value="6" />`)}
+        ${field("Max n", `<input id="sieve-n" type="number" min="10" max="2000" value="${k.max_n}" />`)}
+        ${field("Grid cols", `<input id="sieve-cols" type="number" min="2" max="20" value="${k.grid_cols}" />`)}
       </div>
       <div class="chk-row">
-        <label><input id="sieve-arcs" type="checkbox" checked /> Arc spire</label>
-        <label><input id="sieve-grid" type="checkbox" checked /> Sieve grid</label>
+        <label><input id="sieve-arcs" type="checkbox" ${k.show_arcs ? "checked" : ""} /> Arc spire</label>
+        <label><input id="sieve-grid" type="checkbox" ${k.show_sieve ? "checked" : ""} /> Sieve grid</label>
       </div>
     `;
   }
+  const k = designKnobState.rule30;
   return `
     <h4>Automaton</h4>
     <div class="grid-2">
-      ${field("Cols", `<input id="ca-cols" type="number" min="16" max="400" value="120" />`)}
-      ${field("Rows", `<input id="ca-rows" type="number" min="12" max="300" value="90" />`)}
+      ${field("Cols", `<input id="ca-cols" type="number" min="16" max="400" value="${k.cols}" />`)}
+      ${field("Rows", `<input id="ca-rows" type="number" min="12" max="300" value="${k.rows}" />`)}
     </div>
-    ${field("Rule", `<input id="ca-rule" type="number" min="0" max="255" value="30" />`)}
+    ${field("Rule", `<input id="ca-rule" type="number" min="0" max="255" value="${k.rule}" />`)}
   `;
 }
 
