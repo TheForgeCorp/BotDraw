@@ -103,6 +103,48 @@ def vision_status() -> None:
             print(f"    scene_json={info['scene_json']}")
 
 
+@vision_app.command("loop-demo")
+def vision_loop_demo(
+    image: Optional[Path] = typer.Option(
+        None,
+        help="Photo/object image (default: gold mug fixture)",
+    ),
+    out: Path = typer.Option(
+        Path("docs/wireframes/portraitbot-vision-loop-history.html"),
+        help="Visual history HTML (pass-by-pass)",
+    ),
+    turns: int = typer.Option(10, help="Max feedback turns (cap 10)"),
+    turns_dir: Optional[Path] = typer.Option(
+        None,
+        help="Manual subscription JSON dir (default: tests/fixtures/vision/turns)",
+    ),
+) -> None:
+    """
+    Run a 10-turn structure feedback loop with visual history (manual JSON).
+
+    Uses BOTDRAW_VISION_PROVIDER=manual fixtures — no API key required.
+    """
+    from botdraw.portrait.vision_loop import (
+        DEFAULT_TURNS_DIR,
+        ensure_manual_turn_fixtures,
+        write_vision_history,
+    )
+
+    tdir = turns_dir or DEFAULT_TURNS_DIR
+    ensure_manual_turn_fixtures(root=tdir, force=False)
+    path, history = write_vision_history(
+        out,
+        image_path=image,
+        max_turns=turns,
+        turns_dir=tdir,
+    )
+    print(f"[bold]{len(history)}[/bold] passes → {path}")
+    for p in history:
+        ov = f"{p.overall:.2f}" if p.overall is not None else "—"
+        mark = "re-ingest" if p.reingest else p.kind
+        print(f"  pass {p.turn:02d} [{mark}] overall={ov} edges={p.edge_count} · {p.summary}")
+
+
 @vision_app.command("compare")
 def vision_compare(
     image: Path = typer.Argument(..., help="Portrait photo to review"),

@@ -271,7 +271,7 @@ def test_enrich_keep_more_edges_forces_reingest():
     )
     acts = cr._enrich_actions_from_fixes(critique)
     assert acts.force_reingest is True
-    assert acts.line_source == "neural"
+    assert acts.line_source == "classic"
 
 
 def test_manual_critique_json(monkeypatch, tmp_path):

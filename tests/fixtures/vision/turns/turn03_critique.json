@@ -1,0 +1,18 @@
+{
+  "overall": 0.48,
+  "issues": [
+    {
+      "code": "band_sides_weak",
+      "severity": 0.7,
+      "region": "mug_band",
+      "fix": "equalize_structure"
+    }
+  ],
+  "actions": {
+    "force_reingest": true,
+    "line_source": "classic",
+    "scan_mode": "auto",
+    "contour_simplify": 1
+  },
+  "summary": "Pass 3: sides improved; try auto scan for residual gaps"
+}

@@ -1,0 +1,9 @@
+{
+  "overall": 0.78,
+  "issues": [],
+  "actions": {
+    "force_reingest": false,
+    "density_mul": 1.0
+  },
+  "summary": "Pass 8: confirm structure; hold knobs"
+}

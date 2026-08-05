@@ -52,6 +52,8 @@ ALLOWED_FIXES = frozenset(
     {
         "suppress_background",
         "keep_more_edges",
+        "equalize_structure",
+        "fix_crop",
         "boost_pet_shade",
         "boost_face_shade",
         "reduce_background_edges",
@@ -69,8 +71,14 @@ ALLOWED_ACTION_KEYS = frozenset(
         "max_tone_code",
         "suppress_background",
         "density_mul",
+        "scan_mode",
+        "contour_simplify",
     }
 )
+
+# Dev / studio feedback loop — pass history visualizes quality return
+VISION_MAX_TURNS = 10
+VISION_MAX_REINGESTS = 5
 
 SCENE_SYSTEM = """You review a portrait photograph for a pen-plotter pipeline.
 Return ONLY valid JSON matching this schema (no markdown):
@@ -92,15 +100,16 @@ orientation_deg is the clockwise rotation needed to make subjects upright.
 Flag pets and geometric clutter (blinds, crates). Prefer neural lines +
 background suppress for multi-subject or cluttered scenes."""
 
-CRITIQUE_SYSTEM = """You critique a pen-plotter portrait preview against the source photo.
-Return ONLY valid JSON matching this schema (no markdown):
+STRUCTURE_CRITIQUE_SYSTEM = """You critique pen-plotter STRUCTURE linework (ingest Raw SVG /
+edge polylines) against the source photo. Focus on missing edges, open silhouettes,
+parallel-band gaps, noise/travel, and crop. Return ONLY valid JSON:
 {
   "overall": 0..1,
   "issues": [
     {"code": string, "severity": 0..1, "region": string|null,
-     "fix": "suppress_background"|"keep_more_edges"|"boost_pet_shade"|
-            "boost_face_shade"|"reduce_background_edges"|"prefer_scribble"|
-            "prefer_linework"}
+     "fix": "suppress_background"|"keep_more_edges"|"equalize_structure"|
+            "fix_crop"|"boost_pet_shade"|"boost_face_shade"|
+            "reduce_background_edges"|"prefer_scribble"|"prefer_linework"}
   ],
   "actions": {
     "force_reingest": bool,
@@ -109,7 +118,34 @@ Return ONLY valid JSON matching this schema (no markdown):
     "style_id": string|null,
     "max_tone_code": 3|4|null,
     "suppress_background": bool|null,
-    "density_mul": number|null
+    "density_mul": number|null,
+    "scan_mode": "auto"|"edges"|"brightness"|"centerline"|"color_bands"|null,
+    "contour_simplify": 1|2|3|null
+  },
+  "summary": "one short sentence"
+}
+Prefer classic line_source for structure rescue. Smallest change that closes gaps."""
+
+CRITIQUE_SYSTEM = """You critique a pen-plotter portrait preview against the source photo.
+Return ONLY valid JSON matching this schema (no markdown):
+{
+  "overall": 0..1,
+  "issues": [
+    {"code": string, "severity": 0..1, "region": string|null,
+     "fix": "suppress_background"|"keep_more_edges"|"equalize_structure"|
+            "fix_crop"|"boost_pet_shade"|"boost_face_shade"|
+            "reduce_background_edges"|"prefer_scribble"|"prefer_linework"}
+  ],
+  "actions": {
+    "force_reingest": bool,
+    "line_source": "neural"|"classic"|"auto"|null,
+    "hatch_budget_mul": number|null,
+    "style_id": string|null,
+    "max_tone_code": 3|4|null,
+    "suppress_background": bool|null,
+    "density_mul": number|null,
+    "scan_mode": "auto"|"edges"|"brightness"|"centerline"|"color_bands"|null,
+    "contour_simplify": 1|2|3|null
   },
   "summary": "one short sentence"
 }
@@ -160,6 +196,8 @@ class CritiqueActions(BaseModel):
     max_tone_code: int | None = Field(default=None, ge=3, le=4)
     suppress_background: bool | None = None
     density_mul: float | None = Field(default=None, ge=0.5, le=2.5)
+    scan_mode: Literal["auto", "edges", "brightness", "centerline", "color_bands"] | None = None
+    contour_simplify: int | None = Field(default=None, ge=1, le=3)
 
 
 class PortraitCritique(BaseModel):
@@ -256,17 +294,28 @@ def provider_status() -> dict[str, dict[str, Any]]:
         "ready": gem_key and gem_pkg,
         "model": os.environ.get("BOTDRAW_GEMINI_MODEL", "gemini-2.0-flash"),
     }
-    # manual / subscription JSON
+    # manual / subscription JSON (multi-turn dir or single files)
     scene_path = os.environ.get("BOTDRAW_VISION_SCENE_JSON") or ""
     critique_path = os.environ.get("BOTDRAW_VISION_CRITIQUE_JSON") or ""
+    turns_dir = os.environ.get("BOTDRAW_VISION_TURNS_DIR") or ""
+    turns_ready = False
+    if turns_dir and Path(turns_dir).is_dir():
+        turns_ready = (Path(turns_dir) / "turn01_scene.json").exists() or (
+            Path(turns_dir) / "turn01.json"
+        ).exists()
     out["manual"] = {
         "key": True,
         "package": True,
-        "ready": bool(scene_path and Path(scene_path).exists()),
+        "ready": bool((scene_path and Path(scene_path).exists()) or turns_ready),
         "model": "subscription-json",
         "scene_json": scene_path or None,
         "critique_json": critique_path or None,
-        "critique_ready": bool(critique_path and Path(critique_path).exists()),
+        "turns_dir": turns_dir or None,
+        "critique_ready": bool(
+            (critique_path and Path(critique_path).exists())
+            or turns_ready
+        ),
+        "max_turns": VISION_MAX_TURNS,
     }
     return out
 
@@ -527,6 +576,59 @@ def load_critique_json(path: str | Path) -> PortraitCritique:
     return critique
 
 
+def vision_turns_dir() -> Path | None:
+    raw = (os.environ.get("BOTDRAW_VISION_TURNS_DIR") or "").strip()
+    if not raw:
+        return None
+    p = Path(raw)
+    return p if p.is_dir() else None
+
+
+def resolve_manual_turn_path(turn: int) -> Path | None:
+    """
+    Resolve subscription JSON for a 1-indexed turn.
+
+    Prefer BOTDRAW_VISION_TURNS_DIR/turnNN*.json, then legacy single-file env vars
+    (turn 1 → SCENE, turn 2 → CRITIQUE, turn 3+ → FEEDBACK or CRITIQUE).
+    """
+    turn = int(turn)
+    tdir = vision_turns_dir()
+    if tdir is not None:
+        candidates = [
+            tdir / f"turn{turn:02d}_scene.json",
+            tdir / f"turn{turn:02d}_critique.json",
+            tdir / f"turn{turn:02d}.json",
+        ]
+        for c in candidates:
+            if c.exists():
+                return c
+    if turn <= 1:
+        path = os.environ.get("BOTDRAW_VISION_SCENE_JSON") or ""
+        return Path(path) if path and Path(path).exists() else None
+    if turn == 2:
+        path = os.environ.get("BOTDRAW_VISION_CRITIQUE_JSON") or ""
+        return Path(path) if path and Path(path).exists() else None
+    path = (
+        os.environ.get("BOTDRAW_VISION_FEEDBACK_JSON")
+        or os.environ.get("BOTDRAW_VISION_CRITIQUE_JSON")
+        or ""
+    )
+    return Path(path) if path and Path(path).exists() else None
+
+
+def load_manual_turn(turn: int) -> PortraitScene | PortraitCritique | None:
+    """Load scene (turn 1) or critique (turn 2+) from manual/subscription JSON."""
+    path = resolve_manual_turn_path(turn)
+    if path is None:
+        return None
+    try:
+        if turn <= 1 or "scene" in path.name:
+            return load_scene_json(path)
+        return load_critique_json(path)
+    except (ValidationError, json.JSONDecodeError, Exception):
+        return None
+
+
 def review_photo(
     rgb: np.ndarray,
     *,
@@ -540,6 +642,9 @@ def review_photo(
     try:
         if p == "manual" and client_call is _call_vision:
             path = os.environ.get("BOTDRAW_VISION_SCENE_JSON")
+            if not path:
+                tpath = resolve_manual_turn_path(1)
+                path = str(tpath) if tpath else None
             if not path:
                 return None
             scene = load_scene_json(path)
@@ -565,14 +670,25 @@ def critique_render(
     style_id: str,
     client_call=_call_vision,
     provider: ProviderName | None = None,
+    turn: int | None = None,
+    structure: bool = False,
 ) -> PortraitCritique | None:
-    """Post-render critique. Returns None when unavailable or on error."""
+    """Post-render / post-structure critique. Returns None when unavailable or on error."""
     p = provider or default_provider()
+    system = STRUCTURE_CRITIQUE_SYSTEM if structure else CRITIQUE_SYSTEM
     if p == "manual":
-        path = os.environ.get("BOTDRAW_VISION_CRITIQUE_JSON") or ""
-        if not path or not Path(path).exists():
+        path = None
+        if turn is not None:
+            path = resolve_manual_turn_path(int(turn))
+        if path is None:
+            env = os.environ.get("BOTDRAW_VISION_CRITIQUE_JSON") or ""
+            path = Path(env) if env and Path(env).exists() else None
+        if path is None:
             return None
         try:
+            # Scene files are not critiques
+            if "scene" in path.name:
+                return None
             return load_critique_json(path)
         except (ValidationError, json.JSONDecodeError, Exception):
             return None
@@ -587,6 +703,7 @@ def critique_render(
             style_id=style_id,
             client_call=client_call,
             provider=p,
+            system=system,
         )
         data = _extract_json(raw)
         critique = PortraitCritique.model_validate(data)
@@ -611,7 +728,9 @@ def _critique_two_images(
     style_id: str,
     client_call,
     provider: ProviderName | None = None,
+    system: str | None = None,
 ) -> str:
+    sys = system or CRITIQUE_SYSTEM
     prompt = (
         f"Image 1 = source photo. Image 2 = plotter preview "
         f"(style={style_id}). Critique likeness. JSON only."
@@ -619,13 +738,13 @@ def _critique_two_images(
     if client_call is not _call_vision:
         # Tests inject a single-image stub; pass preview only with style context.
         return client_call(
-            system=CRITIQUE_SYSTEM,
+            system=sys,
             prompt=f"Style={style_id}. Critique this plotter preview vs a source portrait. JSON only.",
             image_b64=preview_b64,
             media_type="image/png",
         )
     return client_call(
-        system=CRITIQUE_SYSTEM,
+        system=sys,
         prompt=prompt,
         image_b64=source_b64,
         media_type="image/jpeg",
@@ -676,11 +795,13 @@ def _enrich_actions_from_fixes(critique: PortraitCritique) -> CritiqueActions:
         acts.style_id = "portrait_scribble_tone"
     if "prefer_linework" in fixes and not acts.style_id:
         acts.style_id = "portrait_linework"
-    if "keep_more_edges" in fixes and acts.force_reingest is False:
-        # Structure rescue: severe keep_more_edges → one re-ingest (studio only)
+    if ("keep_more_edges" in fixes or "equalize_structure" in fixes) and acts.force_reingest is False:
+        # Structure rescue: re-ingest once; keep classic unless JSON set a source
         acts.force_reingest = True
         if acts.line_source is None:
-            acts.line_source = "neural"
+            acts.line_source = "classic"
+    if "fix_crop" in fixes and acts.force_reingest is False:
+        acts.force_reingest = True
     return acts
 
 
@@ -747,6 +868,10 @@ def critique_to_render_knobs(critique: PortraitCritique) -> dict[str, Any]:
         out["hatch_budget_mul"] = float(a.hatch_budget_mul)
     if a.density_mul is not None:
         out["density_mul"] = float(a.density_mul)
+    if a.scan_mode:
+        out["scan_mode"] = a.scan_mode
+    if a.contour_simplify is not None:
+        out["contour_simplify"] = int(a.contour_simplify)
     return out
 
 

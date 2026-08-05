@@ -1,0 +1,10 @@
+{
+  "overall": 0.74,
+  "issues": [],
+  "actions": {
+    "force_reingest": false,
+    "line_source": "classic",
+    "density_mul": 1.05
+  },
+  "summary": "Pass 7: structure OK \u2014 light density nudge only"
+}

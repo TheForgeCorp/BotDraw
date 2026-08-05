@@ -1,0 +1,18 @@
+{
+  "overall": 0.68,
+  "issues": [
+    {
+      "code": "rim_gap",
+      "severity": 0.45,
+      "region": "rim",
+      "fix": "equalize_structure"
+    }
+  ],
+  "actions": {
+    "force_reingest": true,
+    "line_source": "classic",
+    "scan_mode": "edges",
+    "contour_simplify": 2
+  },
+  "summary": "Pass 6: last structure re-ingest \u2014 rim closure"
+}

@@ -1,0 +1,18 @@
+{
+  "overall": 0.62,
+  "issues": [
+    {
+      "code": "handle_thin",
+      "severity": 0.5,
+      "region": "handle",
+      "fix": "keep_more_edges"
+    }
+  ],
+  "actions": {
+    "force_reingest": true,
+    "line_source": "classic",
+    "scan_mode": "edges",
+    "contour_simplify": 1
+  },
+  "summary": "Pass 5: recover handle continuity"
+}

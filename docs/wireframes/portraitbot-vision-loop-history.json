@@ -1,0 +1,475 @@
+[
+  {
+    "turn": 1,
+    "kind": "scene",
+    "summary": "Object mug \u2014 classic structure gate, hatch off",
+    "overall": null,
+    "edge_count": 33,
+    "hatch_count": 0,
+    "knobs": {
+      "line_source": "classic",
+      "scan_mode": "edges",
+      "hatch_size": 0,
+      "ensemble": false,
+      "contour_simplify": 2,
+      "crop": {
+        "x": 0.12,
+        "y": 0.08,
+        "w": 0.76,
+        "h": 0.84,
+        "source": "ai_scene"
+      },
+      "auto_frame": false,
+      "case_label": "mug"
+    },
+    "critique": null,
+    "scene": {
+      "orientation_deg": 0,
+      "subjects": [
+        {
+          "kind": "other",
+          "importance": 1.0
+        }
+      ],
+      "clutter": [],
+      "lighting": "normal",
+      "crop_hint": {
+        "x": 0.12,
+        "y": 0.08,
+        "w": 0.76,
+        "h": 0.84
+      },
+      "ingest": {
+        "line_source": "classic",
+        "suppress_background": false,
+        "protect_subjects": [],
+        "max_tone_code": 3
+      },
+      "summary": "Object mug \u2014 classic structure gate, hatch off"
+    },
+    "reingest": false
+  },
+  {
+    "turn": 2,
+    "kind": "structure",
+    "summary": "Pass 2: band L/R verticals missing \u2014 equalize + finer simplify",
+    "overall": 0.38,
+    "edge_count": 36,
+    "hatch_count": 0,
+    "knobs": {
+      "line_source": "classic",
+      "scan_mode": "edges",
+      "hatch_size": 0,
+      "ensemble": false,
+      "contour_simplify": 1,
+      "crop": {
+        "x": 0.12,
+        "y": 0.08,
+        "w": 0.76,
+        "h": 0.84,
+        "source": "ai_scene"
+      },
+      "auto_frame": false,
+      "suppress_background": false
+    },
+    "critique": {
+      "overall": 0.38,
+      "issues": [
+        {
+          "code": "band_sides_missing",
+          "severity": 0.85,
+          "region": "mug_band",
+          "fix": "equalize_structure"
+        },
+        {
+          "code": "soft_edges",
+          "severity": 0.6,
+          "region": "silhouette",
+          "fix": "keep_more_edges"
+        }
+      ],
+      "actions": {
+        "force_reingest": true,
+        "line_source": "classic",
+        "hatch_budget_mul": null,
+        "style_id": null,
+        "max_tone_code": null,
+        "suppress_background": false,
+        "density_mul": null,
+        "scan_mode": "edges",
+        "contour_simplify": 1
+      },
+      "summary": "Pass 2: band L/R verticals missing \u2014 equalize + finer simplify"
+    },
+    "scene": null,
+    "reingest": true
+  },
+  {
+    "turn": 3,
+    "kind": "structure",
+    "summary": "Pass 3: sides improved; try auto scan for residual gaps",
+    "overall": 0.48,
+    "edge_count": 39,
+    "hatch_count": 0,
+    "knobs": {
+      "line_source": "classic",
+      "scan_mode": "auto",
+      "hatch_size": 0,
+      "ensemble": false,
+      "contour_simplify": 1,
+      "crop": {
+        "x": 0.12,
+        "y": 0.08,
+        "w": 0.76,
+        "h": 0.84,
+        "source": "ai_scene"
+      },
+      "auto_frame": false,
+      "suppress_background": false
+    },
+    "critique": {
+      "overall": 0.48,
+      "issues": [
+        {
+          "code": "band_sides_weak",
+          "severity": 0.7,
+          "region": "mug_band",
+          "fix": "equalize_structure"
+        }
+      ],
+      "actions": {
+        "force_reingest": true,
+        "line_source": "classic",
+        "hatch_budget_mul": null,
+        "style_id": null,
+        "max_tone_code": null,
+        "suppress_background": null,
+        "density_mul": null,
+        "scan_mode": "auto",
+        "contour_simplify": 1
+      },
+      "summary": "Pass 3: sides improved; try auto scan for residual gaps"
+    },
+    "scene": null,
+    "reingest": true
+  },
+  {
+    "turn": 4,
+    "kind": "structure",
+    "summary": "Pass 4: tighten crop; keep classic edges",
+    "overall": 0.55,
+    "edge_count": 36,
+    "hatch_count": 0,
+    "knobs": {
+      "line_source": "classic",
+      "scan_mode": "edges",
+      "hatch_size": 0,
+      "ensemble": false,
+      "contour_simplify": 1,
+      "crop": {
+        "x": 0.12,
+        "y": 0.08,
+        "w": 0.76,
+        "h": 0.84,
+        "source": "ai_scene"
+      },
+      "auto_frame": false,
+      "suppress_background": false
+    },
+    "critique": {
+      "overall": 0.55,
+      "issues": [
+        {
+          "code": "crop_loose",
+          "severity": 0.55,
+          "region": "frame",
+          "fix": "fix_crop"
+        }
+      ],
+      "actions": {
+        "force_reingest": true,
+        "line_source": "classic",
+        "hatch_budget_mul": null,
+        "style_id": null,
+        "max_tone_code": null,
+        "suppress_background": null,
+        "density_mul": null,
+        "scan_mode": "edges",
+        "contour_simplify": 1
+      },
+      "summary": "Pass 4: tighten crop; keep classic edges"
+    },
+    "scene": null,
+    "reingest": true
+  },
+  {
+    "turn": 5,
+    "kind": "structure",
+    "summary": "Pass 5: recover handle continuity",
+    "overall": 0.62,
+    "edge_count": 36,
+    "hatch_count": 0,
+    "knobs": {
+      "line_source": "classic",
+      "scan_mode": "edges",
+      "hatch_size": 0,
+      "ensemble": false,
+      "contour_simplify": 1,
+      "crop": {
+        "x": 0.12,
+        "y": 0.08,
+        "w": 0.76,
+        "h": 0.84,
+        "source": "ai_scene"
+      },
+      "auto_frame": false,
+      "suppress_background": false
+    },
+    "critique": {
+      "overall": 0.62,
+      "issues": [
+        {
+          "code": "handle_thin",
+          "severity": 0.5,
+          "region": "handle",
+          "fix": "keep_more_edges"
+        }
+      ],
+      "actions": {
+        "force_reingest": true,
+        "line_source": "classic",
+        "hatch_budget_mul": null,
+        "style_id": null,
+        "max_tone_code": null,
+        "suppress_background": null,
+        "density_mul": null,
+        "scan_mode": "edges",
+        "contour_simplify": 1
+      },
+      "summary": "Pass 5: recover handle continuity"
+    },
+    "scene": null,
+    "reingest": true
+  },
+  {
+    "turn": 6,
+    "kind": "structure",
+    "summary": "Pass 6: last structure re-ingest \u2014 rim closure",
+    "overall": 0.68,
+    "edge_count": 33,
+    "hatch_count": 0,
+    "knobs": {
+      "line_source": "classic",
+      "scan_mode": "edges",
+      "hatch_size": 0,
+      "ensemble": false,
+      "contour_simplify": 2,
+      "crop": {
+        "x": 0.12,
+        "y": 0.08,
+        "w": 0.76,
+        "h": 0.84,
+        "source": "ai_scene"
+      },
+      "auto_frame": false,
+      "suppress_background": false
+    },
+    "critique": {
+      "overall": 0.68,
+      "issues": [
+        {
+          "code": "rim_gap",
+          "severity": 0.45,
+          "region": "rim",
+          "fix": "equalize_structure"
+        }
+      ],
+      "actions": {
+        "force_reingest": true,
+        "line_source": "classic",
+        "hatch_budget_mul": null,
+        "style_id": null,
+        "max_tone_code": null,
+        "suppress_background": null,
+        "density_mul": null,
+        "scan_mode": "edges",
+        "contour_simplify": 2
+      },
+      "summary": "Pass 6: last structure re-ingest \u2014 rim closure"
+    },
+    "scene": null,
+    "reingest": true
+  },
+  {
+    "turn": 7,
+    "kind": "structure",
+    "summary": "Pass 7: structure OK \u2014 light density nudge only",
+    "overall": 0.74,
+    "edge_count": 33,
+    "hatch_count": 0,
+    "knobs": {
+      "line_source": "classic",
+      "scan_mode": "edges",
+      "hatch_size": 0,
+      "ensemble": false,
+      "contour_simplify": 2,
+      "crop": {
+        "x": 0.12,
+        "y": 0.08,
+        "w": 0.76,
+        "h": 0.84,
+        "source": "ai_scene"
+      },
+      "auto_frame": false,
+      "suppress_background": false,
+      "density_mul": 1.05
+    },
+    "critique": {
+      "overall": 0.74,
+      "issues": [],
+      "actions": {
+        "force_reingest": false,
+        "line_source": "classic",
+        "hatch_budget_mul": null,
+        "style_id": null,
+        "max_tone_code": null,
+        "suppress_background": null,
+        "density_mul": 1.05,
+        "scan_mode": null,
+        "contour_simplify": null
+      },
+      "summary": "Pass 7: structure OK \u2014 light density nudge only"
+    },
+    "scene": null,
+    "reingest": false
+  },
+  {
+    "turn": 8,
+    "kind": "structure",
+    "summary": "Pass 8: confirm structure; hold knobs",
+    "overall": 0.78,
+    "edge_count": 33,
+    "hatch_count": 0,
+    "knobs": {
+      "line_source": "classic",
+      "scan_mode": "edges",
+      "hatch_size": 0,
+      "ensemble": false,
+      "contour_simplify": 2,
+      "crop": {
+        "x": 0.12,
+        "y": 0.08,
+        "w": 0.76,
+        "h": 0.84,
+        "source": "ai_scene"
+      },
+      "auto_frame": false,
+      "suppress_background": false,
+      "density_mul": 1.0
+    },
+    "critique": {
+      "overall": 0.78,
+      "issues": [],
+      "actions": {
+        "force_reingest": false,
+        "line_source": null,
+        "hatch_budget_mul": null,
+        "style_id": null,
+        "max_tone_code": null,
+        "suppress_background": null,
+        "density_mul": 1.0,
+        "scan_mode": null,
+        "contour_simplify": null
+      },
+      "summary": "Pass 8: confirm structure; hold knobs"
+    },
+    "scene": null,
+    "reingest": false
+  },
+  {
+    "turn": 9,
+    "kind": "confirm",
+    "summary": "Pass 9: likeness plateau \u2014 diminishing returns",
+    "overall": 0.82,
+    "edge_count": 33,
+    "hatch_count": 0,
+    "knobs": {
+      "line_source": "classic",
+      "scan_mode": "edges",
+      "hatch_size": 0,
+      "ensemble": false,
+      "contour_simplify": 2,
+      "crop": {
+        "x": 0.12,
+        "y": 0.08,
+        "w": 0.76,
+        "h": 0.84,
+        "source": "ai_scene"
+      },
+      "auto_frame": false,
+      "suppress_background": false,
+      "density_mul": 1.0
+    },
+    "critique": {
+      "overall": 0.82,
+      "issues": [],
+      "actions": {
+        "force_reingest": false,
+        "line_source": null,
+        "hatch_budget_mul": null,
+        "style_id": null,
+        "max_tone_code": null,
+        "suppress_background": null,
+        "density_mul": null,
+        "scan_mode": null,
+        "contour_simplify": null
+      },
+      "summary": "Pass 9: likeness plateau \u2014 diminishing returns"
+    },
+    "scene": null,
+    "reingest": false
+  },
+  {
+    "turn": 10,
+    "kind": "confirm",
+    "summary": "Pass 10: accept \u2014 quality return flattening",
+    "overall": 0.84,
+    "edge_count": 33,
+    "hatch_count": 0,
+    "knobs": {
+      "line_source": "classic",
+      "scan_mode": "edges",
+      "hatch_size": 0,
+      "ensemble": false,
+      "contour_simplify": 2,
+      "crop": {
+        "x": 0.12,
+        "y": 0.08,
+        "w": 0.76,
+        "h": 0.84,
+        "source": "ai_scene"
+      },
+      "auto_frame": false,
+      "suppress_background": false,
+      "density_mul": 1.0
+    },
+    "critique": {
+      "overall": 0.84,
+      "issues": [],
+      "actions": {
+        "force_reingest": false,
+        "line_source": null,
+        "hatch_budget_mul": null,
+        "style_id": null,
+        "max_tone_code": null,
+        "suppress_background": null,
+        "density_mul": null,
+        "scan_mode": null,
+        "contour_simplify": null
+      },
+      "summary": "Pass 10: accept \u2014 quality return flattening"
+    },
+    "scene": null,
+    "reingest": false
+  }
+]
