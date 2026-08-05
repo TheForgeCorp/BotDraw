@@ -481,6 +481,7 @@ def render_gold_report_html(
     results: list[GoldResult],
     *,
     title: str = "PortraitBot Phase B — Classic gold gate",
+    vision_html: str = "",
 ) -> str:
     passed_n = sum(1 for r in results if r.passed)
     total = len(results)
@@ -528,6 +529,19 @@ def render_gold_report_html(
 </article>
 """
         )
+
+    vision_block = ""
+    if vision_html:
+        vision_block = f"""
+<section class="vision" id="vision-loop">
+  <h2>Studio vision loop (manual fixtures)</h2>
+  <p class="lede">
+    Gold gate stays AI-off. This section proves the 3-turn studio path
+    (scene → structure → confirm) under committed subscription JSON — no API key.
+  </p>
+  {vision_html}
+</section>
+"""
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -594,39 +608,23 @@ def render_gold_report_html(
     display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0 0 1.5rem;
   }}
   .toc a {{
-    color: var(--ink); text-decoration: none; border: 1px solid var(--line);
-    background: var(--panel); padding: 0.35rem 0.55rem; border-radius: 6px;
-    font-size: 0.8rem;
+    text-decoration: none; color: var(--ink); border: 1px solid var(--line);
+    background: var(--panel); padding: 0.3rem 0.55rem; border-radius: 6px; font-size: 0.8rem;
   }}
-  .toc a:hover {{ border-color: #aeaeb2; }}
   .card {{
-    background: var(--panel);
-    border: 1px solid var(--line);
-    border-radius: 12px;
-    padding: 1rem 1rem 1.15rem;
-    margin: 0 0 1rem;
-    box-shadow: 0 1px 0 rgba(0,0,0,0.02);
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 1rem; margin: 0 0 1rem;
   }}
-  .card.is-fail {{ border-color: #f0b4ae; }}
-  .card header {{
-    display: flex; justify-content: space-between; gap: 1rem; align-items: flex-start;
-    margin-bottom: 0.85rem;
-  }}
-  .cat {{ margin: 0; font-size: 0.7rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint); font-weight: 600; }}
-  .card h2 {{ margin: 0.15rem 0; font-size: 1.15rem; letter-spacing: -0.02em; }}
-  .notes {{ margin: 0.2rem 0 0; color: var(--muted); font-size: 0.9rem; }}
-  .grid {{
-    display: grid; grid-template-columns: 1fr 1.2fr; gap: 0.75rem;
-  }}
-  @media (max-width: 760px) {{ .grid {{ grid-template-columns: 1fr; }} }}
-  figure {{ margin: 0; background: var(--soft); border-radius: 8px; overflow: hidden; border: 1px solid var(--line); }}
-  figcaption {{
-    padding: 0.4rem 0.55rem; font-size: 0.7rem; color: var(--faint);
-    border-bottom: 1px solid var(--line); font-family: var(--mono); letter-spacing: 0.02em;
-  }}
-  figure img {{ display: block; width: 100%; height: auto; background: #ddd; }}
-  .svg-wrap {{
-    padding: 0.55rem; background: #f3efe6; min-height: 220px;
+  .card header {{ display: flex; justify-content: space-between; gap: 1rem; align-items: flex-start; }}
+  .cat {{ margin: 0; font-size: 0.7rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint); }}
+  .card h2 {{ margin: 0.15rem 0 0; font-size: 1.15rem; }}
+  .notes {{ margin: 0.25rem 0 0; color: var(--muted); font-size: 0.9rem; }}
+  .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 0.65rem; margin-top: 0.75rem; }}
+  figure {{ margin: 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--soft); }}
+  figcaption {{ padding: 0.35rem 0.5rem; font-family: var(--mono); font-size: 0.65rem; color: var(--faint); border-bottom: 1px solid var(--line); }}
+  figure img {{ display: block; width: 100%; height: auto; }}
+  .svg-fig .svg-wrap {{
+    padding: 0.5rem; min-height: 180px;
     display: flex; align-items: center; justify-content: center;
   }}
   .svg-wrap svg {{ width: 100%; height: auto; max-height: 360px; }}
@@ -646,6 +644,26 @@ def render_gold_report_html(
   }}
   .checks li.bad {{ background: #fff5f4; }}
   .checks .det {{ color: var(--muted); font-family: var(--mono); font-size: 0.75rem; }}
+  .vision {{
+    margin: 2rem 0 1rem; padding: 1.25rem 0 0; border-top: 1px solid var(--line);
+  }}
+  .vision h2 {{ margin: 0 0 0.35rem; font-size: 1.25rem; letter-spacing: -0.02em; }}
+  .vision-case {{
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 1rem; margin: 0.85rem 0;
+  }}
+  .vision-case h3 {{ margin: 0 0 0.5rem; font-size: 1.05rem; }}
+  .vision-turns {{
+    display: grid; gap: 0.45rem; font-family: var(--mono); font-size: 0.78rem;
+  }}
+  .vision-turn {{
+    display: grid; grid-template-columns: 4.5rem 5.5rem 3.5rem 1fr;
+    gap: 0.4rem; align-items: baseline; padding: 0.4rem 0.5rem;
+    background: var(--soft); border-radius: 6px;
+  }}
+  @media (max-width: 640px) {{
+    .vision-turn {{ grid-template-columns: 3.5rem 1fr; }}
+  }}
   footer.note {{
     margin-top: 1.5rem; color: var(--muted); font-size: 0.85rem; max-width: 70ch;
   }}
@@ -666,16 +684,20 @@ def render_gold_report_html(
         {_badge(passed_n == total and total > 0, f"{passed_n}/{total} passed")}
         <span>generated {html.escape(generated)}</span>
         <span>quality booth-balanced · scan edges · line_source classic</span>
+        {"<span>vision fixtures appended</span>" if vision_html else ""}
       </div>
     </header>
     <nav class="toc">
       {''.join(f'<a href="#{html.escape(r.case.id)}">{html.escape(r.case.label)}</a>' for r in results)}
+      {"<a href='#vision-loop'>Vision loop</a>" if vision_html else ""}
     </nav>
     {''.join(cards)}
+    {vision_block}
     <footer class="note">
       Gate checklist mirrors Dev Lab: identity, noise/travel, path budget, crop, classic-only.
       Tone/hatch is gate-2. Replace fixtures under <code>tests/fixtures/portrait/gold/</code>
       with real photos when available; keep case ids stable for the harness.
+      Full pass-by-pass visuals: <code>botdraw vision loop-demo</code>.
     </footer>
   </div>
 </body>
@@ -683,14 +705,103 @@ def render_gold_report_html(
 """
 
 
+def render_vision_fixtures_section(
+    *,
+    root: Path | None = None,
+    case_ids: tuple[str, ...] = ("objects/mug",),
+) -> tuple[str, list[dict[str, Any]]]:
+    """
+    Run the studio 3-turn loop under manual fixtures for selected gold cases.
+    Returns (html_fragment, slim_pass_dicts). Does not change gold gate defaults.
+    """
+    from botdraw.portrait.vision_loop import (
+        DEFAULT_TURNS_DIR,
+        ensure_manual_turn_fixtures,
+        run_vision_structure_loop,
+    )
+
+    ensure_gold_fixtures(root=root)
+    turns = ensure_manual_turn_fixtures(root=DEFAULT_TURNS_DIR, force=False)
+    base = gold_dir(root)
+    blocks: list[str] = []
+    slim_all: list[dict[str, Any]] = []
+    for cid in case_ids:
+        path = base / f"{cid}.png"
+        if not path.exists():
+            continue
+        history = run_vision_structure_loop(
+            image_path=path,
+            max_turns=3,
+            turns_dir=turns,
+            case_label=cid,
+        )
+        rows = []
+        for p in history:
+            ov = f"{p.overall:.2f}" if p.overall is not None else "—"
+            kind = p.kind + (" · re-ingest" if p.reingest else "")
+            rows.append(
+                f'<div class="vision-turn">'
+                f"<span>pass {p.turn}</span>"
+                f"<span>{html.escape(kind)}</span>"
+                f"<span>{ov}</span>"
+                f"<span>{html.escape(p.summary or '')}</span>"
+                f"</div>"
+            )
+            slim_all.append(
+                {
+                    "case": cid,
+                    "turn": p.turn,
+                    "kind": p.kind,
+                    "overall": p.overall,
+                    "summary": p.summary,
+                    "edge_count": p.edge_count,
+                    "reingest": p.reingest,
+                }
+            )
+        blocks.append(
+            f'<article class="vision-case" id="vision-{html.escape(cid.replace("/", "-"))}">'
+            f"<h3>{html.escape(cid)}</h3>"
+            f'<div class="vision-turns">{"".join(rows)}</div>'
+            f"</article>"
+        )
+    return "\n".join(blocks), slim_all
+
+
 def write_gold_report(
     out: Path,
     *,
     root: Path | None = None,
     quality: str | QualityPreset = QualityPreset.BOOTH_BALANCED,
+    with_vision_fixtures: bool = False,
 ) -> tuple[Path, list[GoldResult]]:
     results = run_gold_set(root=root, quality=quality)
+    vision_html = ""
+    vision_slim: list[dict[str, Any]] = []
+    if with_vision_fixtures:
+        case_ids: list[str] = []
+        gdir = gold_dir(root)
+        mug = gdir / "objects" / "mug.png"
+        if mug.exists():
+            case_ids.append("objects/mug")
+        people = sorted((gdir / "people").glob("*.png")) if (gdir / "people").is_dir() else []
+        if people:
+            case_ids.append(f"people/{people[0].stem}")
+        if not case_ids and (gdir / "objects").is_dir():
+            objs = sorted((gdir / "objects").glob("*.png"))
+            if objs:
+                case_ids.append(f"objects/{objs[0].stem}")
+        vision_html, vision_slim = render_vision_fixtures_section(
+            root=root, case_ids=tuple(case_ids) or ("objects/mug",)
+        )
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(render_gold_report_html(results), encoding="utf-8")
+    out.write_text(
+        render_gold_report_html(results, vision_html=vision_html),
+        encoding="utf-8",
+    )
+    if with_vision_fixtures and vision_slim:
+        (out.parent / (out.stem + "-vision.json")).write_text(
+            json.dumps(vision_slim, indent=2) + "\n",
+            encoding="utf-8",
+        )
     return out, results

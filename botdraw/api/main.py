@@ -536,10 +536,14 @@ def _portrait_ai_fields(knobs: dict[str, Any]) -> dict[str, Any]:
         out["ai_scene"] = knobs["ai_scene"]
     if knobs.get("ai_critique"):
         out["ai_critique"] = knobs["ai_critique"]
+    if knobs.get("ai_critique_by_turn"):
+        out["ai_critique_by_turn"] = knobs["ai_critique_by_turn"]
     if knobs.get("ai_vision_turn") is not None:
         out["ai_vision_turn"] = knobs["ai_vision_turn"]
     if knobs.get("ai_vision_history"):
         out["ai_vision_history"] = knobs["ai_vision_history"]
+    if knobs.get("ai_reingest_count") is not None:
+        out["ai_reingest_count"] = knobs["ai_reingest_count"]
     return out
 
 

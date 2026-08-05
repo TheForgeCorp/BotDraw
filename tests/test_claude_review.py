@@ -494,6 +494,104 @@ def test_pipeline_studio_runs_critique_once(monkeypatch):
     assert job is not None
 
 
+def test_pipeline_studio_writes_vision_artifacts(monkeypatch, tmp_path):
+    """Full studio path with manual fixtures writes turn artifacts."""
+    import os
+
+    from botdraw.core import pipeline as pipe
+    from botdraw.core.jobs import artifact_dir
+    from botdraw.core.models import PaperSize, QualityPreset
+    from botdraw.portrait.vision_loop import ensure_manual_turn_fixtures
+
+    turns = tmp_path / "turns"
+    ensure_manual_turn_fixtures(root=turns, force=True)
+    monkeypatch.setenv("BOTDRAW_VISION_PROVIDER", "manual")
+    monkeypatch.setenv("BOTDRAW_VISION_TURNS_DIR", str(turns))
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    job, _payload, layers = pipe.render_job(
+        app="portraitbot",
+        style_id="portrait_linework",
+        quality=QualityPreset.STUDIO_HQ,
+        paper=PaperSize.A5,
+        seed=1,
+        density=1.0,
+        image_path=None,
+        params_extra={
+            "ai_review": "studio",
+            "image_mode": "photo",
+            "line_source": "classic",
+            "hatch_size": 0,
+            "scan_mode": "edges",
+        },
+    )
+    ad = artifact_dir(job.id)
+    assert (ad / "ai_scene.json").exists()
+    assert (ad / "ai_critique_t2.json").exists()
+    assert (ad / "ai_critique_t3.json").exists()
+    assert (ad / "ai_vision_history.json").exists()
+    meta = layers.get("meta") or {}
+    assert meta.get("ai_review") == "studio"
+    assert int(meta.get("ai_vision_turn") or 0) >= 2
+    hist = meta.get("ai_vision_history") or []
+    assert any(h.get("turn") == 1 or h.get("kind") == "scene" for h in hist) or hist
+    # Cleanup env pollution for other tests
+    os.environ.pop("BOTDRAW_VISION_TURNS_DIR", None)
+    os.environ.pop("BOTDRAW_VISION_PROVIDER", None)
+
+
+def test_pipeline_skips_structure_when_turn_already_two(monkeypatch):
+    """Ingest→Vectorize carry: ai_vision_turn=2 skips structure, runs confirm."""
+    from botdraw.core import pipeline as pipe
+    from botdraw.core.models import PaperSize, QualityPreset
+
+    calls = {"structure": 0, "confirm": 0}
+
+    def boom_structure(extra):
+        calls["structure"] += 1
+        raise AssertionError("structure must be skipped when turn>=2")
+
+    def fake_confirm(extra, *, layered, palette, paper_color_hex):
+        calls["confirm"] += 1
+        return {
+            **extra,
+            "ai_vision_turn": 3,
+            "ai_critique_applied": True,
+            "ai_review_status": "confirm",
+            "ai_critique": {"overall": 0.8, "issues": [], "actions": {}, "summary": "ok"},
+            "ai_vision_history": list(extra.get("ai_vision_history") or [])
+            + [{"turn": 3, "kind": "confirm", "summary": "ok"}],
+        }
+
+    monkeypatch.setattr(pipe, "_apply_ai_structure_after_ingest", boom_structure)
+    monkeypatch.setattr(pipe, "_apply_ai_critique_once", fake_confirm)
+
+    pipe.render_job(
+        app="portraitbot",
+        style_id="portrait_linework",
+        quality=QualityPreset.STUDIO_HQ,
+        paper=PaperSize.A5,
+        seed=1,
+        density=1.0,
+        image_path=None,
+        params_extra={
+            "ai_review": "studio",
+            "ai_vision_turn": 2,
+            "ai_review_status": "structure",
+            "ai_vision_history": [
+                {"turn": 1, "kind": "scene", "summary": "s"},
+                {"turn": 2, "kind": "structure", "summary": "st"},
+            ],
+            "ai_scene": {"summary": "s"},
+            "image_mode": "photo",
+            "line_source": "classic",
+            "reuse_ingest": False,
+        },
+    )
+    assert calls["structure"] == 0
+    assert calls["confirm"] == 1
+
+
 def test_ingest_accepts_ai_scene_knobs():
     from botdraw.core.models import QualityPreset
     from botdraw.portrait.ingest import ingest_portrait

@@ -240,6 +240,7 @@ def _apply_ai_critique_once(
         history.append(
             {
                 "turn": turn,
+                "kind": "confirm",
                 "overall": critique.overall,
                 "summary": critique.summary,
                 "force_reingest": False,
@@ -723,7 +724,17 @@ def render_job(
             "ai_critique_summary": (extra.get("ai_critique") or {}).get("summary"),
             "ai_vision_turn": extra.get("ai_vision_turn"),
             "ai_vision_history": extra.get("ai_vision_history"),
+            "ai_critique_by_turn": extra.get("ai_critique_by_turn"),
         }
+
+        if extra.get("ai_scene"):
+            settings["ai_scene"] = extra["ai_scene"]
+        if extra.get("ai_vision_history"):
+            settings["ai_vision_history"] = extra["ai_vision_history"]
+        if extra.get("ai_critique_by_turn"):
+            settings["ai_critique_by_turn"] = extra["ai_critique_by_turn"]
+        if extra.get("ai_vision_turn") is not None:
+            settings["ai_vision_turn"] = extra["ai_vision_turn"]
 
         if extra.get("ai_scene"):
             try:

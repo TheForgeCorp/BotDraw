@@ -798,6 +798,7 @@ def apply_structure_critique_to_knobs(
     history.append(
         {
             "turn": int(turn),
+            "kind": "structure",
             "overall": critique.overall,
             "summary": critique.summary,
             "force_reingest": bool(ck.get("force_reingest")),
@@ -1082,11 +1083,24 @@ def maybe_review_and_merge_knobs(
         }
         return rgb, knobs
     scene_knobs = scene_to_ingest_knobs(scene)
+    history = list(knobs.get("ai_vision_history") or [])
+    history.append(
+        {
+            "turn": 1,
+            "kind": "scene",
+            "overall": None,
+            "summary": scene.summary,
+            "force_reingest": False,
+            "actions": {},
+        }
+    )
     merged = {
         **knobs,
         **scene_knobs,
         "ai_review": resolved,
         "ai_review_status": "scene",
+        "ai_vision_turn": max(1, int(knobs.get("ai_vision_turn") or 0)),
+        "ai_vision_history": history,
     }
     # Explicit user line_source / crop wins over scene if already set to neural/classic
     if knobs.get("line_source") in ("neural", "classic"):

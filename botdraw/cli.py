@@ -22,10 +22,6 @@ models_app = typer.Typer(help="Neural model weight management")
 app.add_typer(models_app, name="models")
 vision_app = typer.Typer(help="Vision review providers (Anthropic / OpenAI / Gemini / manual)")
 app.add_typer(vision_app, name="vision")
-
-
-vision_app = typer.Typer(help="Vision review providers (Anthropic / OpenAI / Gemini / manual)")
-app.add_typer(vision_app, name="vision")
 gold_app = typer.Typer(help="PortraitBot Phase B classic gold-set gate")
 app.add_typer(gold_app, name="gold")
 
@@ -50,17 +46,26 @@ def gold_report(
         help="Self-contained HTML review report",
     ),
     quality: QualityPreset = typer.Option(QualityPreset.BOOTH_BALANCED, help="Ingest quality"),
+    with_vision_fixtures: bool = typer.Option(
+        False,
+        "--with-vision-fixtures",
+        help="Append studio 3-turn loop summaries (manual JSON; gold gate stays AI-off)",
+    ),
 ) -> None:
     """Run classic gate-1 on the gold set and write an HTML review page."""
     from botdraw.portrait.gold import write_gold_report
 
-    path, results = write_gold_report(out, quality=quality)
+    path, results = write_gold_report(
+        out, quality=quality, with_vision_fixtures=with_vision_fixtures
+    )
     passed = sum(1 for r in results if r.passed)
     print(f"[bold]{passed}/{len(results)}[/bold] passed → {path}")
     for r in results:
         mark = "PASS" if r.passed else "FAIL"
         color = "green" if r.passed else "red"
         print(f"  [{color}]{mark}[/{color}] {r.case.id} · edges={r.edge_count} hatch={r.hatch_count}")
+    if with_vision_fixtures:
+        print("[dim]vision fixtures section appended (manual 3-turn loop)[/dim]")
 
 
 @models_app.command("status")

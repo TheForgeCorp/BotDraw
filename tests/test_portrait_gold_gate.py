@@ -56,3 +56,22 @@ def test_gold_report_html_writes(gold_root: Path, tmp_path: Path):
     assert "PortraitBot Phase B" in text
     assert "layer-edges" in text
     assert all(r.case.id in text for r in results)
+    assert "vision-loop" not in text
+
+
+def test_gold_report_with_vision_fixtures(gold_root: Path, tmp_path: Path):
+    out = tmp_path / "gold-vision.html"
+    path, results = write_gold_report(out, root=gold_root, with_vision_fixtures=True)
+    text = path.read_text(encoding="utf-8")
+    assert "vision-loop" in text
+    assert "Studio vision loop" in text
+    assert "pass 1" in text and "pass 3" in text
+    assert "structure" in text or "confirm" in text
+    # Classic gate still present and AI-off for cases
+    assert all(r.case.id in text for r in results)
+    slim = path.parent / "gold-vision-vision.json"
+    assert slim.exists()
+    import json
+
+    rows = json.loads(slim.read_text(encoding="utf-8"))
+    assert any(r.get("turn") == 3 for r in rows)

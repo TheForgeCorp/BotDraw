@@ -38,6 +38,7 @@ let portraitScanMode = "edges"; // Phase B default
 let portraitPathSimplify = 2; // contour_simplify / Path→Simplify strength (1=finest)
 let portraitLineSource = "classic"; // Phase B classic baseline
 let portraitAiReview = "off"; // off | live (scene) | studio (scene+critique)
+let portraitVisionState = null; // carried ingest→vectorize: turns, history, critiques
 let portraitIngestUnderlay = "none"; // structure-first underlay
 let portraitIngestTimer = null;
 let portraitPenMap = null;
@@ -616,6 +617,29 @@ function updatePortraitCalc(preview) {
         ? `<span class="calc-badge pass">pass</span>`
         : `<span class="calc-badge fail">watch</span>`;
 
+  const vision = portraitVisionState || {
+    ai_review: data.ai_review || meta.ai_review,
+    ai_review_status: data.ai_review_status || meta.ai_review_status,
+    ai_vision_turn: data.ai_vision_turn ?? meta.ai_vision_turn,
+    ai_vision_history: data.ai_vision_history || meta.ai_vision_history || [],
+    ai_scene: data.ai_scene || meta.ai_scene,
+    ai_critique: data.ai_critique || meta.ai_critique,
+  };
+  const histTurns = Array.isArray(vision.ai_vision_history) ? vision.ai_vision_history : [];
+  const visionRows = histTurns.length
+    ? histTurns
+        .map((t) => {
+          const kind = t.kind || (t.turn === 1 ? "scene" : t.turn === 2 ? "structure" : "confirm");
+          const ov = t.overall != null ? Number(t.overall).toFixed(2) : "—";
+          const re = t.force_reingest || t.reingest ? " · re-ingest" : "";
+          const sum = t.summary ? String(t.summary).slice(0, 56) : "";
+          return `<div class="calc-assess-row"><span>T${t.turn} ${kind}${re}</span><span class="mono">${ov}${sum ? ` · ${sum}` : ""}</span></div>`;
+        })
+        .join("")
+    : vision.ai_review && vision.ai_review !== "off"
+      ? `<div class="calc-assess-row"><span>${vision.ai_review}</span><span>${vision.ai_review_status || "pending"}</span></div>`
+      : `<p class="muted" style="margin:0;font-size:0.8rem">AI off — studio runs a 3-turn loop (scene → structure → confirm).</p>`;
+
   body.innerHTML = `
     <div class="calc-sec">
       <div class="lab">Pipeline</div>
@@ -626,6 +650,15 @@ function updatePortraitCalc(preview) {
         <li class="${toneOn ? "done" : ""}"><span class="step">ShadeField</span><span class="detail">${toneOn ? `${hatchCount} hatch · cell ${tg.cell_mm != null ? Number(tg.cell_mm).toFixed(2) + " mm" : "—"}` : "hatch off (gate-1)"}</span></li>
         <li class="done"><span class="step">Emit IR</span><span class="detail">ingest ${data.ingest_id || "?"}${data.cache_hit ? " · cache" : ""}</span></li>
       </ol>
+    </div>
+    <div class="calc-sec">
+      <div class="lab">AI vision turns</div>
+      <div class="calc-kv">
+        <span>mode</span><span>${vision.ai_review || "off"}</span>
+        <span>status</span><span>${vision.ai_review_status || "—"}</span>
+        <span>turn</span><span>${vision.ai_vision_turn != null ? vision.ai_vision_turn : "—"} / 3</span>
+      </div>
+      <div class="calc-assess">${visionRows}</div>
     </div>
     <div class="calc-sec">
       <div class="lab">Structure</div>
@@ -2041,6 +2074,16 @@ async function runPortraitIngest(opts = {}) {
   portraitForceReingest = false;
   portraitIngestPreview = data;
   portraitIngestId = data.ingest_id || null;
+  portraitVisionState = {
+    ai_review: data.ai_review || portraitAiReview,
+    ai_review_status: data.ai_review_status,
+    ai_vision_turn: data.ai_vision_turn,
+    ai_vision_history: data.ai_vision_history || [],
+    ai_scene: data.ai_scene,
+    ai_critique: data.ai_critique,
+    ai_critique_by_turn: data.ai_critique_by_turn,
+    ai_reingest_count: data.ai_reingest_count,
+  };
   if (data.crop) portraitCrop = data.crop;
   drawPortraitSourcePreview(portraitFile, data.crop);
   drawPortraitIngestPreview(data);
@@ -2117,6 +2160,17 @@ function collectPortraitExtra(root, { reuse = false, forceReingest = false } = {
   const aiEl = root.querySelector("#ai-review");
   if (aiEl) portraitAiReview = aiEl.value || "off";
   if (portraitAiReview && portraitAiReview !== "off") extra.ai_review = portraitAiReview;
+  // Carry studio turns 1–2 from Ingest into Vectorize so turn 3 confirm runs once
+  if (portraitVisionState && portraitAiReview === "studio") {
+    const vs = portraitVisionState;
+    if (vs.ai_vision_turn != null) extra.ai_vision_turn = vs.ai_vision_turn;
+    if (vs.ai_vision_history) extra.ai_vision_history = vs.ai_vision_history;
+    if (vs.ai_scene) extra.ai_scene = vs.ai_scene;
+    if (vs.ai_critique) extra.ai_critique = vs.ai_critique;
+    if (vs.ai_critique_by_turn) extra.ai_critique_by_turn = vs.ai_critique_by_turn;
+    if (vs.ai_reingest_count != null) extra.ai_reingest_count = vs.ai_reingest_count;
+    if (vs.ai_review_status) extra.ai_review_status = vs.ai_review_status;
+  }
   if (portraitCrop) extra.crop = portraitCrop;
   if (portraitPenMap) extra.pen_map = portraitPenMap;
   if (reuse && portraitIngestId && !forceReingest && !portraitForceReingest) {
@@ -2228,11 +2282,28 @@ async function renderPortraitJob(opts = {}) {
     {
       ai_review: layerMeta.ai_review || settings.params_extra?.ai_review || settings.ai_review,
       ai_review_status: layerMeta.ai_review_status || settings.params_extra?.ai_review_status,
-      ai_scene: settings.ai_scene,
+      ai_scene: settings.ai_scene || settings.params_extra?.ai_scene,
       ai_critique: settings.ai_critique || settings.params_extra?.ai_critique,
+      ai_vision_turn: layerMeta.ai_vision_turn ?? settings.params_extra?.ai_vision_turn,
+      ai_vision_history: layerMeta.ai_vision_history || settings.params_extra?.ai_vision_history,
     },
     layerMeta
   );
+  // Merge confirm turn into carried vision state for calc pane
+  const pe = settings.params_extra || {};
+  if (pe.ai_vision_history || layerMeta.ai_vision_history) {
+    portraitVisionState = {
+      ...(portraitVisionState || {}),
+      ai_review: pe.ai_review || layerMeta.ai_review || portraitAiReview,
+      ai_review_status: pe.ai_review_status || layerMeta.ai_review_status,
+      ai_vision_turn: pe.ai_vision_turn ?? layerMeta.ai_vision_turn,
+      ai_vision_history: pe.ai_vision_history || layerMeta.ai_vision_history || [],
+      ai_scene: pe.ai_scene || settings.ai_scene,
+      ai_critique: pe.ai_critique || settings.ai_critique,
+      ai_critique_by_turn: pe.ai_critique_by_turn,
+    };
+    updatePortraitCalc(portraitIngestPreview);
+  }
   if (portraitStatsEl) {
     const budgetLabel = budget?.label || `passes ${data.layers?.pass_count ?? "?"}`;
     const warn = budget?.over_budget ? " · over budget" : "";
@@ -2249,12 +2320,16 @@ function portraitAiReviewStatusChip(data, meta) {
   const mode = data?.ai_review || meta?.ai_review;
   if (!mode || mode === "off" || mode === false) return "";
   const status = data?.ai_review_status || meta?.ai_review_status || "";
+  const turn = data?.ai_vision_turn ?? meta?.ai_vision_turn;
+  const hist = data?.ai_vision_history || meta?.ai_vision_history || [];
   const sceneSum = (data?.ai_scene || meta?.ai_scene || {}).summary;
   const critSum = (data?.ai_critique || meta?.ai_critique || {}).summary
     || meta?.ai_critique_summary
     || data?.ai_critique_summary;
   let chip = ` · ai:${mode}`;
   if (status) chip += `/${status}`;
+  if (turn != null) chip += ` · t${turn}/3`;
+  if (Array.isArray(hist) && hist.length) chip += ` · ${hist.length} passes`;
   if (critSum) chip += ` · “${String(critSum).slice(0, 48)}”`;
   else if (sceneSum) chip += ` · “${String(sceneSum).slice(0, 48)}”`;
   return chip;
