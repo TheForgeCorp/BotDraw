@@ -91,7 +91,7 @@ def test_hershey_digits():
     for d in "0123456789":
         assert d in HERSHEY_LIKE
         assert HERSHEY_LIKE[d]
-    polys, _ = layout_text("Line 1", x=12, y=14, size_mm=5, pen_id="black")
+    polys, _, _ = layout_text("Line 1", x=12, y=14, size_mm=5, pen_id="black")
     assert len(polys) >= 5
 
 

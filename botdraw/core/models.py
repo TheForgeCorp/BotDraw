@@ -69,8 +69,13 @@ class Pen(BaseModel):
     id: str
     name: str
     color_hex: str = "#000000"
+    # Stable sample-board code for hardware / calibration mapping (e.g. BD-INK-01).
+    board_id: str | None = None
     lab: tuple[float, float, float] | None = None
     profile: LineProfile = Field(default_factory=LineProfile)
+
+    def resolved_board_id(self) -> str:
+        return self.board_id or f"BD-{self.id.upper()}"
 
 
 class PaletteSet(BaseModel):

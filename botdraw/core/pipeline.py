@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 from botdraw.core.jobs import artifact_dir, load_job, save_job
 from botdraw.core.models import (
+    PAPER_MM,
+    QUALITY_LIMITS,
     JobRecord,
     JobStatus,
     LayeredSVG,
@@ -20,15 +23,18 @@ from botdraw.core.motion_plan import DEFAULT_PEN_DOWN_MM_S, DEFAULT_PEN_UP_MM_S,
 from botdraw.core.optimize import optimize_layered
 from botdraw.core.svg import save_svg
 from botdraw.palettes import load_palette
+from botdraw.paper import DEFAULT_PAPER_ID, resolve_paper_color
 from botdraw.plotter.emulator import plan_to_emulator_payload
 from botdraw.styles import ensure_styles_loaded, get_style
 
 
 def layers_summary(layered: LayeredSVG, palette: PaletteSet) -> dict:
     passes = []
+    path_count = 0
     for p in layered.passes:
         pen = palette.pen_by_id(p.pen_id)
         opacity = p.opacity_override if p.opacity_override is not None else pen.profile.opacity
+        path_count += len(p.polylines)
         passes.append(
             {
                 "id": p.id,
@@ -36,6 +42,7 @@ def layers_summary(layered: LayeredSVG, palette: PaletteSet) -> dict:
                 "kind": p.kind,
                 "pen_id": p.pen_id,
                 "pen_name": pen.name,
+                "board_id": pen.resolved_board_id(),
                 "color_hex": pen.color_hex,
                 "width_mm": pen.profile.width_mm,
                 "opacity": opacity,
@@ -50,7 +57,182 @@ def layers_summary(layered: LayeredSVG, palette: PaletteSet) -> dict:
         "seed": layered.seed,
         "meta": layered.meta,
         "pass_count": len(passes),
+        "path_count": path_count,
         "passes": passes,
+    }
+
+
+def _truthy(v: Any) -> bool:
+    if isinstance(v, bool):
+        return v
+    if v is None:
+        return False
+    return str(v).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _ai_review_mode(extra: dict[str, Any], *, quality: str | None = None) -> str:
+    from botdraw.portrait.claude_review import resolve_ai_review_mode
+
+    return resolve_ai_review_mode(
+        extra.get("ai_review"),
+        quality=quality or extra.get("quality"),
+    )
+
+
+def _load_rgb_for_review(image_path: str | None) -> Any:
+    import numpy as np
+    from PIL import Image
+
+    from botdraw.styles.image_utils import synthetic_portrait
+
+    if image_path:
+        img = Image.open(image_path).convert("RGB")
+        img.thumbnail((1280, 1280), Image.Resampling.LANCZOS)
+        return np.asarray(img, dtype=np.float32)
+    return synthetic_portrait(512).astype(np.float32)
+
+
+def _apply_ai_scene_review(
+    extra: dict[str, Any],
+    *,
+    image_path: str | None,
+    quality: str | None = None,
+) -> dict[str, Any]:
+    """Merge PortraitScene knobs into extra. Fail closed on errors."""
+    try:
+        from botdraw.portrait.claude_review import maybe_review_and_merge_knobs, resolve_ai_review_mode
+
+        mode = resolve_ai_review_mode(extra.get("ai_review"), quality=quality)
+        rgb = _load_rgb_for_review(image_path)
+        _rgb2, merged = maybe_review_and_merge_knobs(
+            rgb, dict(extra), enabled=True, mode=mode, quality=quality
+        )
+        return merged
+    except Exception:
+        out = dict(extra)
+        from botdraw.portrait.claude_review import resolve_ai_review_mode
+
+        out["ai_review"] = resolve_ai_review_mode(extra.get("ai_review"), quality=quality)
+        out["ai_review_status"] = "scene_failed"
+        return out
+
+
+def _layered_preview_png(layered: LayeredSVG, palette: PaletteSet, paper_color_hex: str) -> bytes | None:
+    """Rasterize layered SVG for critique. Prefer cairosvg; else stroke raster."""
+    try:
+        from botdraw.core.svg import layered_to_svg_string
+
+        svg = layered_to_svg_string(layered, palette, paper_color_hex=paper_color_hex)
+    except Exception:
+        try:
+            from botdraw.core.svg import layered_to_svg_string
+
+            svg = layered_to_svg_string(layered, palette)
+        except Exception:
+            return None
+    try:
+        import cairosvg
+
+        return cairosvg.svg2png(bytestring=svg.encode("utf-8"), output_width=720)
+    except Exception:
+        pass
+    # Fallback: crude polyline raster
+    try:
+        import numpy as np
+        from PIL import Image, ImageDraw
+
+        w, h = 720, int(720 * layered.height_mm / max(layered.width_mm, 1e-3))
+        im = Image.new("RGB", (w, h), paper_color_hex or "#f7f1e8")
+        draw = ImageDraw.Draw(im)
+        sx = w / max(layered.width_mm, 1e-3)
+        sy = h / max(layered.height_mm, 1e-3)
+        for pas in layered.passes:
+            try:
+                pen = palette.pen_by_id(pas.pen_id)
+                color = pen.color_hex
+            except Exception:
+                color = "#222222"
+            for poly in pas.polylines:
+                if len(poly.points) < 2:
+                    continue
+                pts = [(p[0] * sx, p[1] * sy) for p in poly.points]
+                draw.line(pts, fill=color, width=1)
+        import io
+
+        buf = io.BytesIO()
+        im.save(buf, format="PNG")
+        return buf.getvalue()
+    except Exception:
+        return None
+
+
+def _apply_ai_critique_once(
+    extra: dict[str, Any],
+    *,
+    layered: LayeredSVG,
+    palette: PaletteSet,
+    paper_color_hex: str,
+) -> dict[str, Any] | None:
+    """Run one critique; return updated extra if actions warrant a redo, else None."""
+    try:
+        from botdraw.portrait.claude_review import critique_render, critique_to_render_knobs
+
+        pv = extra.get("portrait_vector")
+        if pv is None:
+            return None
+        png = _layered_preview_png(layered, palette, paper_color_hex)
+        if not png:
+            return None
+        import numpy as np
+
+        source = np.asarray(pv.rgb, dtype=np.float32)
+        style = str(extra.get("style_id") or layered.meta.get("portrait_style") or "portrait_linework")
+        critique = critique_render(source, png, style_id=style)
+        if critique is None:
+            out = dict(extra)
+            out["ai_review_status"] = "critique_unavailable"
+            out["ai_critique_applied"] = True  # don't loop
+            return out
+        knobs = critique_to_render_knobs(critique)
+        out = {**extra, **knobs, "ai_critique_applied": True}
+        # Only re-render when something actionable changed
+        actionable = any(
+            [
+                knobs.get("force_reingest"),
+                knobs.get("style_id") and knobs.get("style_id") != style,
+                knobs.get("density_mul") and abs(float(knobs["density_mul"]) - 1.0) > 0.05,
+                knobs.get("hatch_budget_mul") and abs(float(knobs["hatch_budget_mul"]) - 1.0) > 0.05,
+                knobs.get("line_source"),
+                knobs.get("max_tone_code"),
+            ]
+        )
+        if not actionable:
+            # Still persist critique on the accepted render
+            return out
+        # Reuse ingest unless critique demanded reingest
+        if not knobs.get("force_reingest"):
+            out["reuse_ingest"] = True
+            out["ingest_id"] = getattr(pv, "ingest_id", None)
+            out.pop("force_reingest", None)
+        return out
+    except Exception:
+        return None
+
+
+def _budget_block(layers: dict, plan_stats: dict, quality: QualityPreset) -> dict:
+    limits = QUALITY_LIMITS[quality]
+    paths = int(layers.get("path_count") or 0)
+    max_paths = int(limits["max_paths"])
+    strokes = int(plan_stats.get("stroke_count") or 0)
+    eta = float(plan_stats.get("estimated_time_s") or 0)
+    return {
+        "path_count": paths,
+        "max_paths": max_paths,
+        "stroke_count": strokes,
+        "estimated_time_s": eta,
+        "quality": quality.value,
+        "over_budget": paths > max_paths,
+        "label": f"paths {paths} / {max_paths} · strokes {strokes} · ETA {eta:.1f}s · {quality.value}",
     }
 
 
@@ -70,11 +252,23 @@ def render_from_layered(
     pen_up_speed_mm_s: float = DEFAULT_PEN_UP_MM_S,
     pen_down_speed_mm_s: float = DEFAULT_PEN_DOWN_MM_S,
     job_id: str | None = None,
+    settings_patch: dict | None = None,
 ) -> tuple[JobRecord, dict, dict]:
     """Optimize a pre-built LayeredSVG and write job artifacts (same shape as render_job)."""
     paper_enum = paper if isinstance(paper, PaperSize) else PaperSize(paper)
     orientation_enum = orientation if isinstance(orientation, Orientation) else Orientation(orientation)
     quality_enum = quality if isinstance(quality, QualityPreset) else QualityPreset(quality)
+    extra: dict[str, Any] = dict(params_extra or {})
+    serial_extra = {k: v for k, v in extra.items() if k != "portrait_vector"}
+    paper_id, paper_color_hex = resolve_paper_color(
+        extra.get("paper_id") or DEFAULT_PAPER_ID,
+        extra.get("paper_color_hex"),
+    )
+    extra["paper_id"] = paper_id
+    extra["paper_color_hex"] = paper_color_hex
+    serial_extra["paper_id"] = paper_id
+    serial_extra["paper_color_hex"] = paper_color_hex
+
     settings = {
         "app": app,
         "style_id": style_id,
@@ -87,9 +281,14 @@ def render_from_layered(
         "pen_up_speed_mm_s": pen_up_speed_mm_s,
         "pen_down_speed_mm_s": pen_down_speed_mm_s,
         "image_path": image_path,
-        "params_extra": params_extra or {},
+        "params_extra": serial_extra,
         "paper_mm": list(paper_dims(paper_enum, orientation_enum)),
+        "paper_id": paper_id,
+        "paper_color_hex": paper_color_hex,
     }
+    if settings_patch:
+        settings.update(settings_patch)
+        settings["params_extra"] = serial_extra
     if job_id:
         try:
             job = load_job(job_id)
@@ -104,7 +303,7 @@ def render_from_layered(
                 "density": density,
                 "pen_up_speed_mm_s": pen_up_speed_mm_s,
                 "pen_down_speed_mm_s": pen_down_speed_mm_s,
-                **(params_extra or {}),
+                **serial_extra,
             }
             job.status = JobStatus.RENDERING
             job.error = None
@@ -122,7 +321,7 @@ def render_from_layered(
                     "density": density,
                     "pen_up_speed_mm_s": pen_up_speed_mm_s,
                     "pen_down_speed_mm_s": pen_down_speed_mm_s,
-                    **(params_extra or {}),
+                    **serial_extra,
                 },
                 status=JobStatus.RENDERING,
             )
@@ -139,7 +338,7 @@ def render_from_layered(
                 "density": density,
                 "pen_up_speed_mm_s": pen_up_speed_mm_s,
                 "pen_down_speed_mm_s": pen_down_speed_mm_s,
-                **(params_extra or {}),
+                **serial_extra,
             },
             status=JobStatus.RENDERING,
         )
@@ -154,10 +353,13 @@ def render_from_layered(
             pen_down_speed_mm_s=pen_down_speed_mm_s,
         )
         out = artifact_dir(job.id)
-        svg_path = save_svg(layered, palette, out / "art.svg")
+        svg_path = save_svg(layered, palette, out / "art.svg", paper_color_hex=paper_color_hex)
         motion_path = out / "motion_plan.json"
         plan.save(motion_path)
         layers = layers_summary(layered, palette)
+        budget = _budget_block(layers, plan.stats.model_dump(), quality_enum)
+        layers["budget"] = budget
+        layers["meta"] = {**(layers.get("meta") or {}), "budget": budget}
         (out / "layered.json").write_text(layered.model_dump_json(indent=2), encoding="utf-8")
         (out / "layers.json").write_text(json.dumps(layers, indent=2), encoding="utf-8")
         (out / "settings.json").write_text(json.dumps(settings, indent=2), encoding="utf-8")
@@ -165,6 +367,8 @@ def render_from_layered(
         payload = plan_to_emulator_payload(plan)
         payload["layers"] = layers
         payload["settings"] = settings
+        payload["paper_color_hex"] = paper_color_hex
+        payload["budget"] = budget
         payload_path = out / "emulator.json"
         payload_path.write_text(json.dumps(payload), encoding="utf-8")
         job.status = JobStatus.READY
@@ -179,6 +383,7 @@ def render_from_layered(
             "palette": json.loads(palette.model_dump_json()),
             "motion_plan": plan.to_dict(),
             "stats": plan.stats.model_dump(),
+            "budget": budget,
         }
         (out / "export_pack.json").write_text(json.dumps(export_pack, indent=2), encoding="utf-8")
         return job, payload, layers
@@ -187,6 +392,7 @@ def render_from_layered(
         job.error = str(exc)
         save_job(job)
         raise
+
 
 
 def render_job(
@@ -208,32 +414,256 @@ def render_job(
     paper_enum = paper if isinstance(paper, PaperSize) else PaperSize(paper)
     orientation_enum = orientation if isinstance(orientation, Orientation) else Orientation(orientation)
     quality_enum = quality if isinstance(quality, QualityPreset) else QualityPreset(quality)
-    palette = load_palette(palette_id)
-    engine = get_style(style_id)
-    layered = engine.render(
-        palette=palette,
-        params=StyleParams(
-            seed=seed,
-            quality=quality_enum,
-            density=density,
-            extra=params_extra or {},
-        ),
-        paper=paper_enum,
-        orientation=orientation_enum,
-        image_path=image_path,
+    extra: dict[str, Any] = dict(params_extra or {})
+    paper_id, paper_color_hex = resolve_paper_color(
+        extra.get("paper_id") or DEFAULT_PAPER_ID,
+        extra.get("paper_color_hex"),
     )
-    return render_from_layered(
+    extra["paper_id"] = paper_id
+    extra["paper_color_hex"] = paper_color_hex
+
+    settings = {
+        "app": app,
+        "style_id": style_id,
+        "palette_id": palette_id,
+        "paper": paper_enum.value,
+        "orientation": orientation_enum.value,
+        "quality": quality_enum.value,
+        "seed": seed,
+        "density": density,
+        "pen_up_speed_mm_s": pen_up_speed_mm_s,
+        "pen_down_speed_mm_s": pen_down_speed_mm_s,
+        "image_path": image_path,
+        "params_extra": extra,
+        "paper_mm": list(paper_dims(paper_enum, orientation_enum)),
+        "paper_id": paper_id,
+        "paper_color_hex": paper_color_hex,
+    }
+    job = JobRecord(
         app=app,
         style_id=style_id,
-        layered=layered,
+        seed=seed,
+        quality=quality_enum,
         palette_id=palette_id,
         paper=paper_enum,
         orientation=orientation_enum,
-        quality=quality_enum,
-        seed=seed,
-        density=density,
-        image_path=image_path,
-        params_extra=params_extra,
-        pen_up_speed_mm_s=pen_up_speed_mm_s,
-        pen_down_speed_mm_s=pen_down_speed_mm_s,
+        params={
+            "density": density,
+            "pen_up_speed_mm_s": pen_up_speed_mm_s,
+            "pen_down_speed_mm_s": pen_down_speed_mm_s,
+            **extra,
+        },
+        status=JobStatus.RENDERING,
     )
+    save_job(job)
+    try:
+        from botdraw.portrait import (
+            StrokeOrnamentParams,
+            apply_pen_overrides,
+            assign_pens,
+            decorate_layered,
+            resolve_portrait_vector,
+        )
+        from botdraw.portrait.claude_review import (
+            ai_review_wants_critique,
+            ai_review_wants_scene,
+        )
+
+        palette = load_palette(palette_id)
+        palette = apply_pen_overrides(palette, extra.get("pen_overrides"))
+
+        cache_hit = False
+        ingest_id = None
+        if app == "portraitbot" or style_id.startswith("portrait_"):
+            mode = extra.get("image_mode") or extra.get("image_type") or "photo"
+            crop = extra.get("crop")
+            auto_frame = extra.get("auto_frame", True)
+            if isinstance(auto_frame, str):
+                auto_frame = auto_frame.lower() not in ("0", "false", "no")
+            ai_mode = _ai_review_mode(extra, quality=quality_enum.value)
+            extra["ai_review"] = ai_mode
+            # Pre-ingest scene review → knobs (live + studio; fail closed)
+            if ai_review_wants_scene(ai_mode) and not extra.get("ai_critique_applied"):
+                extra = _apply_ai_scene_review(
+                    extra, image_path=image_path, quality=quality_enum.value
+                )
+                crop = extra.get("crop", crop)
+                auto_frame = extra.get("auto_frame", auto_frame)
+                if isinstance(auto_frame, str):
+                    auto_frame = auto_frame.lower() not in ("0", "false", "no")
+            pv, cache_hit = resolve_portrait_vector(
+                image_path=image_path,
+                mode=mode,
+                quality=quality_enum.value,
+                paper=paper_enum.value,
+                crop=crop,
+                reuse_ingest=bool(extra.get("reuse_ingest")),
+                ingest_id=extra.get("ingest_id"),
+                force_reingest=bool(extra.get("force_reingest")),
+                auto_frame=bool(auto_frame) if crop is None else False,
+                posterize_levels=extra.get("posterize_levels"),
+                filter_speckle=extra.get("filter_speckle"),
+                min_path_points=extra.get("min_path_points"),
+                contrast=extra.get("contrast"),
+                contour_simplify=extra.get("contour_simplify"),
+                hatch_size=extra.get("hatch_size"),
+                linedraw_jitter=extra.get("linedraw_jitter"),
+                ensemble=extra.get("ensemble"),
+                scan_mode=extra.get("scan_mode"),
+                line_source=extra.get("line_source"),
+                max_tone_code=extra.get("max_tone_code"),
+                suppress_background=extra.get("suppress_background"),
+                protect_subjects=extra.get("protect_subjects"),
+                orientation_deg=extra.get("orientation_deg"),
+                ai_scene=extra.get("ai_scene"),
+            )
+            pv = assign_pens(pv, palette, pen_map=extra.get("pen_map"))
+            ingest_id = pv.ingest_id
+            extra = {**extra, "portrait_vector": pv, "ingest_id": ingest_id}
+            settings["ingest_id"] = ingest_id
+            settings["ingest_cache_hit"] = cache_hit
+            settings["crop"] = pv.crop.model_dump()
+            if extra.get("ai_scene"):
+                settings["ai_scene"] = extra["ai_scene"]
+
+        # Density may be nudged by critique hatch_budget_mul / density_mul
+        render_density = float(density) * float(extra.get("density_mul") or 1.0)
+        if extra.get("hatch_budget_mul"):
+            render_density *= float(extra["hatch_budget_mul"]) ** 0.5
+        active_style = str(extra.get("style_id") or style_id)
+
+        engine = get_style(active_style)
+        layered = engine.render(
+            palette=palette,
+            params=StyleParams(
+                seed=seed,
+                quality=quality_enum,
+                density=render_density,
+                extra=extra,
+            ),
+            paper=paper_enum,
+            orientation=orientation_enum,
+            image_path=image_path,
+        )
+
+        # One post-render critique loop (studio only); never unbounded; live skips
+        if (
+            (app == "portraitbot" or style_id.startswith("portrait_"))
+            and ai_review_wants_critique(_ai_review_mode(extra, quality=quality_enum.value))
+            and not extra.get("ai_critique_applied")
+        ):
+            crit_extra = _apply_ai_critique_once(
+                extra,
+                layered=layered,
+                palette=palette,
+                paper_color_hex=paper_color_hex,
+            )
+            if crit_extra is not None:
+                # Live-safe belt: never AI-force reingest outside studio
+                if _ai_review_mode(crit_extra, quality=quality_enum.value) != "studio":
+                    crit_extra.pop("force_reingest", None)
+                redo = bool(
+                    crit_extra.get("force_reingest")
+                    or (
+                        crit_extra.get("style_id")
+                        and crit_extra.get("style_id") != (extra.get("style_id") or style_id)
+                    )
+                    or (
+                        crit_extra.get("density_mul")
+                        and abs(float(crit_extra["density_mul"]) - 1.0) > 0.05
+                    )
+                    or (
+                        crit_extra.get("hatch_budget_mul")
+                        and abs(float(crit_extra["hatch_budget_mul"]) - 1.0) > 0.05
+                    )
+                )
+                extra = {
+                    **crit_extra,
+                    "ai_critique_applied": True,
+                    "ai_review": "studio",
+                    "ai_review_status": crit_extra.get("ai_review_status") or "critique",
+                }
+                if redo:
+                    extra.pop("portrait_vector", None)
+                    return render_job(
+                        app=app,
+                        style_id=str(extra.get("style_id") or style_id),
+                        palette_id=palette_id,
+                        paper=paper_enum,
+                        quality=quality_enum,
+                        seed=seed,
+                        density=density,
+                        image_path=image_path,
+                        params_extra=extra,
+                        pen_up_speed_mm_s=pen_up_speed_mm_s,
+                        pen_down_speed_mm_s=pen_down_speed_mm_s,
+                    )
+
+        # Drop non-serializable vector from settings copy
+        settings_extra = {k: v for k, v in extra.items() if k != "portrait_vector"}
+        settings["params_extra"] = settings_extra
+        if extra.get("ai_critique"):
+            settings["ai_critique"] = extra["ai_critique"]
+
+        if app == "portraitbot" or style_id.startswith("portrait_"):
+            orn = {
+                "line_type": extra.get("line_type") or "solid",
+                "line_spacing_mm": float(extra.get("line_spacing_mm") or 1.2),
+                "pattern_period_mm": float(extra.get("pattern_period_mm") or 2.0),
+                "pattern_amplitude_mm": float(extra.get("pattern_amplitude_mm") or 0.8),
+                "dash_mm": float(extra.get("dash_mm") or 2.0),
+                "gap_mm": float(extra.get("gap_mm") or 1.2),
+                "ornament_target": extra.get("ornament_target") or "all",
+                "max_paths": int(QUALITY_LIMITS[quality_enum]["max_paths"]),
+            }
+            layered = decorate_layered(layered, StrokeOrnamentParams.model_validate(orn))
+
+        ai_mode_final = _ai_review_mode(extra, quality=quality_enum.value)
+        layered.meta = {
+            **(layered.meta or {}),
+            "paper_id": paper_id,
+            "paper_color_hex": paper_color_hex,
+            "ingest_cache_hit": cache_hit,
+            "ingest_id": ingest_id,
+            "ai_review": ai_mode_final,
+            "ai_review_status": extra.get("ai_review_status"),
+            "ai_scene_summary": (extra.get("ai_scene") or {}).get("summary"),
+            "ai_critique_summary": (extra.get("ai_critique") or {}).get("summary"),
+        }
+
+        if extra.get("ai_scene"):
+            try:
+                (artifact_dir(job.id) / "ai_scene.json").write_text(
+                    json.dumps(extra["ai_scene"], indent=2), encoding="utf-8"
+                )
+            except Exception:
+                pass
+        if extra.get("ai_critique"):
+            try:
+                (artifact_dir(job.id) / "ai_critique.json").write_text(
+                    json.dumps(extra["ai_critique"], indent=2), encoding="utf-8"
+                )
+            except Exception:
+                pass
+        return render_from_layered(
+            app=app,
+            style_id=str(extra.get("style_id") or style_id),
+            layered=layered,
+            palette_id=palette_id,
+            paper=paper_enum,
+            orientation=orientation_enum,
+            quality=quality_enum,
+            seed=seed,
+            density=density,
+            image_path=image_path,
+            params_extra=settings_extra,
+            pen_up_speed_mm_s=pen_up_speed_mm_s,
+            pen_down_speed_mm_s=pen_down_speed_mm_s,
+            job_id=job.id,
+            settings_patch=settings,
+        )
+    except Exception as exc:
+        job.status = JobStatus.FAILED
+        job.error = str(exc)
+        save_job(job)
+        raise

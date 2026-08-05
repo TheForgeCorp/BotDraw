@@ -3,95 +3,60 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="color-scheme" content="light dark" />
   <title>BotDraw Dev Lab</title>
   <link rel="stylesheet" href="/static/styles.css?v=20260805b" />
 </head>
-<body>
-  <header class="top">
+<body data-app="genartbot">
+  <!--
+    THESIS: Paper on a desk with linework drawing — not a button dashboard.
+    OWN-WORLD: Apple-Operate; system gray desk #f5f5f7, white sheet, near-black ink, hairline chrome, SF/system UI.
+    STORY: Operator picks an app, tunes compact controls, watches ink draw on a real paper sheet, exports for the plotter.
+    FIRST VIEWPORT: Top segmented tabs; left ~300px rail; right large desk with elevated paper + thin toolbar.
+    FORM: Apple-canvas Operate (Final Cut / Preview / Photos craft bar); seed apple-devlab-shell-5528; user-pinned.
+    FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md
+  -->
+  <header class="top" id="top">
     <div class="brand">
       <span class="mark">BotDraw</span>
       <span class="tag">Dev Lab</span>
     </div>
-    <nav class="seg-control tabs" id="tabs" aria-label="Apps">
-      <button data-app="genartbot" class="active">GenArt</button>
-      <button data-app="fractalbot">Fractal</button>
-      <button data-app="design">Design</button>
-      <button data-app="portraitbot">Portrait</button>
-      <button data-app="lettersbot">Letters</button>
-      <button data-app="rdlab">R&amp;D</button>
-      <button data-app="palettes">Palettes</button>
-      <button data-app="tools">Tools</button>
+    <nav class="tabs" id="tabs" aria-label="Apps">
+      <button type="button" data-app="genartbot" class="active">GenArt</button>
+      <button type="button" data-app="fractalbot">Fractal</button>
+      <button type="button" data-app="design">Design</button>
+      <button type="button" data-app="portraitbot">Portrait</button>
+      <button type="button" data-app="lettersbot">Letters</button>
+      <button type="button" data-app="rdlab">R&amp;D</button>
+      <button type="button" data-app="papers">Paper</button>
+      <button type="button" data-app="palettes">Pens</button>
+      <button type="button" data-app="lines">Lines</button>
+      <button type="button" data-app="tools">Tools</button>
     </nav>
-    <div class="top-status" id="stats">Ready</div>
   </header>
 
-  <main class="layout lab">
-    <section class="panel controls" id="controls"></section>
-
-    <section class="panel stage">
-      <div class="stage-head">
-        <h2 id="stage-title">Emulator</h2>
-        <div class="stage-actions">
-          <a id="download-svg" class="link" href="#" hidden>Download SVG</a>
-          <button id="fit" class="ghost-btn" title="Fit paper to view">Fit</button>
+  <main class="devlab" id="devlab-shell">
+    <aside class="rail panel" id="rail">
+      <div class="rail-pane" id="controls" data-rail="lab"></div>
+      <div class="rail-pane" id="portrait-content" data-rail="portrait" hidden></div>
+      <div class="rail-pane letters-rail" id="letters-rail" data-rail="letters" hidden>
+        <nav class="type-rail" id="letter-types" aria-label="Letter types">
+          <button type="button" data-type="professional">Professional</button>
+          <button type="button" data-type="marketing">Marketing</button>
+          <button type="button" data-type="envelopes">Envelopes</button>
+          <button type="button" data-type="personal" class="active">Personal</button>
+          <button type="button" data-type="invitations">Invitations</button>
+          <button type="button" data-type="postcards">Postcards</button>
+        </nav>
+        <div class="letter-content" id="letter-content"></div>
+      </div>
+      <div class="rail-inspector" id="rail-inspector" data-rail-inspector hidden>
+        <div class="seg insp-tabs" id="insp-tabs">
+          <button type="button" data-insp="layers" class="active">Layers</button>
+          <button type="button" data-insp="json">JSON</button>
+          <button type="button" data-insp="job">Job</button>
         </div>
-      </div>
-      <div class="stage-canvas" id="stage-canvas">
-        <canvas id="emu" aria-label="Plotter emulator"></canvas>
-        <div class="transport" id="transport">
-          <button id="play-toggle" class="icon-btn" aria-label="Play" title="Play / Pause (Space)">
-            <svg class="i-play" width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M3 1.6v10.8c0 .5.55.8.97.53l8.3-5.4a.63.63 0 0 0 0-1.06l-8.3-5.4A.63.63 0 0 0 3 1.6z" fill="currentColor"/></svg>
-            <svg class="i-pause" width="14" height="14" viewBox="0 0 14 14" aria-hidden="true" hidden><rect x="2.5" y="1.5" width="3.4" height="11" rx="1" fill="currentColor"/><rect x="8.1" y="1.5" width="3.4" height="11" rx="1" fill="currentColor"/></svg>
-          </button>
-          <button id="skip" class="icon-btn" aria-label="Skip to end" title="Skip to end">
-            <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 1.9v10.2c0 .5.55.8.97.53l7-4.57V11.5a1 1 0 0 0 1 1h.5a1 1 0 0 0 1-1v-9a1 1 0 0 0-1-1h-.5a1 1 0 0 0-1 1v3.44l-7-4.57A.63.63 0 0 0 2 1.9z" fill="currentColor"/></svg>
-          </button>
-          <span class="time" id="time-now">0:00</span>
-          <input id="scrub" type="range" min="0" max="1000" value="0" step="1" aria-label="Timeline" disabled />
-          <span class="time" id="time-total">0:00</span>
-          <div class="seg-control mini" id="speed-seg" role="group" aria-label="Playback speed">
-            <button data-speed="1">1×</button>
-            <button data-speed="4">4×</button>
-            <button data-speed="16" class="active">16×</button>
-            <button data-speed="60">60×</button>
-          </div>
-          <button id="ghost-btn" class="icon-btn active" aria-pressed="true" aria-label="Toggle pen-up ghost" title="Pen-up ghost (G)">
-            <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M1.5 12.5 12.5 1.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="2.6 2.8" fill="none"/></svg>
-          </button>
-          <button id="loupe-btn" class="icon-btn" aria-pressed="false" aria-label="Toggle loupe" title="Loupe (L)">
-            <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="6" cy="6" r="4.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M9.2 9.2 12.5 12.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-          </button>
-        </div>
-        <div id="text-drag-handle" class="text-drag-handle" hidden title="Drag text"></div>
-      </div>
-      <div class="export-bar">
-        <button id="export-pack" class="primary" disabled>Export pack</button>
-        <div class="menu-wrap">
-          <button id="export-more" class="ghost-btn" disabled aria-haspopup="true" aria-expanded="false">
-            More
-            <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M1.8 3.5 5 6.8l3.2-3.3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
-          </button>
-          <div class="menu" id="export-menu" hidden>
-            <button id="export-settings">Settings JSON</button>
-            <button id="export-layers">Layers JSON</button>
-            <button id="export-motion">Motion JSON</button>
-            <button id="export-palette">Palette JSON</button>
-            <button id="copy-json">Copy inspector JSON</button>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <section class="panel inspector">
-      <div class="seg-control insp-tabs" aria-label="Inspector">
-        <button data-insp="layers" class="active">Layers</button>
-        <button data-insp="json">JSON</button>
-        <button data-insp="job">Job</button>
-      </div>
-      <div class="inspector-split">
-        <div id="inspector-body" class="inspector-body inspector-upper">
-          <p class="muted">Render a job to inspect color layers, pens, and vectorization stats.</p>
+        <div id="inspector-body" class="inspector-body">
+          <p class="muted">Render a job to inspect layers, pens, and stats.</p>
         </div>
         <div id="text-overlay" class="inspector-lower">
           <h4>Page text</h4>
@@ -110,8 +75,162 @@
           <p id="text-status" class="muted text-status" aria-live="polite"></p>
         </div>
       </div>
+    </aside>
+
+    <section class="stage" id="stage">
+      <div class="stage-head">
+        <div class="seg stage-seg" id="stage-seg" hidden>
+          <button type="button" data-seg="source">Source</button>
+          <button type="button" data-seg="ingest">Ingest</button>
+          <button type="button" data-seg="vector" class="active">Vector</button>
+        </div>
+        <div class="stats" id="stats" aria-live="polite">Ready</div>
+      </div>
+
+      <div class="paper-desk is-empty" id="paper-desk">
+        <div class="sheet-empty" id="sheet-empty">Drop a photo or Vectorize</div>
+        <!-- GenArt / R&D / libraries -->
+        <div class="sheet-wrap" id="lab-sheet" data-stage="lab">
+          <div class="paper-sheet" id="lab-emu-frame">
+            <canvas id="emu" width="900" height="1200"></canvas>
+            <div id="text-drag-handle" class="text-drag-handle" hidden title="Drag text"></div>
+          </div>
+        </div>
+
+        <!-- Letters -->
+        <div class="sheet-wrap" id="letters-sheet" data-stage="letters" hidden>
+          <div class="sheet-meta">
+            <label>Size
+              <select id="letters-paper">
+                <option value="A5" selected>A5</option>
+                <option value="A4">A4</option>
+                <option value="Letter">Letter</option>
+                <option value="A3">A3</option>
+                <option value="Card">Card</option>
+              </select>
+            </label>
+            <label>Orientation
+              <select id="letters-orientation">
+                <option value="portrait" selected>Portrait</option>
+                <option value="landscape">Landscape</option>
+              </select>
+            </label>
+            <span class="margin-label">Margins</span>
+            <label>L <input id="margin-left" type="number" min="0" step="1" value="18" /></label>
+            <label>T <input id="margin-top" type="number" min="0" step="1" value="18" /></label>
+            <label>R <input id="margin-right" type="number" min="0" step="1" value="18" /></label>
+            <label>B <input id="margin-bottom" type="number" min="0" step="1" value="18" /></label>
+          </div>
+          <div class="paper-sheet" id="paper-frame">
+            <canvas id="letters-emu" width="740" height="1050"></canvas>
+            <div class="print-limit" id="print-limit" aria-hidden="true"></div>
+          </div>
+        </div>
+
+        <!-- Portrait segments -->
+        <div class="sheet-wrap" id="portrait-sheet" data-stage="portrait" hidden>
+          <div class="paper-sheet portrait-src-sheet" id="portrait-src-sheet" data-seg-view="source" hidden>
+            <canvas id="portrait-src" width="480" height="640"></canvas>
+          </div>
+          <div class="paper-sheet portrait-ingest-sheet" id="portrait-ingest-frame" data-seg-view="ingest" hidden>
+            <canvas id="portrait-ingest" width="480" height="640"></canvas>
+          </div>
+          <div class="paper-sheet" id="portrait-frame" data-seg-view="vector">
+            <canvas id="portrait-emu" width="480" height="640"></canvas>
+          </div>
+          <div class="ingest-toggles" id="ingest-toggles" hidden>
+            <label><input type="checkbox" id="toggle-edges" checked /> Edges</label>
+            <label><input type="checkbox" id="toggle-hatch" checked /> Hatch</label>
+            <label><input type="checkbox" id="toggle-regions" checked /> Regions</label>
+            <label><input type="checkbox" id="toggle-crop" checked /> Crop</label>
+            <label>Underlay
+              <select id="ingest-underlay">
+                <option value="scan">Scan</option>
+                <option value="tone">Tone grid</option>
+                <option value="photo">Photo</option>
+                <option value="none">None</option>
+              </select>
+            </label>
+            <a id="portrait-dl-ingest-svg" href="#" hidden>Raw SVG</a>
+            <p class="muted" id="scan-mode-hint"></p>
+          </div>
+        </div>
+
+        <!-- Hidden lab compare canvases (still used by GenArt ingest) -->
+        <div id="lab-compare" hidden>
+          <canvas id="lab-src" width="360" height="480"></canvas>
+          <canvas id="lab-ingest" width="360" height="480"></canvas>
+          <div class="lab-vector-pane"></div>
+        </div>
+      </div>
+
+      <div class="stage-toolbar">
+        <div class="seg zoom-bar" id="zoom-bar">
+          <button type="button" id="zoom-out" title="Zoom out">−</button>
+          <button type="button" id="zoom-fit" title="Fit">Fit</button>
+          <button type="button" id="zoom-in" title="Zoom in">+</button>
+          <button type="button" id="loupe" title="Loupe (L)">Loupe</button>
+          <span class="zoom-label" id="zoom-label">1.00×</span>
+        </div>
+        <div class="transport" id="transport">
+          <button type="button" class="btn" id="play">Play</button>
+          <button type="button" class="btn" id="pause">Pause</button>
+          <button type="button" class="btn" id="skip">End</button>
+          <label class="speed-label">Speed <input id="speed" type="range" min="1" max="60" value="16" /></label>
+          <label class="chk"><input id="ghost" type="checkbox" checked /> Ghost</label>
+        </div>
+        <div class="export-menu">
+          <details id="export-details">
+            <summary class="btn">Export…</summary>
+            <div class="export-panel">
+              <button type="button" class="btn" id="export-pack" disabled>Pack JSON</button>
+              <button type="button" class="btn" id="export-settings" disabled>Settings</button>
+              <button type="button" class="btn" id="export-layers" disabled>Layers</button>
+              <button type="button" class="btn" id="export-motion" disabled>Motion</button>
+              <button type="button" class="btn" id="export-palette" disabled>Palette</button>
+              <button type="button" class="btn" id="copy-json" disabled>Copy JSON</button>
+              <a id="download-svg" class="btn link" href="#" hidden>SVG</a>
+              <button type="button" class="btn btn-primary" id="letters-dl-svg" disabled>SVG</button>
+              <button type="button" class="btn" id="letters-dl-motion" disabled>Motion</button>
+              <button type="button" class="btn" id="letters-dl-pack" disabled>Pack</button>
+              <button type="button" class="btn btn-primary" id="portrait-dl-svg" disabled>SVG</button>
+              <button type="button" class="btn" id="portrait-dl-motion" disabled>Motion</button>
+              <button type="button" class="btn" id="portrait-dl-pack" disabled>Pack</button>
+            </div>
+          </details>
+        </div>
+      </div>
     </section>
   </main>
+
+  <!-- Compatibility aliases for legacy id lookups -->
+  <div hidden aria-hidden="true">
+    <div id="letters-stats"></div>
+    <div id="portrait-stats"></div>
+    <button type="button" id="letters-play"></button>
+    <button type="button" id="letters-pause"></button>
+    <button type="button" id="letters-skip"></button>
+    <input id="letters-speed" type="range" min="1" max="60" value="16" />
+    <button type="button" id="portrait-play"></button>
+    <button type="button" id="portrait-pause"></button>
+    <button type="button" id="portrait-skip"></button>
+    <input id="portrait-speed" type="range" min="1" max="60" value="16" />
+    <button type="button" id="letters-zoom-out"></button>
+    <button type="button" id="letters-zoom-fit"></button>
+    <button type="button" id="letters-zoom-in"></button>
+    <button type="button" id="letters-loupe"></button>
+    <span id="letters-zoom-label"></span>
+    <button type="button" id="portrait-zoom-out"></button>
+    <button type="button" id="portrait-zoom-fit"></button>
+    <button type="button" id="portrait-zoom-in"></button>
+    <button type="button" id="portrait-loupe"></button>
+    <span id="portrait-zoom-label"></span>
+    <button type="button" id="lab-zoom-out"></button>
+    <button type="button" id="lab-zoom-fit"></button>
+    <button type="button" id="lab-zoom-in"></button>
+    <button type="button" id="lab-loupe"></button>
+    <span id="lab-zoom-label"></span>
+  </div>
 
   <script src="/static/vendor/d3.min.js"></script>
   <script src="/static/d3_pattern_lab.js?v=20260805c"></script>
