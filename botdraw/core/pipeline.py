@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from botdraw.core.jobs import artifact_dir, save_job
+from botdraw.core.jobs import artifact_dir, load_job, save_job
 from botdraw.core.models import (
     PAPER_MM,
     QUALITY_LIMITS,
@@ -234,6 +234,165 @@ def _budget_block(layers: dict, plan_stats: dict, quality: QualityPreset) -> dic
         "over_budget": paths > max_paths,
         "label": f"paths {paths} / {max_paths} · strokes {strokes} · ETA {eta:.1f}s · {quality.value}",
     }
+
+
+def render_from_layered(
+    *,
+    app: str,
+    style_id: str,
+    layered: LayeredSVG,
+    palette_id: str = "default-6",
+    paper: PaperSize = PaperSize.A4,
+    orientation: Orientation = Orientation.PORTRAIT,
+    quality: QualityPreset = QualityPreset.BOOTH_BALANCED,
+    seed: int = 42,
+    density: float = 1.0,
+    image_path: str | None = None,
+    params_extra: dict | None = None,
+    pen_up_speed_mm_s: float = DEFAULT_PEN_UP_MM_S,
+    pen_down_speed_mm_s: float = DEFAULT_PEN_DOWN_MM_S,
+    job_id: str | None = None,
+    settings_patch: dict | None = None,
+) -> tuple[JobRecord, dict, dict]:
+    """Optimize a pre-built LayeredSVG and write job artifacts (same shape as render_job)."""
+    paper_enum = paper if isinstance(paper, PaperSize) else PaperSize(paper)
+    orientation_enum = orientation if isinstance(orientation, Orientation) else Orientation(orientation)
+    quality_enum = quality if isinstance(quality, QualityPreset) else QualityPreset(quality)
+    extra: dict[str, Any] = dict(params_extra or {})
+    serial_extra = {k: v for k, v in extra.items() if k != "portrait_vector"}
+    paper_id, paper_color_hex = resolve_paper_color(
+        extra.get("paper_id") or DEFAULT_PAPER_ID,
+        extra.get("paper_color_hex"),
+    )
+    extra["paper_id"] = paper_id
+    extra["paper_color_hex"] = paper_color_hex
+    serial_extra["paper_id"] = paper_id
+    serial_extra["paper_color_hex"] = paper_color_hex
+
+    settings = {
+        "app": app,
+        "style_id": style_id,
+        "palette_id": palette_id,
+        "paper": paper_enum.value,
+        "orientation": orientation_enum.value,
+        "quality": quality_enum.value,
+        "seed": seed,
+        "density": density,
+        "pen_up_speed_mm_s": pen_up_speed_mm_s,
+        "pen_down_speed_mm_s": pen_down_speed_mm_s,
+        "image_path": image_path,
+        "params_extra": serial_extra,
+        "paper_mm": list(paper_dims(paper_enum, orientation_enum)),
+        "paper_id": paper_id,
+        "paper_color_hex": paper_color_hex,
+    }
+    if settings_patch:
+        settings.update(settings_patch)
+        settings["params_extra"] = serial_extra
+    if job_id:
+        try:
+            job = load_job(job_id)
+            job.app = app
+            job.style_id = style_id
+            job.seed = seed
+            job.quality = quality_enum
+            job.palette_id = palette_id
+            job.paper = paper_enum
+            job.orientation = orientation_enum
+            job.params = {
+                "density": density,
+                "pen_up_speed_mm_s": pen_up_speed_mm_s,
+                "pen_down_speed_mm_s": pen_down_speed_mm_s,
+                **serial_extra,
+            }
+            job.status = JobStatus.RENDERING
+            job.error = None
+        except Exception:
+            job = JobRecord(
+                id=job_id,
+                app=app,
+                style_id=style_id,
+                seed=seed,
+                quality=quality_enum,
+                palette_id=palette_id,
+                paper=paper_enum,
+                orientation=orientation_enum,
+                params={
+                    "density": density,
+                    "pen_up_speed_mm_s": pen_up_speed_mm_s,
+                    "pen_down_speed_mm_s": pen_down_speed_mm_s,
+                    **serial_extra,
+                },
+                status=JobStatus.RENDERING,
+            )
+    else:
+        job = JobRecord(
+            app=app,
+            style_id=style_id,
+            seed=seed,
+            quality=quality_enum,
+            palette_id=palette_id,
+            paper=paper_enum,
+            orientation=orientation_enum,
+            params={
+                "density": density,
+                "pen_up_speed_mm_s": pen_up_speed_mm_s,
+                "pen_down_speed_mm_s": pen_down_speed_mm_s,
+                **serial_extra,
+            },
+            status=JobStatus.RENDERING,
+        )
+    save_job(job)
+    try:
+        palette = load_palette(palette_id)
+        layered = optimize_layered(layered)
+        plan = compile_motion_plan(
+            layered,
+            palette,
+            pen_up_speed_mm_s=pen_up_speed_mm_s,
+            pen_down_speed_mm_s=pen_down_speed_mm_s,
+        )
+        out = artifact_dir(job.id)
+        svg_path = save_svg(layered, palette, out / "art.svg", paper_color_hex=paper_color_hex)
+        motion_path = out / "motion_plan.json"
+        plan.save(motion_path)
+        layers = layers_summary(layered, palette)
+        budget = _budget_block(layers, plan.stats.model_dump(), quality_enum)
+        layers["budget"] = budget
+        layers["meta"] = {**(layers.get("meta") or {}), "budget": budget}
+        (out / "layered.json").write_text(layered.model_dump_json(indent=2), encoding="utf-8")
+        (out / "layers.json").write_text(json.dumps(layers, indent=2), encoding="utf-8")
+        (out / "settings.json").write_text(json.dumps(settings, indent=2), encoding="utf-8")
+        (out / "palette.json").write_text(palette.model_dump_json(indent=2), encoding="utf-8")
+        payload = plan_to_emulator_payload(plan)
+        payload["layers"] = layers
+        payload["settings"] = settings
+        payload["paper_color_hex"] = paper_color_hex
+        payload["budget"] = budget
+        payload_path = out / "emulator.json"
+        payload_path.write_text(json.dumps(payload), encoding="utf-8")
+        job.status = JobStatus.READY
+        job.svg_path = str(svg_path)
+        job.motion_path = str(motion_path)
+        job.preview_path = str(payload_path)
+        save_job(job)
+        export_pack = {
+            "settings": settings,
+            "job": job.model_dump(),
+            "layers": layers,
+            "palette": json.loads(palette.model_dump_json()),
+            "motion_plan": plan.to_dict(),
+            "stats": plan.stats.model_dump(),
+            "budget": budget,
+        }
+        (out / "export_pack.json").write_text(json.dumps(export_pack, indent=2), encoding="utf-8")
+        return job, payload, layers
+    except Exception as exc:
+        job.status = JobStatus.FAILED
+        job.error = str(exc)
+        save_job(job)
+        raise
+
 
 
 def render_job(
@@ -472,61 +631,37 @@ def render_job(
             "ai_critique_summary": (extra.get("ai_critique") or {}).get("summary"),
         }
 
-        layered = optimize_layered(layered)
-        plan = compile_motion_plan(
-            layered,
-            palette,
-            pen_up_speed_mm_s=pen_up_speed_mm_s,
-            pen_down_speed_mm_s=pen_down_speed_mm_s,
-        )
-        out = artifact_dir(job.id)
-        svg_path = save_svg(layered, palette, out / "art.svg", paper_color_hex=paper_color_hex)
-        motion_path = out / "motion_plan.json"
-        plan.save(motion_path)
-        layers = layers_summary(layered, palette)
-        budget = _budget_block(layers, plan.stats.model_dump(), quality_enum)
-        layers["budget"] = budget
-        layers["meta"] = {**(layers.get("meta") or {}), "budget": budget}
-        (out / "layers.json").write_text(json.dumps(layers, indent=2), encoding="utf-8")
-        (out / "settings.json").write_text(json.dumps(settings, indent=2), encoding="utf-8")
-        (out / "palette.json").write_text(palette.model_dump_json(indent=2), encoding="utf-8")
         if extra.get("ai_scene"):
             try:
-                (out / "ai_scene.json").write_text(
+                (artifact_dir(job.id) / "ai_scene.json").write_text(
                     json.dumps(extra["ai_scene"], indent=2), encoding="utf-8"
                 )
             except Exception:
                 pass
         if extra.get("ai_critique"):
             try:
-                (out / "ai_critique.json").write_text(
+                (artifact_dir(job.id) / "ai_critique.json").write_text(
                     json.dumps(extra["ai_critique"], indent=2), encoding="utf-8"
                 )
             except Exception:
                 pass
-        payload = plan_to_emulator_payload(plan)
-        payload["layers"] = layers
-        payload["settings"] = settings
-        payload["paper_color_hex"] = paper_color_hex
-        payload["budget"] = budget
-        payload_path = out / "emulator.json"
-        payload_path.write_text(json.dumps(payload), encoding="utf-8")
-        job.status = JobStatus.READY
-        job.svg_path = str(svg_path)
-        job.motion_path = str(motion_path)
-        job.preview_path = str(payload_path)
-        save_job(job)
-        export_pack = {
-            "settings": settings,
-            "job": job.model_dump(),
-            "layers": layers,
-            "palette": json.loads(palette.model_dump_json()),
-            "motion_plan": plan.to_dict(),
-            "stats": plan.stats.model_dump(),
-            "budget": budget,
-        }
-        (out / "export_pack.json").write_text(json.dumps(export_pack, indent=2), encoding="utf-8")
-        return job, payload, layers
+        return render_from_layered(
+            app=app,
+            style_id=str(extra.get("style_id") or style_id),
+            layered=layered,
+            palette_id=palette_id,
+            paper=paper_enum,
+            orientation=orientation_enum,
+            quality=quality_enum,
+            seed=seed,
+            density=density,
+            image_path=image_path,
+            params_extra=settings_extra,
+            pen_up_speed_mm_s=pen_up_speed_mm_s,
+            pen_down_speed_mm_s=pen_down_speed_mm_s,
+            job_id=job.id,
+            settings_patch=settings,
+        )
     except Exception as exc:
         job.status = JobStatus.FAILED
         job.error = str(exc)

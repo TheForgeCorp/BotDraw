@@ -80,7 +80,7 @@ class _Hilbert:
 class _Truchet:
     id = "truchet"
     name = "Truchet Tiles"
-    category = "backlog"
+    category = "pattern"
     description = "Arc tile field from noise"
 
     def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
@@ -101,39 +101,10 @@ class _Truchet:
         return LayeredSVG(width_mm=pw, height_mm=ph, passes=passes, seed=params.seed, meta={"style": self.id, "backlog": True})
 
 
-class _Phyllotaxis:
-    id = "phyllotaxis"
-    name = "Phyllotaxis"
-    category = "backlog"
-    description = "Sunflower packing dots"
-
-    def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
-        pw, ph = page_size(paper, orientation)
-        pens = ink_pens(palette)
-        cx, cy = pw / 2, ph / 2
-        golden = math.pi * (3 - math.sqrt(5))
-        polys = []
-        for i in range(int(500 * params.density)):
-            r = 2.2 * math.sqrt(i)
-            a = i * golden
-            x, y = cx + r * math.cos(a), cy + r * math.sin(a)
-            if x < 10 or y < 10 or x > pw - 10 or y > ph - 10:
-                continue
-            pen = pens[i % len(pens)]
-            rr = 0.6
-            circle = [(x + rr * math.cos(t), y + rr * math.sin(t)) for t in np.linspace(0, 2 * math.pi, 8)]
-            polys.append((pen.id, Polyline(points=circle + [circle[0]], pen_id=pen.id, closed=True)))
-        buckets: dict[str, list[Polyline]] = {}
-        for pid, poly in polys:
-            buckets.setdefault(pid, []).append(poly)
-        passes = [make_pass(f"phy-{pid}", f"Phyllo {pid}", pid, ps) for pid, ps in buckets.items()]
-        return LayeredSVG(width_mm=pw, height_mm=ph, passes=passes, seed=params.seed, meta={"style": self.id, "backlog": True})
-
-
 class _Mandala:
     id = "mandala"
     name = "Radial Mandala"
-    category = "backlog"
+    category = "pattern"
     description = "Radial burst sectors"
 
     def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
@@ -163,7 +134,7 @@ class _Mandala:
 class _StringArt:
     id = "stringart"
     name = "String Art"
-    category = "backlog"
+    category = "pattern"
     description = "Chord envelope around a circle"
 
     def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
@@ -188,7 +159,7 @@ class _StringArt:
 class _Seismograph:
     id = "seismograph"
     name = "Seismograph Rows"
-    category = "backlog"
+    category = "pattern"
     description = "Stacked waveforms from row scans"
 
     def render(self, *, palette, params, paper=PaperSize.A4, orientation=Orientation.PORTRAIT, image_path=None, image_array=None):
@@ -209,5 +180,5 @@ class _Seismograph:
         return LayeredSVG(width_mm=pw, height_mm=ph, passes=passes, seed=params.seed, meta={"style": self.id, "backlog": True})
 
 
-for _e in (_Hilbert(), _Truchet(), _Phyllotaxis(), _Mandala(), _StringArt(), _Seismograph()):
+for _e in (_Hilbert(), _Truchet(), _Mandala(), _StringArt(), _Seismograph()):
     register(_e)

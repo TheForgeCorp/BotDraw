@@ -193,11 +193,28 @@ class EmulatorPlayer {
 
   setLoupe(on) {
     this.loupeOn = !!on;
+    if (this.onLoupeChange) this.onLoupeChange(this.loupeOn);
     this.drawFrame();
   }
 
   toggleLoupe() {
     this.setLoupe(!this.loupeOn);
+  }
+
+  /** Client (viewport) coords → paper mm (alias for text overlay drag). */
+  clientToMm(clientX, clientY) {
+    return this.canvasToMm(clientX, clientY);
+  }
+
+  /** Paper mm → client (viewport) coords. */
+  mmToClient(xMm, yMm) {
+    const rect = this.canvas.getBoundingClientRect();
+    const a = this._handleScreen(xMm, yMm);
+    return { x: rect.left + a.x, y: rect.top + a.y };
+  }
+
+  fitView() {
+    this.fitZoom();
   }
 
   setEditLine(line) {
@@ -356,6 +373,7 @@ class EmulatorPlayer {
 
   _onPointerDown(e) {
     this._pointerCss = this._cssFromClient(e.clientX, e.clientY);
+    if (this._textDragHit && this._textDragHit(e)) return;
     const hit = this._hitHandle(e.clientX, e.clientY);
     if (hit && this.editLine) {
       this._drag = { end: hit };
@@ -435,7 +453,9 @@ class EmulatorPlayer {
       ctx.strokeStyle = this._color(seg.color_hex || "#111", seg.opacity ?? 1);
       ctx.lineWidth = Math.max(0.5, (seg.width_mm || 0.4) * sx);
       ctx.lineCap = "round";
-      ctx.lineJoin = "round";
+      const sharp = seg.points && seg.points.length >= 3;
+      ctx.lineJoin = sharp ? "miter" : "round";
+      ctx.miterLimit = 2.5;
       ctx.moveTo(seg.x0 * sx, seg.y0 * sy);
       ctx.lineTo(seg.x1 * sx, seg.y1 * sy);
       ctx.stroke();

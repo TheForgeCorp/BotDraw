@@ -50,4 +50,5 @@ botdraw = [
   "letters/fonts/*.json",
   "letters/fonts/**/*.json",
   "web/*",
+  "web/vendor/*",
 ]

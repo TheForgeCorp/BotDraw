@@ -125,6 +125,12 @@ def _vpype_optimize_pass(pass_layer: PassLayer, *, tol_mm: float = 0.2) -> PassL
 def optimize_layered(layered: LayeredSVG, *, use_vpype: bool = True) -> LayeredSVG:
     """Optimize each pass; use vpype merge/sort when installed, else greedy."""
     out = deepcopy(layered)
+    linetype = str((out.meta or {}).get("linetype") or "solid")
+    if linetype != "solid":
+        # Dashed/dotted patterns must keep segment count — vpype merge glues dash gaps.
+        out.passes = [linesort_pass(p) for p in out.passes]
+        out.meta["optimizer"] = "greedy-linetype"
+        return out
     used_vpype = False
     if use_vpype:
         try:

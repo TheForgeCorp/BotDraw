@@ -8,6 +8,7 @@ const controls = document.getElementById("controls");
 const inspectorBody = document.getElementById("inspector-body");
 const downloadSvg = document.getElementById("download-svg");
 const railInspector = document.getElementById("rail-inspector");
+const textDragHandle = document.getElementById("text-drag-handle");
 const stageSegEl = document.getElementById("stage-seg");
 let portraitStageSeg = "vector";
 player.onStats = (m) => { statsEl.textContent = m; };
@@ -233,6 +234,289 @@ function stagePlayer() {
   if (currentApp === "portraitbot") return portraitPlayer;
   return player;
 }
+
+const pageTextState = {
+  lines: ["", "", ""],
+  size_mm: 5,
+  x_mm: 12,
+  y_mm: 14,
+  pen_id: "black",
+  pass_id: "page-text",
+  active: false,
+};
+
+function setTextStatus(msg, { error = false } = {}) {
+  const el = document.getElementById("text-status");
+  if (!el) return;
+  el.textContent = msg || "";
+  el.classList.toggle("error", !!error && !!msg);
+}
+
+function refreshTextPenSelect() {
+  const sel = document.getElementById("text-pen");
+  if (!sel) return;
+  const jobPalId = lastJob?.palette_id;
+  const palette =
+    (jobPalId && palettes.find((p) => p.id === jobPalId)) ||
+    currentPalette();
+  const pens = (palette?.pens || []).filter((p) => (p.profile?.nib_type || "") !== "highlighter");
+  sel.innerHTML = pens
+    .map((p) => `<option value="${p.id}" ${p.id === pageTextState.pen_id ? "selected" : ""}>${p.id}</option>`)
+    .join("");
+  if (!pens.find((p) => p.id === pageTextState.pen_id) && pens[0]) {
+    pageTextState.pen_id = pens[0].id;
+    sel.value = pens[0].id;
+  }
+}
+
+function readPageTextForm() {
+  pageTextState.lines = [
+    document.getElementById("text-line1")?.value || "",
+    document.getElementById("text-line2")?.value || "",
+    document.getElementById("text-line3")?.value || "",
+  ];
+  pageTextState.size_mm = Number(document.getElementById("text-size")?.value || pageTextState.size_mm);
+  pageTextState.pen_id = document.getElementById("text-pen")?.value || pageTextState.pen_id;
+}
+
+function positionTextHandle() {
+  if (!textDragHandle || !pageTextState.active || !lastJob) {
+    if (textDragHandle) textDragHandle.hidden = true;
+    return;
+  }
+  const pt = player.mmToClient(pageTextState.x_mm, pageTextState.y_mm);
+  const stage = document.getElementById("lab-emu-frame") || document.getElementById("stage-canvas");
+  const rect = stage.getBoundingClientRect();
+  textDragHandle.hidden = false;
+  // Absolute inside #stage-canvas (same containing block as the canvas)
+  textDragHandle.style.left = `${pt.x - rect.left}px`;
+  textDragHandle.style.top = `${pt.y - rect.top}px`;
+}
+
+async function applyPageText({ clear = false } = {}) {
+  if (!lastJob?.id) {
+    setTextStatus("Render a job before adding text", { error: true });
+    return;
+  }
+  readPageTextForm();
+  if (!clear && !pageTextState.lines.some((l) => l.trim())) {
+    setTextStatus("Enter at least one text line", { error: true });
+    return;
+  }
+  setTextStatus(clear ? "Clearing page text…" : "Adding page text…");
+  const data = await api(`/api/jobs/${lastJob.id}/overlay-text`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      lines: pageTextState.lines,
+      x_mm: pageTextState.x_mm,
+      y_mm: pageTextState.y_mm,
+      size_mm: pageTextState.size_mm,
+      pen_id: pageTextState.pen_id,
+      replace_pass_id: pageTextState.pass_id,
+      clear,
+    }),
+  });
+  const hasPass = !!(data.layers?.passes || []).some((p) => p.id === pageTextState.pass_id);
+  if (!clear && data.page_text && !hasPass) {
+    setTextStatus("No strokes generated — try different text or pen", { error: true });
+    return;
+  }
+  loadResult(data);
+  pageTextState.active = !clear && hasPass;
+  if (data.page_text) {
+    pageTextState.x_mm = data.page_text.x_mm;
+    pageTextState.y_mm = data.page_text.y_mm;
+  }
+  positionTextHandle();
+  if (!clear && hasPass) {
+    player.skipEnd();
+    setTextStatus("Page text added — drag the handle to move");
+  } else if (clear) {
+    setTextStatus("Page text cleared");
+  }
+}
+
+function bindPageTextPanel() {
+  refreshTextPenSelect();
+  const addBtn = document.getElementById("text-add");
+  const clearBtn = document.getElementById("text-clear");
+  if (addBtn) addBtn.onclick = () => withBusy(addBtn, () => applyPageText());
+  if (clearBtn) clearBtn.onclick = () => withBusy(clearBtn, () => applyPageText({ clear: true }));
+
+  if (textDragHandle && !textDragHandle._bound) {
+    textDragHandle._bound = true;
+    let drag = null;
+    textDragHandle.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      drag = { x0: e.clientX, y0: e.clientY, mmX: pageTextState.x_mm, mmY: pageTextState.y_mm };
+      textDragHandle.setPointerCapture(e.pointerId);
+    });
+    textDragHandle.addEventListener("pointermove", (e) => {
+      if (!drag) return;
+      const a = player.clientToMm(drag.x0, drag.y0);
+      const b = player.clientToMm(e.clientX, e.clientY);
+      pageTextState.x_mm = drag.mmX + (b.x_mm - a.x_mm);
+      pageTextState.y_mm = drag.mmY + (b.y_mm - a.y_mm);
+      positionTextHandle();
+    });
+    textDragHandle.addEventListener("pointerup", async (e) => {
+      if (!drag) return;
+      drag = null;
+      try {
+        textDragHandle.releasePointerCapture(e.pointerId);
+      } catch (_) {}
+      try {
+        await applyPageText();
+      } catch (err) {
+        setTextStatus(String(err.message || err), { error: true });
+        console.error(err);
+      }
+    });
+  }
+  player._textDragHit = (e) => {
+    if (!pageTextState.active || textDragHandle?.hidden) return false;
+    const r = textDragHandle.getBoundingClientRect();
+    return e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+  };
+}
+
+document.addEventListener("keydown", (e) => {
+  const t = e.target;
+  if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) return;
+  if (e.code === "Space") {
+    e.preventDefault();
+    player.toggle();
+  } else if (e.key === "ArrowRight") {
+    e.preventDefault();
+    player.nudge(Math.max(2, player.duration * 0.02));
+  } else if (e.key === "ArrowLeft") {
+    e.preventDefault();
+    player.nudge(-Math.max(2, player.duration * 0.02));
+  } else if (e.key === "g" || e.key === "G") {
+    toggleGhost();
+  }
+});
+
+/* ---------------- app tabs / inspector tabs ---------------- */
+
+document.querySelectorAll("#tabs button").forEach((btn) => {
+  btn.onclick = () => {
+    document.querySelectorAll("#tabs button").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    currentApp = btn.dataset.app;
+    renderControls();
+  };
+});
+
+document.querySelectorAll(".insp-tabs button").forEach((btn) => {
+  btn.onclick = () => {
+    document.querySelectorAll(".insp-tabs button").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    inspTab = btn.dataset.insp;
+    renderInspector();
+  };
+});
+
+/* ---------------- helpers ---------------- */
+
+function downloadJson(filename, obj) {
+  const blob = new Blob([JSON.stringify(obj, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+async function withBusy(btn, fn) {
+  const b =
+    typeof btn === "string"
+      ? controls.querySelector(btn) || document.querySelector(btn)
+      : btn;
+  if (b) {
+    b.classList.add("loading");
+    b.disabled = true;
+  }
+  try {
+    return await fn();
+  } catch (e) {
+    const msg = String(e.message || e);
+    statsEl.textContent = msg;
+    setTextStatus(msg, { error: true });
+    console.error(e);
+  } finally {
+    if (b) {
+      b.classList.remove("loading");
+      b.disabled = false;
+    }
+  }
+}
+
+function field(label, html) {
+  return `<label>${label}</label>${html}`;
+}
+
+function val(id, fallback = "") {
+  const el = controls.querySelector(`#${id}`);
+  return el ? el.value : fallback;
+}
+
+function num(id, fallback = 0) {
+  return Number(val(id, fallback));
+}
+
+function segHtml(id, options, selected) {
+  return `<div class="seg-control mini wide" id="${id}" role="group">${options
+    .map(
+      (o) =>
+        `<button type="button" data-value="${o.value}" class="${o.value === selected ? "active" : ""}">${o.label}</button>`
+    )
+    .join("")}</div>`;
+}
+
+function bindSeg(id, onChange) {
+  const el = controls.querySelector(`#${id}`);
+  if (!el) return;
+  el.querySelectorAll("button").forEach((b) => {
+    b.onclick = () => {
+      el.querySelectorAll("button").forEach((x) => x.classList.remove("active"));
+      b.classList.add("active");
+      if (onChange) onChange(b.dataset.value);
+    };
+  });
+}
+
+function segVal(id, fallback) {
+  const el = controls.querySelector(`#${id} button.active`);
+  return el ? el.dataset.value : fallback;
+}
+
+function syncStateFromForm() {
+  if (controls.querySelector("#paper")) state.paper = val("paper", state.paper);
+  if (controls.querySelector("#orient")) state.orientation = segVal("orient", state.orientation);
+  if (controls.querySelector("#quality-seg")) state.quality = segVal("quality-seg", state.quality);
+  if (controls.querySelector("#seed")) state.seed = num("seed", state.seed);
+  if (controls.querySelector("#density")) state.density = num("density", state.density);
+  if (controls.querySelector("#pen_up")) state.pen_up_speed_mm_s = num("pen_up", state.pen_up_speed_mm_s);
+  if (controls.querySelector("#pen_down")) state.pen_down_speed_mm_s = num("pen_down", state.pen_down_speed_mm_s);
+  if (controls.querySelector("#rpm")) state.rpm = num("rpm", state.rpm);
+  if (controls.querySelector("#palette")) selectedPaletteId = val("palette", selectedPaletteId);
+}
+
+function setExportEnabled(on) {
+  ["export-pack", "export-more"].forEach((id) => {
+    document.getElementById(id).disabled = !on;
+  });
+}
+
 
 function syncZoomLabel(z) {
   const zl = document.getElementById("zoom-label");
@@ -897,6 +1181,191 @@ function portraitOrnamentNeedsDash(lt) {
 function portraitOrnamentNeedsAmp(lt) {
   return !["solid", "dashed", "dotted", "dash_dot"].includes(lt);
 }
+
+const LINE_TYPE_DEFAULTS = {
+  linetype: "solid",
+  line_density: 1.0,
+  line_pattern_width_mm: 2.0,
+};
+
+const designKnobState = {
+  phyllotaxis: { n_points: 220, angle_deg: 137.5, mark: "square", mark_size_mm: 2.5 },
+  modular_chords: { n_points: 200, k: 77, ...LINE_TYPE_DEFAULTS },
+  prime_sieve: {
+    max_n: 212,
+    grid_cols: 6,
+    show_arcs: true,
+    show_sieve: true,
+    mark_size_mm: 2.5,
+    ...LINE_TYPE_DEFAULTS,
+  },
+  rule30: { cols: 120, rows: 90, rule: 30, ...LINE_TYPE_DEFAULTS },
+};
+
+function readLineTypeKnobs(prefix, fallback) {
+  return {
+    linetype: controls.querySelector(`#${prefix}-linetype`)?.value || fallback.linetype || "solid",
+    line_density: Number(
+      controls.querySelector(`#${prefix}-line-density`)?.value ?? fallback.line_density ?? 1.0
+    ),
+    line_pattern_width_mm: Number(
+      controls.querySelector(`#${prefix}-line-width`)?.value ?? fallback.line_pattern_width_mm ?? 2.0
+    ),
+  };
+}
+
+function lineKnobsHtml(prefix, state) {
+  const types = ["solid", "dashed", "dotted", "dash_dot", "double"];
+  const opts = types
+    .map((t) => `<option value="${t}" ${t === state.linetype ? "selected" : ""}>${t}</option>`)
+    .join("");
+  return `
+    <h4>Line style</h4>
+    <p class="muted">Plotter-safe linetypes — density tightens repeats; width is dash/dot length or double separation (mm).</p>
+    ${field("Linetype", `<select id="${prefix}-linetype">${opts}</select>`)}
+    <div class="grid-2">
+      ${field("Pattern density", `<input id="${prefix}-line-density" type="number" min="0.4" max="2.5" step="0.1" value="${state.line_density}" />`)}
+      ${field("Pattern width mm", `<input id="${prefix}-line-width" type="number" min="0.5" max="8" step="0.1" value="${state.line_pattern_width_mm}" />`)}
+    </div>
+  `;
+}
+
+function syncDesignKnobState() {
+  if (selectedStyle === "phyllotaxis") {
+    designKnobState.phyllotaxis = {
+      n_points: Number(controls.querySelector("#phy-points")?.value ?? designKnobState.phyllotaxis.n_points),
+      angle_deg: Number(controls.querySelector("#phy-angle")?.value ?? designKnobState.phyllotaxis.angle_deg),
+      mark: controls.querySelector("#phy-mark")?.value || designKnobState.phyllotaxis.mark,
+      mark_size_mm: Number(controls.querySelector("#phy-mark-size")?.value ?? designKnobState.phyllotaxis.mark_size_mm),
+    };
+    return;
+  }
+  if (selectedStyle === "modular_chords") {
+    designKnobState.modular_chords = {
+      n_points: Number(controls.querySelector("#mod-n")?.value ?? designKnobState.modular_chords.n_points),
+      k: Number(controls.querySelector("#mod-k")?.value ?? designKnobState.modular_chords.k),
+      ...readLineTypeKnobs("mod", designKnobState.modular_chords),
+    };
+    return;
+  }
+  if (selectedStyle === "prime_sieve") {
+    designKnobState.prime_sieve = {
+      max_n: Number(controls.querySelector("#sieve-n")?.value ?? designKnobState.prime_sieve.max_n),
+      grid_cols: Number(controls.querySelector("#sieve-cols")?.value ?? designKnobState.prime_sieve.grid_cols),
+      show_arcs: !!controls.querySelector("#sieve-arcs")?.checked,
+      show_sieve: !!controls.querySelector("#sieve-grid")?.checked,
+      mark_size_mm: Number(
+        controls.querySelector("#sieve-mark-size")?.value ?? designKnobState.prime_sieve.mark_size_mm
+      ),
+      ...readLineTypeKnobs("sieve", designKnobState.prime_sieve),
+    };
+    return;
+  }
+  designKnobState.rule30 = {
+    cols: Number(controls.querySelector("#ca-cols")?.value ?? designKnobState.rule30.cols),
+    rows: Number(controls.querySelector("#ca-rows")?.value ?? designKnobState.rule30.rows),
+    rule: Number(controls.querySelector("#ca-rule")?.value ?? designKnobState.rule30.rule),
+    ...readLineTypeKnobs("ca", designKnobState.rule30),
+  };
+}
+
+function designLibraryParams() {
+  syncDesignKnobState();
+  if (selectedStyle === "phyllotaxis") return { ...designKnobState.phyllotaxis };
+  if (selectedStyle === "modular_chords") return { ...designKnobState.modular_chords };
+  if (selectedStyle === "prime_sieve") return { ...designKnobState.prime_sieve };
+  return { ...designKnobState.rule30 };
+}
+
+function designLibraryKnobsHtml() {
+  if (selectedStyle === "phyllotaxis") {
+    const k = designKnobState.phyllotaxis;
+    const marks = ["circle", "square", "diamond", "triangle", "star", "cross"];
+    const markOpts = marks
+      .map((m) => `<option value="${m}" ${m === k.mark ? "selected" : ""}>${m}</option>`)
+      .join("");
+    return `
+      <h4>Sunflower</h4>
+      <p class="muted">r = c√n · θ = n × angle — Mark size is outer mm (square side / circle diameter). Raise Points only for denser packing.</p>
+      <div class="grid-2">
+        ${field("Points", `<input id="phy-points" type="number" min="50" max="4000" value="${k.n_points}" />`)}
+        ${field("Angle °", `<input id="phy-angle" type="number" min="1" max="179" step="0.1" value="${k.angle_deg}" />`)}
+      </div>
+      <div class="grid-2">
+        ${field("Mark", `<select id="phy-mark">${markOpts}</select>`)}
+        ${field("Mark size mm", `<input id="phy-mark-size" type="number" min="1" max="8" step="0.1" value="${k.mark_size_mm}" />`)}
+      </div>
+    `;
+  }
+  if (selectedStyle === "modular_chords") {
+    const k = designKnobState.modular_chords;
+    return `
+      <h4>Circle steps</h4>
+      <p class="muted">i → (i + k) mod N — petals from periodicity, dense ring from chord interference. N is authoritative.</p>
+      <div class="grid-2">
+        ${field("N points", `<input id="mod-n" type="number" min="12" max="2000" value="${k.n_points}" />`)}
+        ${field("Step k", `<input id="mod-k" type="number" min="1" max="1999" value="${k.k}" />`)}
+      </div>
+      ${lineKnobsHtml("mod", k)}
+    `;
+  }
+  if (selectedStyle === "prime_sieve") {
+    const k = designKnobState.prime_sieve;
+    return `
+      <h4>Prime sieve</h4>
+      <p class="muted">Left: arc spire between primes. Right: circled primes / struck composites. Cols=6 → vertical lanes.</p>
+      <div class="grid-2">
+        ${field("Max n", `<input id="sieve-n" type="number" min="10" max="2000" value="${k.max_n}" />`)}
+        ${field("Grid cols", `<input id="sieve-cols" type="number" min="2" max="20" value="${k.grid_cols}" />`)}
+      </div>
+      <div class="grid-2">
+        ${field("Mark size mm", `<input id="sieve-mark-size" type="number" min="1" max="8" step="0.1" value="${k.mark_size_mm}" />`)}
+      </div>
+      <div class="chk-row">
+        <label><input id="sieve-arcs" type="checkbox" ${k.show_arcs ? "checked" : ""} /> Arc spire</label>
+        <label><input id="sieve-grid" type="checkbox" ${k.show_sieve ? "checked" : ""} /> Sieve grid</label>
+      </div>
+      ${lineKnobsHtml("sieve", k)}
+    `;
+  }
+  const k = designKnobState.rule30;
+  return `
+    <h4>Automaton</h4>
+    <p class="muted">Cols/rows are authoritative cell counts — live cells become horizontal strokes.</p>
+    <div class="grid-2">
+      ${field("Cols", `<input id="ca-cols" type="number" min="16" max="400" value="${k.cols}" />`)}
+      ${field("Rows", `<input id="ca-rows" type="number" min="12" max="300" value="${k.rows}" />`)}
+    </div>
+    ${field("Rule", `<input id="ca-rule" type="number" min="0" max="255" value="${k.rule}" />`)}
+    ${lineKnobsHtml("ca", k)}
+  `;
+}
+
+function renderDesignLibrary() {
+  const list = styles.filter((s) => s.category === "design");
+  if (!list.find((s) => s.id === selectedStyle)) selectedStyle = list[0]?.id || "rule30";
+  controls.innerHTML = `
+    <h3>Design Library</h3>
+    <p class="muted">Math-derived and structured motifs for the plotter — pick a design, then vectorize.</p>
+    <h4>Math Derived</h4>
+    <p class="muted">Cellular automata, primes, phyllotaxis, modular chords, and related constructions.</p>
+    ${styleButtons(list)}
+    ${designLibraryKnobsHtml()}
+    ${fractalDevOpts()}
+    <div class="row"><button class="primary" id="go">Vectorize</button></div>
+  `;
+  bindStyleGrid();
+  applyCommonDefaults();
+  controls.querySelector("#go").onclick = () =>
+    withBusy("#go", () =>
+      renderWithSettings({
+        appName: "design",
+        busyText: "Vectorizing design…",
+        paramsExtra: designLibraryParams(),
+      })
+    );
+}
+
 
 function renderPortrait() {
   setShellForApp("portraitbot");
@@ -2986,10 +3455,34 @@ function renderLineLibrary() {
   };
 }
 
+let lastD3LabResult = null;
+
 function renderTools() {
+  const families = (window.BotDrawD3Lab && BotDrawD3Lab.FAMILIES) || [];
+  const familyOpts = families
+    .map((f) => `<option value="${f.id}">${f.name}</option>`)
+    .join("");
   controls.innerHTML = `
     <h3>Tools</h3>
-    <p class="muted">Audio / handwriting / plot stub / job reload.</p>
+    <p class="muted">Audio / handwriting / D3 Pattern Lab / plot stub / job reload.</p>
+
+    <h4>D3 Pattern Lab</h4>
+    <p class="muted">Live D3 preview → polylines → emulator. Full GenArt catalog also lists Python pattern engines.</p>
+    ${field("Family", `<select id="d3-family">${familyOpts}</select>`)}
+    ${field("Seed", `<input id="d3-seed" type="number" value="${state.seed}" />`)}
+    ${field("Density", `<input id="d3-density" type="number" step="0.1" min="0.3" max="2.5" value="${state.density}" />`)}
+    ${field("Paper", `<select id="paper"><option>A4</option><option>Letter</option><option>A3</option><option>A5</option><option>Card</option></select>`)}
+    ${field("Orientation", `<select id="orientation"><option value="portrait">portrait</option><option value="landscape">landscape</option></select>`)}
+    ${field("Palette", paletteSelectHtml())}
+    <div class="d3-lab-preview" id="d3-preview-wrap">
+      <svg id="d3-preview" xmlns="http://www.w3.org/2000/svg" aria-label="D3 pattern preview"></svg>
+    </div>
+    <div class="row">
+      <button id="d3-preview-btn">Preview</button>
+      <button class="primary" id="d3-send">Send to emulator</button>
+    </div>
+
+    <h4>Audio / handwriting</h4>
     ${field("Upload WAV", `<input id="wav" type="file" accept="audio/wav,audio/*" />`)}
     <div class="row"><button class="primary" id="audio">Audio → Vector</button></div>
     <div class="row"><button id="hw">Handwriting HELLO</button></div>
@@ -2997,48 +3490,130 @@ function renderTools() {
     <div class="row"><button id="load-job">Load job into lab</button></div>
     <div class="row"><button id="stub">AxiDraw stub on last/job</button></div>
   `;
-  controls.querySelector("#audio").onclick = async () => {
-    const file = controls.querySelector("#wav").files[0];
-    statsEl.textContent = "Audio render…";
-    let data;
-    if (file) {
-      const fd = new FormData();
-      fd.append("file", file);
-      data = await api("/api/audio/upload", { method: "POST", body: fd });
-    } else {
-      data = await api("/api/audio/demo", { method: "POST" });
+  const paper = controls.querySelector("#paper");
+  if (paper) paper.value = state.paper;
+  const orientation = controls.querySelector("#orientation");
+  if (orientation) orientation.value = state.orientation;
+
+  function syncToolsState() {
+    if (controls.querySelector("#paper")) state.paper = val("paper", state.paper);
+    if (controls.querySelector("#orientation")) state.orientation = val("orientation", state.orientation);
+    if (controls.querySelector("#palette")) selectedPaletteId = val("palette", selectedPaletteId);
+  }
+
+  function runD3Preview() {
+    if (!window.BotDrawD3Lab || !window.d3) {
+      statsEl.textContent = "D3 Pattern Lab failed to load";
+      return null;
     }
-    loadResult(data);
-  };
-  controls.querySelector("#hw").onclick = async () => {
-    await api("/api/handwriting/samples", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        user_id: "demo",
-        glyphs: {
-          H: [[[0,0],[0,10]],[[0,5],[6,5]],[[6,0],[6,10]]],
-          E: [[[0,0],[0,10],[6,10]],[[0,5],[5,5]],[[0,0],[6,0]]],
-          L: [[[0,0],[0,10],[6,10]]],
-          O: [[[1,0],[5,0],[7,2],[7,8],[5,10],[1,10],[-1,8],[-1,2],[1,0]]],
-        },
-      }),
+    syncToolsState();
+    const seed = Number(val("d3-seed", state.seed));
+    const density = Number(val("d3-density", state.density));
+    const family = val("d3-family", "voronoi");
+    const palette = currentPalette();
+    try {
+      lastD3LabResult = BotDrawD3Lab.generate({
+        family,
+        seed,
+        density,
+        paper: state.paper,
+        orientation: state.orientation,
+        palette,
+      });
+      BotDrawD3Lab.renderPreview(controls.querySelector("#d3-preview"), lastD3LabResult, palette);
+      const n = lastD3LabResult.passes.reduce((a, p) => a + p.polylines.length, 0);
+      statsEl.textContent = `D3 ${family} · ${n} strokes · seed ${seed}`;
+      return lastD3LabResult;
+    } catch (err) {
+      statsEl.textContent = `D3 preview error: ${err.message || err}`;
+      return null;
+    }
+  }
+
+  controls.querySelector("#d3-preview-btn").onclick = () => runD3Preview();
+  ["d3-family", "d3-seed", "d3-density", "paper", "orientation", "palette"].forEach((id) => {
+    const el = controls.querySelector(`#${id}`);
+    if (el) el.addEventListener("change", () => runD3Preview());
+  });
+  runD3Preview();
+
+  controls.querySelector("#d3-send").onclick = () =>
+    withBusy("#d3-send", async () => {
+      const result = lastD3LabResult || runD3Preview();
+      if (!result) return;
+      syncToolsState();
+      statsEl.textContent = "Sending D3 lab → pipeline…";
+      const data = await api("/api/render/polylines", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          app: "tools",
+          style_id: "d3_lab",
+          palette_id: selectedPaletteId,
+          paper: state.paper,
+          orientation: state.orientation,
+          quality: state.quality,
+          seed: Number(val("d3-seed", state.seed)),
+          density: Number(val("d3-density", state.density)),
+          params_extra: { family: result.family },
+          passes: result.passes,
+        }),
+      });
+      loadResult(data);
     });
-    const data = await api("/api/handwriting/render?user_id=demo&text=HELLO", { method: "POST" });
-    loadResult(data);
-  };
-  controls.querySelector("#load-job").onclick = async () => {
-    const id = val("jobid") || lastJob?.id;
-    if (!id) return alert("No job id");
-    const data = await api(`/api/jobs/${id}`);
-    loadResult(data);
-  };
-  controls.querySelector("#stub").onclick = async () => {
-    const id = val("jobid") || lastJob?.id;
-    if (!id) return alert("Render or load a job first");
-    const data = await api(`/api/plot/stub?job_id=${id}`, { method: "POST" });
-    statsEl.textContent = `Stub ok · emu ${data.emulator_run.elapsed_s.toFixed(2)}s`;
-  };
+
+  controls.querySelector("#audio").onclick = () =>
+    withBusy("#audio", async () => {
+      const file = controls.querySelector("#wav").files[0];
+      statsEl.textContent = "Audio render…";
+      let data;
+      if (file) {
+        const fd = new FormData();
+        fd.append("file", file);
+        data = await api("/api/audio/upload", { method: "POST", body: fd });
+      } else {
+        data = await api("/api/audio/demo", { method: "POST" });
+      }
+      loadResult(data);
+    });
+  controls.querySelector("#hw").onclick = () =>
+    withBusy("#hw", async () => {
+      await api("/api/handwriting/samples", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: "demo",
+          glyphs: {
+            H: [[[0, 0], [0, 10]], [[0, 5], [6, 5]], [[6, 0], [6, 10]]],
+            E: [[[0, 0], [0, 10], [6, 10]], [[0, 5], [5, 5]], [[0, 0], [6, 0]]],
+            L: [[[0, 0], [0, 10], [6, 10]]],
+            O: [[[1, 0], [5, 0], [7, 2], [7, 8], [5, 10], [1, 10], [-1, 8], [-1, 2], [1, 0]]],
+          },
+        }),
+      });
+      const data = await api("/api/handwriting/render?user_id=demo&text=HELLO", { method: "POST" });
+      loadResult(data);
+    });
+  controls.querySelector("#load-job").onclick = () =>
+    withBusy("#load-job", async () => {
+      const id = val("jobid") || lastJob?.id;
+      if (!id) {
+        statsEl.textContent = "No job id";
+        return;
+      }
+      const data = await api(`/api/jobs/${id}`);
+      loadResult(data);
+    });
+  controls.querySelector("#stub").onclick = () =>
+    withBusy("#stub", async () => {
+      const id = val("jobid") || lastJob?.id;
+      if (!id) {
+        statsEl.textContent = "Render or load a job first";
+        return;
+      }
+      const data = await api(`/api/plot/stub?job_id=${id}`, { method: "POST" });
+      statsEl.textContent = `Stub ok · emu ${data.emulator_run.elapsed_s.toFixed(2)}s`;
+    });
 }
 
 function renderInspector() {
@@ -3102,6 +3677,7 @@ async function renderControls() {
   }
   if (currentApp === "genartbot") return renderGenArt();
   if (currentApp === "fractalbot") return renderFractal();
+  if (currentApp === "design") return renderDesignLibrary();
   if (currentApp === "portraitbot") return renderPortrait();
   if (currentApp === "lettersbot") return renderLetters();
   if (currentApp === "rdlab") return renderRdlab();

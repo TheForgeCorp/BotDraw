@@ -34,8 +34,9 @@ Open `http://127.0.0.1:8080` — **Dev Lab** UI for vectorization, palette layer
 
 | App | Purpose |
 |---|---|
-| GenArtBot | Multicolor generative + technical + brick/weave/spiral styles |
+| GenArtBot | Multicolor generative + technical + pattern pack (brick/weave/spiral + D3-inspired Voronoi/Delaunay/hex/contours/…) |
 | Fractal | Escape-time Mandelbrot + single-stroke Hilbert/Peano/Moore/Gosper/Dragon/Lévy/Koch family |
+| Design | Design Library → **Math Derived** (Rule 30, Phyllotaxis, Modular Chords, Sieve of Eratosthenes) |
 | PortraitBot | Multi-style portrait gallery (linework, squiggle, pen, shade, pointillism, dots, cubism, hatch, TSP) |
 | LettersBot | EN/HI/PA/UR letters, wedding/Bollywood draft flow, guest quotes, highlight passes |
 | R&D Lab | Experimental motifs + rotating-base kinematics in the emulator |
@@ -53,6 +54,13 @@ export BOTDRAW_USER=ubuntu
 - `botdraw palette list` / `botdraw palette calibrate ...`
 - `botdraw bench --style stipple --profile booth-balanced`
 - Motion plan schema: `botdraw/schemas/motion_plan.schema.json`
+
+## Pattern pack + D3 Pattern Lab + Design Library
+
+- **GenArtBot** exposes Python `pattern` StyleEngines (Voronoi, Delaunay, hexbin, marching squares, force pack, etc.). CLI: `botdraw render --style voronoi --seed 42`.
+- **Design → Math Derived** hosts equation-driven motifs: Rule 30, Phyllotaxis, Modular Chords, Sieve of Eratosthenes (`category: design`).
+- **Tools → D3 Pattern Lab** runs live previews with vendored D3 (`botdraw/web/vendor/d3.min.js`), then posts polylines to `POST /api/render/polylines` for the same optimize → motion → emulator path.
+- D3 is Lab-only; production plotter styles are NumPy/Python and do not depend on a JS runtime.
 
 ## Notes
 
