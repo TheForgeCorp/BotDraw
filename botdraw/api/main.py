@@ -34,6 +34,8 @@ from botdraw.palettes import calibrate_pen, create_palette, list_palette_ids, lo
 from botdraw.plotter.axidraw import AxiDrawDriverStub
 from botdraw.plotter.emulator import EmulatorDriver, plan_to_emulator_payload
 from botdraw.core.motion_plan import MotionPlan
+from botdraw.data import MODES as SENSOR_MODES, data_to_layered, list_demos, load_demo, parse_bytes
+from botdraw.data.map import default_mode
 from botdraw.rdlab import render_experimental
 from botdraw.styles import ensure_styles_loaded, list_styles
 
@@ -1218,6 +1220,125 @@ async def api_rdlab(
     job.motion_path = str(out / "motion_plan.json")
     save_job(job)
     return {"job": job.model_dump(), "emulator": payload, "layers": layers, "settings": settings}
+
+
+@app.get("/api/rdlab/sensor/demos")
+def api_rdlab_sensor_demos():
+    return {"demos": list_demos(), "modes": list(SENSOR_MODES)}
+
+
+@app.post("/api/rdlab/sensor/demo")
+async def api_rdlab_sensor_demo(
+    demo_id: str = Form("temperature"),
+    mode: str = Form(""),
+    seed: int = Form(42),
+    palette_id: str = Form("default-6"),
+    quality: str = Form("booth-balanced"),
+    density: float = Form(1.0),
+    paper: str = Form("A4"),
+    orientation: str = Form("portrait"),
+    folds: int = Form(6),
+):
+    try:
+        record = load_demo(demo_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    mode_s = (mode or "").strip() or default_mode(record.kind)
+    try:
+        layered = data_to_layered(
+            record,
+            mode=mode_s,
+            palette_id=palette_id,
+            paper=PaperSize(paper),
+            orientation=Orientation(orientation),
+            seed=seed,
+            density=density,
+            folds=folds,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    job, payload, layers = render_from_layered(
+        app="rdlab",
+        style_id=f"sensor-{mode_s}",
+        layered=layered,
+        palette_id=palette_id,
+        paper=PaperSize(paper),
+        orientation=Orientation(orientation),
+        quality=QualityPreset(quality),
+        seed=seed,
+        density=density,
+        settings_patch={
+            "sensor": {
+                "demo_id": demo_id,
+                "kind": record.kind,
+                "mode": mode_s,
+                "label": record.label,
+                "folds": folds,
+            }
+        },
+    )
+    return {"job": job.model_dump(), "emulator": payload, "layers": layers, "settings": payload.get("settings")}
+
+
+@app.post("/api/rdlab/sensor/upload")
+async def api_rdlab_sensor_upload(
+    file: UploadFile = File(...),
+    mode: str = Form(""),
+    seed: int = Form(42),
+    palette_id: str = Form("default-6"),
+    quality: str = Form("booth-balanced"),
+    density: float = Form(1.0),
+    paper: str = Form("A4"),
+    orientation: str = Form("portrait"),
+    folds: int = Form(6),
+):
+    from botdraw.core.jobs import artifact_dir
+    from uuid import uuid4
+
+    raw = await file.read()
+    name = file.filename or "sensor.json"
+    try:
+        record = parse_bytes(raw, filename=name)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    tmp = artifact_dir(uuid4().hex[:8]) / name
+    tmp.write_bytes(raw)
+    mode_s = (mode or "").strip() or default_mode(record.kind)
+    try:
+        layered = data_to_layered(
+            record,
+            mode=mode_s,
+            palette_id=palette_id,
+            paper=PaperSize(paper),
+            orientation=Orientation(orientation),
+            seed=seed,
+            density=density,
+            folds=folds,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    job, payload, layers = render_from_layered(
+        app="rdlab",
+        style_id=f"sensor-{mode_s}",
+        layered=layered,
+        palette_id=palette_id,
+        paper=PaperSize(paper),
+        orientation=Orientation(orientation),
+        quality=QualityPreset(quality),
+        seed=seed,
+        density=density,
+        image_path=str(tmp),
+        settings_patch={
+            "sensor": {
+                "source": name,
+                "kind": record.kind,
+                "mode": mode_s,
+                "label": record.label,
+                "folds": folds,
+            }
+        },
+    )
+    return {"job": job.model_dump(), "emulator": payload, "layers": layers, "settings": payload.get("settings")}
 
 
 @app.post("/api/plot/stub")

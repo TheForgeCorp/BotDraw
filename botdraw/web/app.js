@@ -227,6 +227,9 @@ const state = {
   pen_up_speed_mm_s: 100,
   pen_down_speed_mm_s: 25,
   rpm: 3,
+  sensor_demo: "temperature",
+  sensor_mode: "ribbon",
+  sensor_folds: 6,
 };
 
 function stagePlayer() {
@@ -3046,6 +3049,9 @@ async function renderLetters() {
 function renderRdlab() {
   const list = styles.filter((s) => ["backlog", "pattern"].includes(s.category));
   if (!list.find((s) => s.id === selectedStyle)) selectedStyle = "spiral";
+  const sensorMode = state.sensor_mode || "ribbon";
+  const sensorDemo = state.sensor_demo || "temperature";
+  const sensorFolds = state.sensor_folds ?? 6;
   setDeskState({
     empty: !lastPayload || currentApp !== "rdlab",
     loading: false,
@@ -3053,11 +3059,36 @@ function renderRdlab() {
   });
   controls.innerHTML = `
     <h3>R&amp;D Lab · Dev</h3>
-    <p class="muted">Experimental motifs + rotating-base kinematics. Optional photo ingest.</p>
+    <p class="muted">Experimental motifs, sensor → art, rotating-base kinematics.</p>
     <div class="group">
       <div class="group-block">
         <div class="group-title">Experiment</div>
         ${styleButtons(list)}
+      </div>
+    </div>
+    <div class="group">
+      <div class="group-block">
+        <div class="group-title">Sensor → Art</div>
+        <p class="muted">Map real-world series, GPS paths, or G-force logs into symmetrical / asymmetrical / pattern drawings. CSV or JSON.</p>
+        ${field("Demo", `<select id="sensor_demo">
+          <option value="temperature"${sensorDemo === "temperature" ? " selected" : ""}>Daily mean temperature</option>
+          <option value="gps_walk"${sensorDemo === "gps_walk" ? " selected" : ""}>GPS walk path</option>
+          <option value="gforce"${sensorDemo === "gforce" ? " selected" : ""}>G-force log</option>
+        </select>`)}
+        ${field("Mode", `<select id="sensor_mode">
+          <option value="ribbon"${sensorMode === "ribbon" ? " selected" : ""}>Ribbon (asymmetric)</option>
+          <option value="mirror"${sensorMode === "mirror" ? " selected" : ""}>Mirror (bilateral)</option>
+          <option value="radial"${sensorMode === "radial" ? " selected" : ""}>Radial</option>
+          <option value="spiral"${sensorMode === "spiral" ? " selected" : ""}>Spiral (pattern)</option>
+          <option value="path"${sensorMode === "path" ? " selected" : ""}>Path (GPS / XY)</option>
+          <option value="mandala"${sensorMode === "mandala" ? " selected" : ""}>Mandala (n-fold)</option>
+        </select>`)}
+        ${field("Mandala folds", `<input id="sensor_folds" type="number" min="3" max="16" value="${sensorFolds}" />`)}
+        ${field("Upload CSV / JSON", `<input id="sensor_file" type="file" accept=".csv,.json,text/csv,application/json" />`)}
+        <div class="row actions">
+          <button type="button" class="btn" id="sensor-demo">Draw demo</button>
+          <button type="button" class="btn btn-primary" id="sensor-upload">Draw upload</button>
+        </div>
       </div>
     </div>
     ${commonDevOpts()}
@@ -3074,6 +3105,68 @@ function renderRdlab() {
   `;
   bindStyleGrid();
   applyCommonDefaults();
+
+  const syncSensorState = () => {
+    state.sensor_demo = controls.querySelector("#sensor_demo")?.value || "temperature";
+    state.sensor_mode = controls.querySelector("#sensor_mode")?.value || "ribbon";
+    const foldsRaw = Number(controls.querySelector("#sensor_folds")?.value);
+    state.sensor_folds = Number.isFinite(foldsRaw) ? foldsRaw : 6;
+  };
+
+  const sensorFormData = () => {
+    syncStateFromForm();
+    syncSensorState();
+    const fd = new FormData();
+    fd.append("mode", state.sensor_mode);
+    fd.append("seed", String(state.seed));
+    fd.append("palette_id", selectedPaletteId);
+    fd.append("quality", state.quality);
+    fd.append("density", String(state.density));
+    fd.append("paper", state.paper);
+    fd.append("orientation", state.orientation || "portrait");
+    fd.append("folds", String(state.sensor_folds));
+    return fd;
+  };
+
+  controls.querySelector("#sensor-demo").onclick = async () => {
+    const fd = sensorFormData();
+    fd.append("demo_id", state.sensor_demo);
+    statsEl.textContent = "Sensor demo…";
+    setDeskState({ loading: true, empty: false, hint: "Mapping sensor data…" });
+    try {
+      const data = await api("/api/rdlab/sensor/demo", { method: "POST", body: fd });
+      loadResult(data);
+      const meta = data.layers?.meta || {};
+      statsEl.textContent = `${meta.label || "Sensor"} · ${meta.mode} · ${meta.n || "?"} pts · ${meta.strokes || "?"} strokes`;
+    } catch (e) {
+      setDeskState({ loading: false });
+      statsEl.textContent = String(e.message || e);
+      console.error(e);
+    }
+  };
+
+  controls.querySelector("#sensor-upload").onclick = async () => {
+    const file = controls.querySelector("#sensor_file")?.files?.[0];
+    if (!file) {
+      statsEl.textContent = "Choose a CSV or JSON sensor file first";
+      return;
+    }
+    const fd = sensorFormData();
+    fd.append("file", file);
+    statsEl.textContent = "Sensor upload…";
+    setDeskState({ loading: true, empty: false, hint: "Mapping sensor data…" });
+    try {
+      const data = await api("/api/rdlab/sensor/upload", { method: "POST", body: fd });
+      loadResult(data);
+      const meta = data.layers?.meta || {};
+      statsEl.textContent = `${meta.label || file.name} · ${meta.mode} · ${meta.n || "?"} pts · ${meta.strokes || "?"} strokes`;
+    } catch (e) {
+      setDeskState({ loading: false });
+      statsEl.textContent = String(e.message || e);
+      console.error(e);
+    }
+  };
+
   controls.querySelector("#rd-ingest").onclick = () =>
     runLabIngest().catch((e) => {
       statsEl.textContent = String(e.message || e);
