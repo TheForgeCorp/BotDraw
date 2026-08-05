@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PortraitBot Phase B — Mockup</title>
+  <style>
+    :root {
+      --desk: #f5f5f7;
+      --panel: #ffffff;
+      --soft: #f0f0f2;
+      --ink: #1d1d1f;
+      --text: #1d1d1f;
+      --muted: #6e6e73;
+      --faint: #86868b;
+      --line: #d2d2d7;
+      --accent: #1d1d1f;
+      --focus: #0071e3;
+      --success: #248a3d;
+      --warning: #b25000;
+      --struct: #0a7a6a;
+      --tone: #c45c12;
+      --radius: 8px;
+      --radius-sm: 6px;
+      --rail-w: 300px;
+      --ease: cubic-bezier(0.16, 1, 0.3, 1);
+      --dur: 160ms;
+      --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+      --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      --paper-shadow: 0 18px 48px rgba(29, 29, 31, 0.16), 0 4px 12px rgba(29, 29, 31, 0.08), 0 1px 0 rgba(255, 255, 255, 0.65) inset;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; min-height: 100%;
+      font-family: var(--font-ui); font-size: 13px; color: var(--text);
+      background: var(--desk); -webkit-font-smoothing: antialiased;
+    }
+    button, input, select { font: inherit; color: inherit; }
+    button { cursor: pointer; }
+    [hidden] { display: none !important; }
+
+    .banner {
+      background: #1d1d1f; color: #fff; font-size: 0.6875rem;
+      padding: 0.35rem 0.85rem; letter-spacing: 0.02em;
+      display: flex; justify-content: space-between; gap: 1rem; flex-wrap: wrap;
+    }
+    .banner a { color: #9ec5ff; }
+
+    .top {
+      display: flex; align-items: center; justify-content: space-between; gap: 0.75rem;
+      padding: 0.5rem 0.85rem;
+      background: rgba(255,255,255,0.82);
+      border-bottom: 1px solid var(--line);
+      backdrop-filter: saturate(180%) blur(16px);
+      position: sticky; top: 0; z-index: 20;
+    }
+    .brand { display: flex; align-items: baseline; gap: 0.45rem; }
+    .brand .mark { font-size: 0.9375rem; font-weight: 600; letter-spacing: -0.02em; }
+    .brand .tag { font-size: 0.6875rem; color: var(--muted); }
+    .tabs {
+      display: flex; gap: 2px; padding: 2px; background: var(--soft);
+      border-radius: 9px; border: 1px solid var(--line);
+    }
+    .tabs button {
+      border: 0; background: transparent; color: var(--muted);
+      height: 26px; padding: 0 0.55rem; border-radius: 7px;
+      font-size: 0.75rem; font-weight: 500;
+    }
+    .tabs button.active {
+      background: var(--panel); color: var(--ink);
+      box-shadow: 0 1px 2px rgba(29,29,31,0.08);
+    }
+    .tabs button:disabled { opacity: 0.45; cursor: default; }
+
+    .devlab {
+      display: grid;
+      grid-template-columns: var(--rail-w) minmax(0, 1fr);
+      height: calc(100vh - 72px); min-height: 520px;
+    }
+    @media (max-width: 900px) {
+      .devlab { grid-template-columns: 1fr; height: auto; }
+      .rail { max-height: 42vh; border-right: 0; border-bottom: 1px solid var(--line); }
+      .stage { min-height: 58vh; }
+    }
+
+    .rail {
+      display: flex; flex-direction: column;
+      border-right: 1px solid var(--line); background: var(--panel);
+      min-height: 0; overflow: hidden;
+    }
+    .rail-pane { flex: 1; overflow: auto; padding: 0.75rem 0.85rem 1rem; }
+    .rail h3 {
+      margin: 0 0 0.55rem; font-size: 0.9375rem; font-weight: 600; letter-spacing: -0.02em;
+    }
+    .muted { color: var(--muted); font-size: 0.75rem; line-height: 1.35; }
+    .group {
+      background: var(--soft); border-radius: 10px;
+      padding: 0.15rem 0; margin: 0.45rem 0 0.65rem;
+    }
+    .group-row, .group-block {
+      background: var(--panel); margin: 0 0.15rem;
+      padding: 0.45rem 0.55rem; border-bottom: 1px solid var(--line);
+    }
+    .group-row:first-child, .group-block:first-child { border-radius: 9px 9px 0 0; }
+    .group-row:last-child, .group-block:last-child { border-bottom: 0; border-radius: 0 0 9px 9px; }
+    .group-row:only-child, .group-block:only-child { border-radius: 9px; }
+    .group-title {
+      font-size: 0.6875rem; font-weight: 600; letter-spacing: 0.02em;
+      text-transform: uppercase; color: var(--faint); margin: 0 0 0.35rem;
+    }
+    label.field {
+      display: block; font-size: 0.75rem; color: var(--muted); margin: 0.35rem 0 0.15rem;
+    }
+    select, input[type="range"] {
+      width: 100%; height: 28px; border: 1px solid var(--line);
+      border-radius: var(--radius-sm); background: var(--panel); padding: 0 0.45rem; font-size: 0.75rem;
+    }
+    .chk {
+      display: flex; align-items: center; gap: 0.4rem;
+      font-size: 0.75rem; color: var(--text); margin: 0.35rem 0;
+    }
+    .chk input { accent-color: var(--ink); }
+    .drop {
+      border: 1px dashed var(--line); border-radius: var(--radius-sm);
+      background: var(--soft); padding: 0.85rem; text-align: center;
+      font-size: 0.75rem; color: var(--muted); margin-top: 0.35rem;
+    }
+    .drop strong { display: block; color: var(--ink); font-weight: 600; margin-bottom: 0.15rem; }
+
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      height: 28px; padding: 0 0.7rem; border-radius: var(--radius-sm);
+      border: 1px solid var(--line); background: var(--panel);
+      font-size: 0.75rem; font-weight: 500; width: 100%; margin: 0.25rem 0;
+    }
+    .btn:hover { background: var(--soft); }
+    .btn:active { transform: scale(0.97); }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+    .btn-primary {
+      background: var(--ink); color: #fff; border-color: var(--ink);
+    }
+    .btn-primary:hover { background: #424245; }
+    .btn-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.35rem; }
+    .btn-row .btn { margin: 0; }
+
+    .gate {
+      border: 1px solid rgba(178, 80, 0, 0.35);
+      background: #fffaf3; border-radius: 10px;
+      padding: 0.55rem 0.65rem; margin: 0.55rem 0 0.75rem;
+    }
+    .gate .group-title { color: var(--warning); }
+    .gate .chk.pass { color: var(--success); }
+    .gate-status {
+      font-family: var(--font-mono); font-size: 0.6875rem;
+      margin-top: 0.35rem; color: var(--warning);
+    }
+    .gate-status.ok { color: var(--success); }
+
+    details.advanced {
+      margin: 0.35rem 0 0.65rem; border-radius: 10px;
+      background: var(--soft); padding: 0.15rem 0.55rem 0.45rem;
+    }
+    details.advanced > summary {
+      cursor: pointer; list-style: none; font-size: 0.75rem;
+      font-weight: 500; color: var(--muted); padding: 0.45rem 0.15rem;
+    }
+    details.advanced > summary::-webkit-details-marker { display: none; }
+
+    .stage {
+      position: relative; display: flex; flex-direction: column;
+      min-width: 0; min-height: 0;
+      background:
+        radial-gradient(120% 80% at 50% 40%, #fafafc 0%, transparent 55%),
+        linear-gradient(180deg, #f5f5f7 0%, #ececf0 100%);
+    }
+    .stage-toolbar {
+      display: flex; align-items: center; gap: 0.65rem;
+      padding: 0.55rem 0.85rem 0; flex-wrap: wrap;
+    }
+    .seg {
+      display: flex; padding: 2px; background: var(--soft);
+      border-radius: 9px; border: 1px solid var(--line);
+    }
+    .seg button {
+      border: 0; background: transparent; color: var(--muted);
+      height: 26px; padding: 0 0.7rem; border-radius: 7px;
+      font-size: 0.75rem; font-weight: 500;
+    }
+    .seg button.active {
+      background: var(--panel); color: var(--ink);
+      box-shadow: 0 1px 2px rgba(29,29,31,0.08);
+    }
+    .stats {
+      font-family: var(--font-mono); font-size: 0.6875rem; color: var(--muted);
+    }
+
+    .desk {
+      flex: 1; display: flex; align-items: center; justify-content: center;
+      padding: 1rem 1rem 4.5rem; min-height: 0; position: relative;
+    }
+    .paper {
+      width: min(360px, 86%);
+      aspect-ratio: 3 / 4;
+      background: #fff;
+      border-radius: 2px;
+      box-shadow: var(--paper-shadow);
+      position: relative; overflow: hidden;
+    }
+    .paper svg { width: 100%; height: 100%; display: block; }
+    .paper-empty {
+      position: absolute; inset: 0; display: flex; align-items: center;
+      justify-content: center; color: var(--faint); font-size: 0.8125rem;
+      text-align: center; padding: 1rem; pointer-events: none;
+    }
+    .crop {
+      position: absolute; border: 1.5px solid var(--focus);
+      box-shadow: 0 0 0 999px rgba(29,29,31,0.18);
+      left: 14%; top: 12%; width: 72%; height: 70%;
+      pointer-events: none;
+    }
+
+    .ingest-toggles {
+      position: absolute; left: 50%; transform: translateX(-50%);
+      bottom: 4.6rem; display: flex; gap: 0.5rem; align-items: center;
+      background: rgba(255,255,255,0.92); border: 1px solid var(--line);
+      border-radius: 999px; padding: 0.35rem 0.65rem;
+      box-shadow: 0 8px 28px rgba(29,29,31,0.12);
+      font-size: 0.6875rem; z-index: 5;
+    }
+    .ingest-toggles label { display: flex; align-items: center; gap: 0.25rem; color: var(--muted); }
+    .legend {
+      display: flex; gap: 0.55rem; align-items: center; margin-left: 0.25rem;
+    }
+    .dot { width: 8px; height: 8px; border-radius: 50%; }
+    .dot.struct { background: var(--struct); }
+    .dot.tone { background: var(--tone); }
+
+    .craft {
+      position: absolute; left: 50%; bottom: 0.85rem; transform: translateX(-50%);
+      display: flex; align-items: center; gap: 0.35rem;
+      background: rgba(255,255,255,0.88); backdrop-filter: blur(12px);
+      border: 1px solid var(--line); border-radius: 999px;
+      padding: 0.3rem 0.45rem; box-shadow: 0 8px 28px rgba(29,29,31,0.12);
+      z-index: 6;
+    }
+    .craft button {
+      border: 0; background: transparent; height: 28px; min-width: 28px;
+      border-radius: 999px; color: var(--ink); font-size: 0.75rem; padding: 0 0.55rem;
+    }
+    .craft button:hover { background: var(--soft); }
+    .craft button:disabled { opacity: 0.35; }
+    .craft .sep { width: 1px; height: 16px; background: var(--line); margin: 0 0.15rem; }
+
+    .heat { opacity: 0; transition: opacity var(--dur) var(--ease); }
+    .heat.on { opacity: 0.55; }
+    .hatch { opacity: 0; transition: opacity var(--dur) var(--ease); }
+    .hatch.on { opacity: 1; }
+    .styled { opacity: 0; }
+    .view-vector .struct-demo { opacity: 0.25; }
+    .view-vector .styled { opacity: 1; }
+    .view-source .struct-demo,
+    .view-source .hatch,
+    .view-source .heat { opacity: 0 !important; }
+
+    @media (prefers-reduced-motion: reduce) {
+      .btn:active { transform: none; }
+      .heat, .hatch { transition: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="banner">
+    <span>PortraitBot Phase B mockup · Operate Dev Lab · not wired to API</span>
+    <span><a href="./portraitbot-phase-b.html">Wireframe plan</a></span>
+  </div>
+
+  <header class="top">
+    <div class="brand">
+      <span class="mark">BotDraw</span>
+      <span class="tag">Dev Lab</span>
+    </div>
+    <nav class="tabs" aria-label="Apps">
+      <button type="button" disabled>GenArt</button>
+      <button type="button" class="active">Portrait</button>
+      <button type="button" disabled>Letters</button>
+      <button type="button" disabled>R&amp;D</button>
+    </nav>
+  </header>
+
+  <div class="devlab">
+    <aside class="rail">
+      <div class="rail-pane">
+        <h3>Portrait</h3>
+        <p class="muted">Phase B gate: structure lines first, then optional ShadeField. Restyle after pass.</p>
+
+        <div class="group" id="photo-group">
+          <div class="group-block">
+            <div class="group-title">Photo</div>
+            <div class="drop">
+              <strong>booth-face.jpg</strong>
+              Mock photo loaded · 1280px downscale
+            </div>
+            <div class="btn-row" style="margin-top:0.45rem;">
+              <button type="button" class="btn" id="btn-choose">Choose…</button>
+              <button type="button" class="btn" id="btn-clear">Clear</button>
+            </div>
+          </div>
+          <div class="group-row">
+            <label class="chk"><input type="checkbox" id="auto-frame" checked /> Auto frame</label>
+            <button type="button" class="btn" id="btn-reset-frame">Reset frame</button>
+          </div>
+        </div>
+
+        <div class="group">
+          <div class="group-row">
+            <div class="group-title">Quality</div>
+            <select id="quality">
+              <option>booth-fast</option>
+              <option selected>booth-balanced</option>
+              <option>studio-hq</option>
+            </select>
+          </div>
+          <div class="group-row">
+            <div class="group-title">Line source</div>
+            <select id="line-source">
+              <option value="classic" selected>classic (gate default)</option>
+              <option value="neural">neural (A/B)</option>
+              <option value="auto">auto</option>
+            </select>
+          </div>
+          <div class="group-row">
+            <div class="group-title">Scan mode</div>
+            <select id="scan-mode">
+              <option value="auto">auto</option>
+              <option value="edges" selected>edges</option>
+              <option value="brightness">brightness</option>
+              <option value="centerline">centerline</option>
+              <option value="color_bands">color_bands</option>
+            </select>
+          </div>
+          <div class="group-row">
+            <div class="group-title">Channels</div>
+            <label class="chk"><input type="checkbox" id="show-struct" checked /> Structure edges</label>
+            <label class="chk"><input type="checkbox" id="show-tone" /> Tone / hatch (off for gate-1)</label>
+            <label class="field">Simplify <span id="simp-val">2</span></label>
+            <input type="range" id="simplify" min="1" max="3" value="2" />
+          </div>
+        </div>
+
+        <div class="gate" id="gate">
+          <div class="group-title">Gate checklist</div>
+          <label class="chk" id="g-id"><input type="checkbox" data-gate /> Identity (structure alone)</label>
+          <label class="chk" id="g-noise"><input type="checkbox" data-gate /> Noise / travel OK</label>
+          <label class="chk" id="g-budget"><input type="checkbox" data-gate /> Path budget OK</label>
+          <label class="chk" id="g-crop"><input type="checkbox" data-gate /> Crop OK</label>
+          <label class="chk" id="g-classic"><input type="checkbox" data-gate /> Classic-only pass</label>
+          <div class="gate-status" id="gate-status">Gate open — mark all checks to unlock Apply</div>
+        </div>
+
+        <button type="button" class="btn btn-primary" id="btn-ingest">Ingest</button>
+        <div class="btn-row">
+          <button type="button" class="btn" id="btn-reingest">Re-ingest</button>
+          <button type="button" class="btn" id="btn-raw">Raw SVG</button>
+        </div>
+        <button type="button" class="btn" id="btn-apply" disabled>Apply restyle →</button>
+
+        <details class="advanced">
+          <summary>Advanced</summary>
+          <div class="group" style="margin-top:0.15rem;">
+            <div class="group-row">
+              <label class="field">Contrast</label>
+              <input type="range" min="80" max="140" value="100" />
+            </div>
+            <div class="group-row">
+              <label class="chk"><input type="checkbox" disabled /> Ensemble (off for booth gold)</label>
+              <label class="chk"><input type="checkbox" disabled checked /> AI review: off</label>
+              <p class="muted" style="margin:0.35rem 0 0;">Ornament / extra styles frozen in Phase B.</p>
+            </div>
+          </div>
+        </details>
+      </div>
+    </aside>
+
+    <main class="stage view-ingest" id="stage">
+      <div class="stage-toolbar">
+        <div class="seg" role="tablist" aria-label="Portrait stage">
+          <button type="button" data-seg="source">Source</button>
+          <button type="button" data-seg="ingest" class="active">Ingest</button>
+          <button type="button" data-seg="vector">Vector</button>
+        </div>
+        <div class="stats" id="stats">edges 842 · hatch 0 · classic · edges · booth-balanced</div>
+      </div>
+
+      <div class="desk">
+        <div class="paper" id="paper" aria-label="Paper preview">
+          <div class="paper-empty" id="empty-cue" hidden>Drop a photo</div>
+          <div class="crop" id="crop" hidden></div>
+          <svg viewBox="0 0 300 400" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <!-- soft photo stand-in -->
+            <defs>
+              <linearGradient id="skin" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#f0e6dc"/>
+                <stop offset="100%" stop-color="#e2d2c4"/>
+              </linearGradient>
+              <radialGradient id="heatGrad" cx="50%" cy="42%" r="45%">
+                <stop offset="0%" stop-color="#ffb000" stop-opacity="0.9"/>
+                <stop offset="55%" stop-color="#e85d04" stop-opacity="0.55"/>
+                <stop offset="100%" stop-color="#fff" stop-opacity="0"/>
+              </radialGradient>
+            </defs>
+            <rect class="src-photo" width="300" height="400" fill="url(#skin)" opacity="0"/>
+            <ellipse class="src-photo" cx="150" cy="168" rx="78" ry="96" fill="#d9c4b0" opacity="0"/>
+            <ellipse class="src-photo" cx="122" cy="155" rx="10" ry="6" fill="#5a4638" opacity="0"/>
+            <ellipse class="src-photo" cx="178" cy="155" rx="10" ry="6" fill="#5a4638" opacity="0"/>
+            <path class="src-photo" d="M130 200 Q150 214 170 200" fill="none" stroke="#8a6a55" stroke-width="2" opacity="0"/>
+
+            <!-- ShadeField heatmap underlay -->
+            <ellipse class="heat" id="heat" cx="150" cy="175" rx="90" ry="110" fill="url(#heatGrad)"/>
+
+            <!-- Structure (teal) -->
+            <g class="struct-demo" id="struct" fill="none" stroke="#0a7a6a" stroke-width="1.15" stroke-linecap="round">
+              <ellipse cx="150" cy="168" rx="72" ry="90"/>
+              <path d="M95 155 Q78 200 95 250"/>
+              <path d="M205 155 Q222 200 205 250"/>
+              <path d="M118 150 Q122 158 126 150"/>
+              <path d="M174 150 Q178 158 182 150"/>
+              <path d="M148 158 L150 178"/>
+              <path d="M132 198 Q150 210 168 198"/>
+              <path d="M110 120 Q150 95 190 120"/>
+              <path d="M108 250 Q150 278 192 250"/>
+              <path d="M128 230 Q150 238 172 230" opacity="0.7"/>
+            </g>
+
+            <!-- Tone hatch (orange) -->
+            <g class="hatch" id="hatch" fill="none" stroke="#c45c12" stroke-width="0.7" stroke-linecap="round" opacity="0">
+              <path d="M95 140 L205 138"/>
+              <path d="M92 152 L208 150"/>
+              <path d="M90 164 L210 162"/>
+              <path d="M88 176 L212 174"/>
+              <path d="M90 188 L210 186"/>
+              <path d="M94 200 L206 198"/>
+              <path d="M100 212 L200 210"/>
+              <path d="M110 224 L190 222"/>
+              <path d="M118 236 L182 234"/>
+              <path d="M100 160 L108 168 M192 160 L200 168" stroke-width="0.9"/>
+            </g>
+
+            <!-- Styled restyle hint -->
+            <g class="styled" fill="none" stroke="#1d1d1f" stroke-width="1.2" stroke-linecap="round">
+              <ellipse cx="150" cy="168" rx="72" ry="90"/>
+              <path d="M118 150 Q122 158 126 150"/>
+              <path d="M174 150 Q178 158 182 150"/>
+              <path d="M148 158 L150 178"/>
+              <path d="M132 198 Q150 210 168 198"/>
+              <path d="M110 120 Q150 95 190 120"/>
+              <path d="M95 155 Q78 200 95 250"/>
+              <path d="M205 155 Q222 200 205 250"/>
+            </g>
+          </svg>
+        </div>
+      </div>
+
+      <div class="ingest-toggles" id="ingest-toggles">
+        <label>Underlay
+          <select id="underlay">
+            <option value="none">none</option>
+            <option value="photo">photo</option>
+            <option value="scan">scan</option>
+            <option value="heat">tone heatmap</option>
+          </select>
+        </label>
+        <span class="legend"><span class="dot struct"></span> structure</span>
+        <span class="legend"><span class="dot tone"></span> shade</span>
+        <button type="button" class="btn" id="btn-raw-inline" style="width:auto;margin:0;height:24px;">Raw SVG</button>
+      </div>
+
+      <div class="craft" aria-label="Craft bar">
+        <button type="button" title="Zoom out">−</button>
+        <button type="button" title="Fit">Fit</button>
+        <button type="button" title="Zoom in">+</button>
+        <span class="sep"></span>
+        <button type="button" disabled title="Play">▶</button>
+        <button type="button" disabled title="Pause">❚❚</button>
+        <span class="sep"></span>
+        <button type="button" id="btn-export" disabled>Export…</button>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    const stage = document.getElementById("stage");
+    const stats = document.getElementById("stats");
+    const heat = document.getElementById("heat");
+    const hatch = document.getElementById("hatch");
+    const struct = document.getElementById("struct");
+    const crop = document.getElementById("crop");
+    const empty = document.getElementById("empty-cue");
+    const applyBtn = document.getElementById("btn-apply");
+    const exportBtn = document.getElementById("btn-export");
+    const gateStatus = document.getElementById("gate-status");
+    const ingestToggles = document.getElementById("ingest-toggles");
+    const showTone = document.getElementById("show-tone");
+    const showStruct = document.getElementById("show-struct");
+    const underlay = document.getElementById("underlay");
+    const simplify = document.getElementById("simplify");
+    const srcPhotos = document.querySelectorAll(".src-photo");
+
+    let hasPhoto = true;
+    let ingested = true;
+    let seg = "ingest";
+
+    function updateStats() {
+      const hatchOn = showTone.checked;
+      const ls = document.getElementById("line-source").value;
+      const sm = document.getElementById("scan-mode").value;
+      const q = document.getElementById("quality").value;
+      stats.textContent = ingested
+        ? `edges 842 · hatch ${hatchOn ? "310" : "0"} · ${ls} · ${sm} · ${q}`
+        : "awaiting ingest";
+    }
+
+    function gatePassed() {
+      return [...document.querySelectorAll("[data-gate]")].every((c) => c.checked);
+    }
+
+    function refreshGate() {
+      const ok = gatePassed();
+      document.querySelectorAll("[data-gate]").forEach((c) => {
+        c.closest(".chk").classList.toggle("pass", c.checked);
+      });
+      gateStatus.textContent = ok
+        ? "Gate passed — Apply restyle unlocked"
+        : "Gate open — mark all checks to unlock Apply";
+      gateStatus.classList.toggle("ok", ok);
+      applyBtn.disabled = !(ok && ingested);
+      exportBtn.disabled = !(ok && seg === "vector");
+    }
+
+    function setSeg(next) {
+      seg = next;
+      stage.classList.remove("view-source", "view-ingest", "view-vector");
+      stage.classList.add("view-" + next);
+      document.querySelectorAll(".seg button").forEach((b) => {
+        b.classList.toggle("active", b.dataset.seg === next);
+      });
+      crop.hidden = !(next === "source" && hasPhoto);
+      empty.hidden = !(next === "source" && !hasPhoto);
+      ingestToggles.hidden = next !== "ingest";
+      srcPhotos.forEach((el) => {
+        el.style.opacity = next === "source" && hasPhoto ? (el.tagName === "RECT" ? "1" : "1") : "0";
+      });
+      if (next === "source") {
+        srcPhotos.forEach((el) => { el.style.opacity = hasPhoto ? "1" : "0"; });
+      }
+      updateChannels();
+      refreshGate();
+      updateStats();
+    }
+
+    function updateChannels() {
+      struct.style.opacity = showStruct.checked && seg !== "source" ? (seg === "vector" ? "0.25" : "1") : "0";
+      const toneOn = showTone.checked && seg === "ingest";
+      hatch.classList.toggle("on", toneOn);
+      hatch.style.opacity = toneOn ? "1" : "0";
+      const heatOn = underlay.value === "heat" && seg === "ingest";
+      heat.classList.toggle("on", heatOn);
+      updateStats();
+    }
+
+    document.querySelectorAll(".seg button").forEach((b) => {
+      b.addEventListener("click", () => setSeg(b.dataset.seg));
+    });
+    document.querySelectorAll("[data-gate]").forEach((c) => c.addEventListener("change", refreshGate));
+    showTone.addEventListener("change", updateChannels);
+    showStruct.addEventListener("change", updateChannels);
+    underlay.addEventListener("change", updateChannels);
+    simplify.addEventListener("input", () => {
+      document.getElementById("simp-val").textContent = simplify.value;
+    });
+    ["line-source", "scan-mode", "quality"].forEach((id) => {
+      document.getElementById(id).addEventListener("change", updateStats);
+    });
+
+    function doIngest() {
+      hasPhoto = true;
+      ingested = true;
+      setSeg("ingest");
+      // demo: leave checklist for operator
+      updateStats();
+    }
+    document.getElementById("btn-ingest").addEventListener("click", doIngest);
+    document.getElementById("btn-reingest").addEventListener("click", doIngest);
+    document.getElementById("btn-apply").addEventListener("click", () => {
+      if (applyBtn.disabled) return;
+      setSeg("vector");
+      exportBtn.disabled = false;
+    });
+    document.getElementById("btn-clear").addEventListener("click", () => {
+      hasPhoto = false;
+      ingested = false;
+      document.querySelectorAll("[data-gate]").forEach((c) => { c.checked = false; });
+      setSeg("source");
+    });
+    document.getElementById("btn-choose").addEventListener("click", () => {
+      hasPhoto = true;
+      setSeg("source");
+    });
+    document.getElementById("btn-reset-frame").addEventListener("click", () => setSeg("source"));
+
+    function rawSvg() {
+      alert("Mockup: would download Raw SVG (GET /api/portrait/ingest/{id}/svg)");
+    }
+    document.getElementById("btn-raw").addEventListener("click", rawSvg);
+    document.getElementById("btn-raw-inline").addEventListener("click", rawSvg);
+
+    // Start on Ingest with mock photo already ingested (Phase B land)
+    setSeg("ingest");
+    refreshGate();
+  </script>
+</body>
+</html>
