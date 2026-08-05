@@ -8,7 +8,7 @@ from typing import Any, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -135,6 +135,106 @@ def api_palette_save(body: PaletteSaveRequest):
         paper_notes=body.paper_notes,
     )
     return palette.model_dump()
+
+
+class PaperSaveRequest(BaseModel):
+    id: str
+    name: str
+    color_hex: str = "#f7f1e8"
+    finish: str = "matte"
+    size_hint: Optional[str] = "A4"
+    notes: str = ""
+
+
+class LineSaveRequest(BaseModel):
+    id: str
+    name: str
+    line_type: str = "solid"
+    line_spacing_mm: float = 1.2
+    pattern_period_mm: float = 2.0
+    pattern_amplitude_mm: float = 0.8
+    dash_mm: float = 2.0
+    gap_mm: float = 1.2
+    ornament_target: str = "all"
+    notes: str = ""
+
+
+@app.get("/api/papers")
+def api_papers():
+    from botdraw.paper import list_papers
+
+    return list_papers()
+
+
+@app.post("/api/papers/save")
+def api_paper_save(body: PaperSaveRequest):
+    from botdraw.paper import PaperStock, save_paper
+
+    stock = save_paper(
+        PaperStock(
+            id=body.id,
+            name=body.name,
+            color_hex=body.color_hex,
+            finish=body.finish,
+            size_hint=body.size_hint,
+            notes=body.notes,
+        )
+    )
+    return stock.model_dump()
+
+
+@app.delete("/api/papers/{paper_id}")
+def api_paper_delete(paper_id: str):
+    from botdraw.paper import delete_paper
+
+    try:
+        delete_paper(paper_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    return {"ok": True, "id": paper_id}
+
+
+@app.get("/api/lines")
+def api_lines():
+    from botdraw.lines import list_lines
+
+    return list_lines()
+
+
+@app.get("/api/lines/{line_id}/preview.svg")
+def api_line_preview(line_id: str):
+    from botdraw.lines import load_line, preview_svg
+
+    try:
+        stock = load_line(line_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Line not found") from None
+    svg = preview_svg(stock)
+    return Response(content=svg, media_type="image/svg+xml")
+
+
+@app.post("/api/lines/save")
+def api_line_save(body: LineSaveRequest):
+    from botdraw.lines import LineStock, save_line
+
+    stock = LineStock.model_validate(body.model_dump())
+    save_line(stock)
+    return stock.model_dump()
+
+
+@app.delete("/api/lines/{line_id}")
+def api_line_delete(line_id: str):
+    from botdraw.lines import delete_line
+
+    try:
+        delete_line(line_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from None
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Line not found") from None
+    return {"ok": True, "id": line_id}
 
 
 @app.post("/api/render")

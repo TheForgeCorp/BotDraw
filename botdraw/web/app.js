@@ -7,15 +7,26 @@ player.onStats = (m) => { statsEl.textContent = m; };
 
 let currentApp = "genartbot";
 let inspTab = "layers";
+let libraryTab = "pens"; // pens | paper | lines
 let styles = [];
 let palettes = [];
+let papers = [];
+let linesCatalog = [];
 let selectedStyle = "stipple";
 let selectedPaletteId = "default-6";
+let selectedPaperId = "natural-cream";
+let selectedLineId = "solid";
 let lastJob = null;
 let lastPayload = null;
 let lastLayers = null;
 let lastSettings = null;
 let inspectorJson = null;
+
+const PORTRAIT_LINE_TYPES = [
+  "solid", "dashed", "dotted", "dash_dot", "zigzag", "triangle", "wave", "square_wave",
+  "half_circle", "scallop_alt", "beads", "double", "railroad", "stitch", "hatch_tick",
+  "chevron", "spring", "bounce", "wobble", "ladder",
+];
 
 const state = {
   paper: "A4",
@@ -555,7 +566,30 @@ function renderRdlab() {
     });
 }
 
-function renderPalettes() {
+function renderLibrary() {
+  controls.innerHTML = `
+    <h3>Library</h3>
+    <p class="muted">Pens, paper stocks, and line ornaments in one place.</p>
+    <div class="seg-control mini library-tabs" role="tablist" aria-label="Library">
+      <button type="button" data-lib="pens" class="${libraryTab === "pens" ? "active" : ""}">Pens</button>
+      <button type="button" data-lib="paper" class="${libraryTab === "paper" ? "active" : ""}">Paper</button>
+      <button type="button" data-lib="lines" class="${libraryTab === "lines" ? "active" : ""}">Lines</button>
+    </div>
+    <div id="library-body"></div>
+  `;
+  controls.querySelectorAll("[data-lib]").forEach((btn) => {
+    btn.onclick = () => {
+      libraryTab = btn.dataset.lib;
+      renderControls();
+    };
+  });
+  const body = controls.querySelector("#library-body");
+  if (libraryTab === "paper") return renderPaperLibrary(body);
+  if (libraryTab === "lines") return renderLineLibrary(body);
+  return renderPenLibrary(body);
+}
+
+function renderPenLibrary(host) {
   const palette = currentPalette();
   const penBlock = (pen, idx) => `
     <div class="pen-block" data-idx="${idx}">
@@ -578,8 +612,8 @@ function renderPalettes() {
     </div>
   `;
 
-  controls.innerHTML = `
-    <h3>Palette Lab</h3>
+  host.innerHTML = `
+    <h4>Pen Library</h4>
     <p class="muted">Edit established palettes and save as a new JSON preset for renders.</p>
     ${field("Load palette", paletteSelectHtml())}
     ${penChipsHtml(palette)}
@@ -593,15 +627,15 @@ function renderPalettes() {
       <button id="add-pen">Add pen</button>
     </div>
   `;
-  controls.querySelector("#palette").onchange = () => {
+  host.querySelector("#palette").onchange = () => {
     selectedPaletteId = val("palette");
     renderControls();
   };
-  controls.querySelector("#export-pal-local").onclick = () => {
+  host.querySelector("#export-pal-local").onclick = () => {
     downloadJson(`${selectedPaletteId}.json`, currentPalette());
   };
-  controls.querySelector("#add-pen").onclick = () => {
-    const editor = controls.querySelector("#pen-editor");
+  host.querySelector("#add-pen").onclick = () => {
+    const editor = host.querySelector("#pen-editor");
     const idx = editor.querySelectorAll(".pen-block").length;
     editor.insertAdjacentHTML(
       "beforeend",
@@ -616,9 +650,9 @@ function renderPalettes() {
       )
     );
   };
-  controls.querySelector("#save-pal").onclick = () =>
+  host.querySelector("#save-pal").onclick = () =>
     withBusy("#save-pal", async () => {
-      const pens = [...controls.querySelectorAll(".pen-block")].map((block) => {
+      const pens = [...host.querySelectorAll(".pen-block")].map((block) => {
         const get = (k) => block.querySelector(`[data-k="${k}"]`).value;
         return {
           id: get("id"),
@@ -647,6 +681,256 @@ function renderPalettes() {
       downloadJson(`${saved.id}.json`, saved);
       statsEl.textContent = `Saved palette ${saved.id}`;
       renderControls();
+    });
+}
+
+function fillPaperForm(stock) {
+  if (!stock) return;
+  const set = (id, v) => {
+    const el = controls.querySelector(`#${id}`);
+    if (el && v != null) el.value = v;
+  };
+  set("paper_id", stock.id);
+  set("paper_name", stock.name);
+  set("paper_color", stock.color_hex || "#f7f1e8");
+  set("paper_finish", stock.finish || "matte");
+  set("paper_size_hint", stock.size_hint || "A4");
+  set("paper_notes_field", stock.notes || "");
+  const swatch = controls.querySelector("#paper-swatch");
+  if (swatch) swatch.style.background = stock.color_hex || "#f7f1e8";
+}
+
+function renderPaperLibrary(host) {
+  if (!selectedPaperId && papers[0]) selectedPaperId = papers[0].id;
+  const stock = papers.find((p) => p.id === selectedPaperId) || papers[0] || {
+    id: "custom-paper",
+    name: "Custom Paper",
+    color_hex: "#f7f1e8",
+    finish: "matte",
+    size_hint: "A4",
+    notes: "",
+  };
+  const chips = papers
+    .map(
+      (p) =>
+        `<button type="button" data-paper="${p.id}" class="${p.id === (stock.id || selectedPaperId) ? "active" : ""}">${p.name}</button>`
+    )
+    .join("");
+  host.innerHTML = `
+    <h4>Paper Library</h4>
+    <p class="muted">Paper stocks with color + finish for bots and the emulator.</p>
+    <div class="library-list" id="paper-list">${chips || '<span class="muted">No papers loaded</span>'}</div>
+    <div class="paper-swatch" id="paper-swatch" style="background:${stock.color_hex || "#f7f1e8"}"></div>
+    <div class="grid-2">
+      ${field("id", `<input id="paper_id" value="${stock.id || ""}" />`)}
+      ${field("name", `<input id="paper_name" value="${stock.name || ""}" />`)}
+    </div>
+    <div class="grid-2">
+      ${field("color", `<input id="paper_color" type="color" value="${stock.color_hex || "#f7f1e8"}" />`)}
+      ${field("finish", `<select id="paper_finish">
+        ${["matte", "smooth", "toothy"].map((f) =>
+          `<option value="${f}" ${(stock.finish || "matte") === f ? "selected" : ""}>${f}</option>`
+        ).join("")}
+      </select>`)}
+    </div>
+    <div class="grid-2">
+      ${field("size hint", `<input id="paper_size_hint" value="${stock.size_hint || "A4"}" />`)}
+      ${field("notes", `<input id="paper_notes_field" value="${stock.notes || ""}" />`)}
+    </div>
+    <div class="row">
+      <button class="primary" id="save-paper">Save paper</button>
+      <button id="delete-paper">Delete</button>
+    </div>
+  `;
+  host.querySelectorAll("[data-paper]").forEach((btn) => {
+    btn.onclick = () => {
+      selectedPaperId = btn.dataset.paper;
+      fillPaperForm(papers.find((p) => p.id === selectedPaperId));
+      host.querySelectorAll("[data-paper]").forEach((b) =>
+        b.classList.toggle("active", b.dataset.paper === selectedPaperId)
+      );
+    };
+  });
+  const colorEl = host.querySelector("#paper_color");
+  if (colorEl) {
+    colorEl.oninput = () => {
+      const swatch = host.querySelector("#paper-swatch");
+      if (swatch) swatch.style.background = colorEl.value;
+    };
+  }
+  host.querySelector("#save-paper").onclick = () =>
+    withBusy("#save-paper", async () => {
+      const body = {
+        id: val("paper_id"),
+        name: val("paper_name"),
+        color_hex: val("paper_color", "#f7f1e8"),
+        finish: val("paper_finish", "matte"),
+        size_hint: val("paper_size_hint", "A4"),
+        notes: val("paper_notes_field", ""),
+      };
+      const saved = await api("/api/papers/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      papers = await api("/api/papers");
+      selectedPaperId = saved.id;
+      statsEl.textContent = `Saved paper ${saved.id}`;
+      await renderControls();
+    });
+  host.querySelector("#delete-paper").onclick = () =>
+    withBusy("#delete-paper", async () => {
+      const id = val("paper_id");
+      if (!id) return;
+      try {
+        await api(`/api/papers/${encodeURIComponent(id)}`, { method: "DELETE" });
+        papers = await api("/api/papers");
+        selectedPaperId = papers[0]?.id || "natural-cream";
+        statsEl.textContent = `Deleted paper ${id}`;
+        await renderControls();
+      } catch (e) {
+        const msg = String(e.message || e);
+        statsEl.textContent = /403|preset|Cannot delete/i.test(msg)
+          ? `Cannot delete preset paper: ${id}`
+          : msg;
+      }
+    });
+}
+
+function refreshLinePreview(lineId) {
+  const img = controls.querySelector("#line-preview");
+  if (!img || !lineId) return;
+  img.src = `/api/lines/${encodeURIComponent(lineId)}/preview.svg?t=${Date.now()}`;
+}
+
+function fillLineForm(stock) {
+  if (!stock) return;
+  const set = (id, v) => {
+    const el = controls.querySelector(`#${id}`);
+    if (el && v != null) el.value = v;
+  };
+  set("line_id", stock.id);
+  set("line_name", stock.name);
+  set("line_type", stock.line_type || "solid");
+  set("line_spacing_mm", stock.line_spacing_mm ?? 1.2);
+  set("pattern_period_mm", stock.pattern_period_mm ?? 2.0);
+  set("pattern_amplitude_mm", stock.pattern_amplitude_mm ?? 0.8);
+  set("dash_mm", stock.dash_mm ?? 2.0);
+  set("gap_mm", stock.gap_mm ?? 1.2);
+  set("ornament_target", stock.ornament_target || "all");
+  set("line_notes", stock.notes || "");
+  refreshLinePreview(stock.id);
+}
+
+function renderLineLibrary(host) {
+  if (!selectedLineId && linesCatalog[0]) selectedLineId = linesCatalog[0].id;
+  const stock = linesCatalog.find((l) => l.id === selectedLineId) || linesCatalog[0] || {
+    id: "custom-line",
+    name: "Custom Line",
+    line_type: "solid",
+    line_spacing_mm: 1.2,
+    pattern_period_mm: 2.0,
+    pattern_amplitude_mm: 0.8,
+    dash_mm: 2.0,
+    gap_mm: 1.2,
+    ornament_target: "all",
+    notes: "",
+  };
+  const chips = linesCatalog
+    .map(
+      (l) =>
+        `<button type="button" data-line="${l.id}" class="${l.id === stock.id ? "active" : ""}">${l.name || l.id}</button>`
+    )
+    .join("");
+  const ltOpts = PORTRAIT_LINE_TYPES.map(
+    (t) => `<option value="${t}" ${(stock.line_type || "solid") === t ? "selected" : ""}>${t.replace(/_/g, " ")}</option>`
+  ).join("");
+  host.innerHTML = `
+    <h4>Line Library</h4>
+    <p class="muted">Stroke ornament presets shared across bots.</p>
+    <div class="library-list" id="line-list">${chips || '<span class="muted">No lines loaded</span>'}</div>
+    <div class="line-preview-frame">
+      <img id="line-preview" alt="Line preview" src="/api/lines/${encodeURIComponent(stock.id)}/preview.svg" />
+    </div>
+    <div class="grid-2">
+      ${field("id", `<input id="line_id" value="${stock.id || ""}" />`)}
+      ${field("name", `<input id="line_name" value="${stock.name || ""}" />`)}
+    </div>
+    <div class="grid-2">
+      ${field("line type", `<select id="line_type">${ltOpts}</select>`)}
+      ${field("ornament target", `<select id="ornament_target">
+        ${["all", "edges", "fills"].map((t) =>
+          `<option value="${t}" ${(stock.ornament_target || "all") === t ? "selected" : ""}>${t}</option>`
+        ).join("")}
+      </select>`)}
+    </div>
+    <div class="grid-2">
+      ${field("spacing mm", `<input id="line_spacing_mm" type="number" step="0.1" value="${stock.line_spacing_mm ?? 1.2}" />`)}
+      ${field("period mm", `<input id="pattern_period_mm" type="number" step="0.1" value="${stock.pattern_period_mm ?? 2}" />`)}
+    </div>
+    <div class="grid-2">
+      ${field("amplitude mm", `<input id="pattern_amplitude_mm" type="number" step="0.1" value="${stock.pattern_amplitude_mm ?? 0.8}" />`)}
+      ${field("dash mm", `<input id="dash_mm" type="number" step="0.1" value="${stock.dash_mm ?? 2}" />`)}
+    </div>
+    <div class="grid-2">
+      ${field("gap mm", `<input id="gap_mm" type="number" step="0.1" value="${stock.gap_mm ?? 1.2}" />`)}
+      ${field("notes", `<input id="line_notes" value="${stock.notes || ""}" />`)}
+    </div>
+    <div class="row">
+      <button class="primary" id="save-line">Save line</button>
+      <button id="delete-line">Delete</button>
+    </div>
+  `;
+  host.querySelectorAll("[data-line]").forEach((btn) => {
+    btn.onclick = () => {
+      selectedLineId = btn.dataset.line;
+      fillLineForm(linesCatalog.find((l) => l.id === selectedLineId));
+      host.querySelectorAll("[data-line]").forEach((b) =>
+        b.classList.toggle("active", b.dataset.line === selectedLineId)
+      );
+    };
+  });
+  host.querySelector("#save-line").onclick = () =>
+    withBusy("#save-line", async () => {
+      const body = {
+        id: val("line_id"),
+        name: val("line_name"),
+        line_type: val("line_type", "solid"),
+        line_spacing_mm: num("line_spacing_mm", 1.2),
+        pattern_period_mm: num("pattern_period_mm", 2),
+        pattern_amplitude_mm: num("pattern_amplitude_mm", 0.8),
+        dash_mm: num("dash_mm", 2),
+        gap_mm: num("gap_mm", 1.2),
+        ornament_target: val("ornament_target", "all"),
+        notes: val("line_notes", ""),
+      };
+      const saved = await api("/api/lines/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      linesCatalog = await api("/api/lines");
+      selectedLineId = saved.id;
+      statsEl.textContent = `Saved line ${saved.id}`;
+      await renderControls();
+      refreshLinePreview(saved.id);
+    });
+  host.querySelector("#delete-line").onclick = () =>
+    withBusy("#delete-line", async () => {
+      const id = val("line_id");
+      if (!id) return;
+      try {
+        await api(`/api/lines/${encodeURIComponent(id)}`, { method: "DELETE" });
+        linesCatalog = await api("/api/lines");
+        selectedLineId = linesCatalog[0]?.id || "solid";
+        statsEl.textContent = `Deleted line ${id}`;
+        await renderControls();
+      } catch (e) {
+        const msg = String(e.message || e);
+        statsEl.textContent = /403|preset|Cannot delete/i.test(msg)
+          ? `Cannot delete preset line: ${id}`
+          : msg;
+      }
     });
 }
 
@@ -779,12 +1063,16 @@ function renderInspector() {
 async function renderControls() {
   if (!styles.length) styles = await api("/api/styles");
   if (!palettes.length) palettes = await api("/api/palettes");
+  if (currentApp === "library") {
+    if (!papers.length) papers = await api("/api/papers");
+    if (!linesCatalog.length) linesCatalog = await api("/api/lines");
+  }
   if (currentApp === "genartbot") return renderGenArt();
   if (currentApp === "fractalbot") return renderFractal();
   if (currentApp === "portraitbot") return renderPortrait();
   if (currentApp === "lettersbot") return renderLetters();
   if (currentApp === "rdlab") return renderRdlab();
-  if (currentApp === "palettes") return renderPalettes();
+  if (currentApp === "library") return renderLibrary();
   return renderTools();
 }
 
