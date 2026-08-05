@@ -10,7 +10,7 @@ from botdraw.core.models import LayeredSVG, Orientation, PaperSize, Polyline, St
 from botdraw.core.svg import make_pass
 from botdraw.palettes import ink_pens
 from botdraw.styles import page_size, register
-from botdraw.styles.geom import MARK_KINDS, mark_polyline
+from botdraw.styles.geom import MARK_KINDS, mark_polylines
 
 # Golden angle (degrees) — most irrational rotation; Fibonacci spiral families
 GOLDEN_ANGLE_DEG = 137.5
@@ -196,7 +196,7 @@ class _Phyllotaxis:
     ):
         del image_path, image_array
         extra = params.extra or {}
-        # Points knob is authoritative; density scales mark size only
+        # Points knob is authoritative; mark_size_mm owns glyph size (mm)
         if "n_points" in extra and extra["n_points"] is not None:
             n_points = _extra_int(extra, "n_points", 900, lo=50, hi=4000)
         elif "points" in extra and extra["points"] is not None:
@@ -207,8 +207,19 @@ class _Phyllotaxis:
         mark = str(extra.get("mark") or "circle").lower().strip()
         if mark not in MARK_KINDS:
             mark = "circle"
-        mark_scale = _extra_float(extra, "mark_scale", 1.0, lo=0.2, hi=4.0)
-        dens = max(0.3, float(params.density or 1.0))
+        # Prefer mark_size_mm; fall back to legacy mark_scale * 2.5
+        if "mark_size_mm" in extra and extra["mark_size_mm"] is not None:
+            mark_size_mm = _extra_float(extra, "mark_size_mm", 2.5, lo=1.0, hi=8.0)
+        elif "mark_scale" in extra and extra["mark_scale"] is not None:
+            mark_size_mm = _extra_float(
+                {"mark_size_mm": float(extra["mark_scale"]) * 2.5},
+                "mark_size_mm",
+                2.5,
+                lo=1.0,
+                hi=8.0,
+            )
+        else:
+            mark_size_mm = 2.5
 
         # Build in polar model space with c=1, then fit to page
         raw = phyllotaxis_points(n_points, angle_deg=angle_deg, scale=1.0)
@@ -221,16 +232,14 @@ class _Phyllotaxis:
         page_scale = (usable * 0.5) / max_r
         cx, cy = pw / 2, ph / 2
 
-        base_r = max(0.25, min(1.2, 7.5 / math.sqrt(n_points)))
-        mark_r = base_r * dens * mark_scale
-        closed = mark != "cross"
+        mark_r = mark_size_mm
         polys: list[Polyline] = []
         for x, y in raw:
             px = cx + x * page_scale
             py = cy + y * page_scale
-            pts = mark_polyline(px, py, mark_r, mark)
-            if len(pts) >= 2:
-                polys.append(Polyline(points=pts, pen_id=pen.id, closed=closed))
+            for pts, closed in mark_polylines(px, py, mark_r, mark):
+                if len(pts) >= 2:
+                    polys.append(Polyline(points=pts, pen_id=pen.id, closed=closed))
 
         return LayeredSVG(
             width_mm=pw,
@@ -244,7 +253,7 @@ class _Phyllotaxis:
                 "n_points": n_points,
                 "angle_deg": angle_deg,
                 "mark": mark,
-                "mark_scale": mark_scale,
+                "mark_size_mm": mark_size_mm,
                 "equation": f"r = c√n ; θ = n × {angle_deg}°",
                 "strokes": len(polys),
             },

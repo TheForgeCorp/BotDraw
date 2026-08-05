@@ -37,6 +37,8 @@ const scrub = document.getElementById("scrub");
 const timeNow = document.getElementById("time-now");
 const timeTotal = document.getElementById("time-total");
 const ghostBtn = document.getElementById("ghost-btn");
+const loupeBtn = document.getElementById("loupe-btn");
+const textDragHandle = document.getElementById("text-drag-handle");
 
 function fmtTime(s) {
   s = Math.max(0, Math.round(s));
@@ -83,6 +85,140 @@ function toggleGhost() {
   player.setGhost(on);
 }
 ghostBtn.onclick = toggleGhost;
+
+function syncLoupeBtn() {
+  if (!loupeBtn) return;
+  loupeBtn.setAttribute("aria-pressed", String(!!player.loupeOn));
+  loupeBtn.classList.toggle("active", !!player.loupeOn);
+}
+if (loupeBtn) {
+  loupeBtn.onclick = () => {
+    player.toggleLoupe();
+    syncLoupeBtn();
+  };
+  player.onLoupeChange = () => syncLoupeBtn();
+}
+
+const pageTextState = {
+  lines: ["", "", ""],
+  size_mm: 5,
+  x_mm: 24,
+  y_mm: 240,
+  pen_id: "black",
+  pass_id: "page-text",
+  active: false,
+};
+
+function refreshTextPenSelect() {
+  const sel = document.getElementById("text-pen");
+  if (!sel) return;
+  const palette = currentPalette();
+  const pens = (palette?.pens || []).filter((p) => (p.profile?.nib_type || "") !== "highlighter");
+  sel.innerHTML = pens
+    .map((p) => `<option value="${p.id}" ${p.id === pageTextState.pen_id ? "selected" : ""}>${p.id}</option>`)
+    .join("");
+  if (!pens.find((p) => p.id === pageTextState.pen_id) && pens[0]) {
+    pageTextState.pen_id = pens[0].id;
+    sel.value = pens[0].id;
+  }
+}
+
+function readPageTextForm() {
+  pageTextState.lines = [
+    document.getElementById("text-line1")?.value || "",
+    document.getElementById("text-line2")?.value || "",
+    document.getElementById("text-line3")?.value || "",
+  ];
+  pageTextState.size_mm = Number(document.getElementById("text-size")?.value || pageTextState.size_mm);
+  pageTextState.pen_id = document.getElementById("text-pen")?.value || pageTextState.pen_id;
+}
+
+function positionTextHandle() {
+  if (!textDragHandle || !pageTextState.active || !lastJob) {
+    if (textDragHandle) textDragHandle.hidden = true;
+    return;
+  }
+  const pt = player.mmToClient(pageTextState.x_mm, pageTextState.y_mm);
+  const stage = document.getElementById("stage-canvas");
+  const rect = stage.getBoundingClientRect();
+  textDragHandle.hidden = false;
+  // Absolute inside #stage-canvas (same containing block as the canvas)
+  textDragHandle.style.left = `${pt.x - rect.left}px`;
+  textDragHandle.style.top = `${pt.y - rect.top}px`;
+}
+
+async function applyPageText({ clear = false } = {}) {
+  if (!lastJob?.id) {
+    statsEl.textContent = "Render a job before adding text";
+    return;
+  }
+  readPageTextForm();
+  if (!clear && !pageTextState.lines.some((l) => l.trim())) {
+    statsEl.textContent = "Enter at least one text line";
+    return;
+  }
+  statsEl.textContent = clear ? "Clearing page text…" : "Adding page text…";
+  const data = await api(`/api/jobs/${lastJob.id}/overlay-text`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      lines: pageTextState.lines,
+      x_mm: pageTextState.x_mm,
+      y_mm: pageTextState.y_mm,
+      size_mm: pageTextState.size_mm,
+      pen_id: pageTextState.pen_id,
+      replace_pass_id: pageTextState.pass_id,
+      clear,
+    }),
+  });
+  loadResult(data);
+  pageTextState.active = !clear && !!data.page_text;
+  if (data.page_text) {
+    pageTextState.x_mm = data.page_text.x_mm;
+    pageTextState.y_mm = data.page_text.y_mm;
+  }
+  positionTextHandle();
+}
+
+function bindPageTextPanel() {
+  refreshTextPenSelect();
+  const addBtn = document.getElementById("text-add");
+  const clearBtn = document.getElementById("text-clear");
+  if (addBtn) addBtn.onclick = () => withBusy("#text-add", () => applyPageText());
+  if (clearBtn) clearBtn.onclick = () => withBusy("#text-clear", () => applyPageText({ clear: true }));
+
+  if (textDragHandle && !textDragHandle._bound) {
+    textDragHandle._bound = true;
+    let drag = null;
+    textDragHandle.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      drag = { x0: e.clientX, y0: e.clientY, mmX: pageTextState.x_mm, mmY: pageTextState.y_mm };
+      textDragHandle.setPointerCapture(e.pointerId);
+    });
+    textDragHandle.addEventListener("pointermove", (e) => {
+      if (!drag) return;
+      const a = player.clientToMm(drag.x0, drag.y0);
+      const b = player.clientToMm(e.clientX, e.clientY);
+      pageTextState.x_mm = drag.mmX + (b.x_mm - a.x_mm);
+      pageTextState.y_mm = drag.mmY + (b.y_mm - a.y_mm);
+      positionTextHandle();
+    });
+    textDragHandle.addEventListener("pointerup", async (e) => {
+      if (!drag) return;
+      drag = null;
+      try {
+        textDragHandle.releasePointerCapture(e.pointerId);
+      } catch (_) {}
+      await applyPageText();
+    });
+  }
+  player._textDragHit = (e) => {
+    if (!pageTextState.active || textDragHandle?.hidden) return false;
+    const r = textDragHandle.getBoundingClientRect();
+    return e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+  };
+}
 
 document.addEventListener("keydown", (e) => {
   const t = e.target;
@@ -241,6 +377,31 @@ function loadResult(data) {
     job: lastJob,
   };
   renderInspector();
+  if (data.page_text) {
+    pageTextState.active = true;
+    pageTextState.x_mm = data.page_text.x_mm;
+    pageTextState.y_mm = data.page_text.y_mm;
+    pageTextState.size_mm = data.page_text.size_mm ?? pageTextState.size_mm;
+    pageTextState.pen_id = data.page_text.pen_id || pageTextState.pen_id;
+    if (Array.isArray(data.page_text.lines)) {
+      pageTextState.lines = data.page_text.lines;
+      const l1 = document.getElementById("text-line1");
+      const l2 = document.getElementById("text-line2");
+      const l3 = document.getElementById("text-line3");
+      if (l1) l1.value = pageTextState.lines[0] || "";
+      if (l2) l2.value = pageTextState.lines[1] || "";
+      if (l3) l3.value = pageTextState.lines[2] || "";
+    }
+  } else if (!lastLayers?.passes?.some((p) => p.id === pageTextState.pass_id)) {
+    pageTextState.active = false;
+    const w = lastPayload?.width_mm || 210;
+    const h = lastPayload?.height_mm || 297;
+    // Centered lower third of the current paper
+    pageTextState.x_mm = w * 0.18;
+    pageTextState.y_mm = h * 0.72;
+  }
+  refreshTextPenSelect();
+  positionTextHandle();
   player.play();
 }
 
@@ -468,7 +629,7 @@ function renderFractal() {
 }
 
 const designKnobState = {
-  phyllotaxis: { n_points: 900, angle_deg: 137.5, mark: "circle", mark_scale: 1.0 },
+  phyllotaxis: { n_points: 900, angle_deg: 137.5, mark: "circle", mark_size_mm: 2.5 },
   modular_chords: { n_points: 200, k: 77 },
   prime_sieve: { max_n: 212, grid_cols: 6, show_arcs: true, show_sieve: true },
   rule30: { cols: 120, rows: 90, rule: 30 },
@@ -480,7 +641,7 @@ function syncDesignKnobState() {
       n_points: Number(controls.querySelector("#phy-points")?.value ?? designKnobState.phyllotaxis.n_points),
       angle_deg: Number(controls.querySelector("#phy-angle")?.value ?? designKnobState.phyllotaxis.angle_deg),
       mark: controls.querySelector("#phy-mark")?.value || designKnobState.phyllotaxis.mark,
-      mark_scale: Number(controls.querySelector("#phy-mark-scale")?.value ?? designKnobState.phyllotaxis.mark_scale),
+      mark_size_mm: Number(controls.querySelector("#phy-mark-size")?.value ?? designKnobState.phyllotaxis.mark_size_mm),
     };
     return;
   }
@@ -524,14 +685,14 @@ function designLibraryKnobsHtml() {
       .join("");
     return `
       <h4>Sunflower</h4>
-      <p class="muted">r = c√n · θ = n × angle — Points sets count; Density / Mark scale size only.</p>
+      <p class="muted">r = c√n · θ = n × angle — Points sets count; Mark size is absolute mm.</p>
       <div class="grid-2">
         ${field("Points", `<input id="phy-points" type="number" min="50" max="4000" value="${k.n_points}" />`)}
         ${field("Angle °", `<input id="phy-angle" type="number" min="1" max="179" step="0.1" value="${k.angle_deg}" />`)}
       </div>
       <div class="grid-2">
         ${field("Mark", `<select id="phy-mark">${markOpts}</select>`)}
-        ${field("Mark scale", `<input id="phy-mark-scale" type="number" min="0.2" max="4" step="0.1" value="${k.mark_scale}" />`)}
+        ${field("Mark size mm", `<input id="phy-mark-size" type="number" min="1" max="8" step="0.1" value="${k.mark_size_mm}" />`)}
       </div>
     `;
   }
@@ -1078,6 +1239,15 @@ document.getElementById("copy-json").onclick = async () => {
   const text = JSON.stringify(inspectorJson || lastSettings || {}, null, 2);
   await navigator.clipboard.writeText(text);
   statsEl.textContent = "Copied inspector JSON";
+};
+
+bindPageTextPanel();
+window.addEventListener("resize", () => positionTextHandle());
+const _origDraw = player.drawFrame.bind(player);
+player.drawFrame = function (...args) {
+  const r = _origDraw(...args);
+  positionTextHandle();
+  return r;
 };
 
 renderControls().catch((e) => {

@@ -59,7 +59,11 @@
           <button id="ghost-btn" class="icon-btn active" aria-pressed="true" aria-label="Toggle pen-up ghost" title="Pen-up ghost (G)">
             <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M1.5 12.5 12.5 1.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="2.6 2.8" fill="none"/></svg>
           </button>
+          <button id="loupe-btn" class="icon-btn" aria-pressed="false" aria-label="Toggle loupe" title="Loupe (L)">
+            <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="6" cy="6" r="4.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M9.2 9.2 12.5 12.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
         </div>
+        <div id="text-drag-handle" class="text-drag-handle" hidden title="Drag text"></div>
       </div>
       <div class="export-bar">
         <button id="export-pack" class="primary" disabled>Export pack</button>
@@ -85,8 +89,25 @@
         <button data-insp="json">JSON</button>
         <button data-insp="job">Job</button>
       </div>
-      <div id="inspector-body" class="inspector-body">
-        <p class="muted">Render a job to inspect color layers, pens, and vectorization stats.</p>
+      <div class="inspector-split">
+        <div id="inspector-body" class="inspector-body inspector-upper">
+          <p class="muted">Render a job to inspect color layers, pens, and vectorization stats.</p>
+        </div>
+        <div id="text-overlay" class="inspector-lower">
+          <h4>Page text</h4>
+          <p class="muted">3-line Hershey stroke text — plottable, movable on the page.</p>
+          <label>Line 1<input id="text-line1" type="text" placeholder="Line 1" maxlength="80" /></label>
+          <label>Line 2<input id="text-line2" type="text" placeholder="Line 2" maxlength="80" /></label>
+          <label>Line 3<input id="text-line3" type="text" placeholder="Line 3" maxlength="80" /></label>
+          <div class="grid-2">
+            <label>Size mm<input id="text-size" type="number" min="2" max="20" step="0.5" value="5" /></label>
+            <label>Pen<select id="text-pen"></select></label>
+          </div>
+          <div class="row">
+            <button class="primary" id="text-add" type="button">Add to page</button>
+            <button id="text-clear" type="button">Clear text</button>
+          </div>
+        </div>
       </div>
     </section>
   </main>

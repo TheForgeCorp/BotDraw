@@ -13,9 +13,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from botdraw.audio import render_audio_file, render_demo_tone
-from botdraw.core.jobs import list_jobs, load_job
+from botdraw.core.jobs import artifact_dir, list_jobs, load_job
 from botdraw.core.models import LayeredSVG, Orientation, PaperSize, PassLayer, Polyline, QualityPreset, paper_dims
+from botdraw.core.overlays import OverlayPassComposer
 from botdraw.core.pipeline import render_from_layered, render_job
+from botdraw.core.svg import make_pass
+from botdraw.letters import layout_text
 from botdraw.handwriting import load_samples, render_with_clone, save_samples
 from botdraw.letters import render_letter
 from botdraw.llm import draft_wedding_letter, is_loaded, try_local_ollama, unload
@@ -585,6 +588,105 @@ def api_job(job_id: str):
     if out and (out / "settings.json").exists():
         settings = json.loads((out / "settings.json").read_text(encoding="utf-8"))
     return {"job": job.model_dump(), "emulator": payload, "layers": layers, "settings": settings}
+
+
+class OverlayTextRequest(BaseModel):
+    lines: list[str] = ["", "", ""]
+    x_mm: float = 20.0
+    y_mm: float = 240.0
+    size_mm: float = 5.0
+    pen_id: str = "black"
+    replace_pass_id: str | None = "page-text"
+    clear: bool = False
+
+
+@app.post("/api/jobs/{job_id}/overlay-text")
+def api_overlay_text(job_id: str, body: OverlayTextRequest):
+    """Add/replace/clear a 3-line Hershey stroke text pass on an existing job."""
+    try:
+        job = load_job(job_id)
+    except Exception as exc:
+        raise HTTPException(404, f"Job not found: {job_id}") from exc
+    out = artifact_dir(job_id)
+    layered_path = out / "layered.json"
+    if not layered_path.exists():
+        raise HTTPException(404, "layered.json missing — re-render the job first")
+    layered = LayeredSVG.model_validate_json(layered_path.read_text(encoding="utf-8"))
+    settings_path = out / "settings.json"
+    settings = json.loads(settings_path.read_text(encoding="utf-8")) if settings_path.exists() else {}
+    pass_id = body.replace_pass_id or "page-text"
+    layered.passes = [p for p in layered.passes if p.id != pass_id]
+
+    text_meta = {
+        "overlay": "page_text",
+        "pass_id": pass_id,
+        "lines": list(body.lines[:3]) + [""] * max(0, 3 - len(body.lines)),
+        "x_mm": body.x_mm,
+        "y_mm": body.y_mm,
+        "size_mm": body.size_mm,
+        "pen_id": body.pen_id,
+    }
+
+    if not body.clear:
+        lines = [(ln or "").rstrip() for ln in (body.lines or [])[:3]]
+        while len(lines) < 3:
+            lines.append("")
+        text = "\n".join(lines).rstrip("\n")
+        if text.strip():
+            try:
+                palette = load_palette(job.palette_id)
+                palette.pen_by_id(body.pen_id)
+            except KeyError as exc:
+                raise HTTPException(400, f"Unknown pen_id: {body.pen_id}") from exc
+            size = max(2.0, min(20.0, float(body.size_mm)))
+            polys, _spans = layout_text(
+                text,
+                x=float(body.x_mm),
+                y=float(body.y_mm),
+                size_mm=size,
+                line_height=size * 1.5,
+                max_width=max(40.0, layered.width_mm - float(body.x_mm) - 10.0),
+                pen_id=body.pen_id,
+                humanize=0.05,
+                seed=job.seed or 1,
+            )
+            if polys:
+                OverlayPassComposer().append_pass(
+                    layered,
+                    make_pass(pass_id, "Page text", body.pen_id, polys, kind="ornament"),
+                )
+        layered.meta = {**(layered.meta or {}), "page_text": text_meta}
+    else:
+        meta = dict(layered.meta or {})
+        meta.pop("page_text", None)
+        layered.meta = meta
+
+    next_extra = dict(settings.get("params_extra") or {})
+    if body.clear:
+        next_extra.pop("page_text", None)
+    else:
+        next_extra["page_text"] = text_meta
+    job2, payload, layers = render_from_layered(
+        app=job.app,
+        style_id=job.style_id,
+        layered=layered,
+        palette_id=job.palette_id,
+        paper=job.paper,
+        orientation=job.orientation,
+        quality=job.quality,
+        seed=job.seed or 42,
+        density=float((job.params or {}).get("density") or settings.get("density") or 1.0),
+        params_extra=next_extra,
+        pen_up_speed_mm_s=float((job.params or {}).get("pen_up_speed_mm_s") or 100.0),
+        pen_down_speed_mm_s=float((job.params or {}).get("pen_down_speed_mm_s") or 25.0),
+        job_id=job_id,
+    )
+    return {
+        "job": job2.model_dump(),
+        "emulator": payload,
+        "layers": layers,
+        "page_text": None if body.clear else text_meta,
+    }
 
 
 @app.get("/api/jobs/{job_id}/svg")

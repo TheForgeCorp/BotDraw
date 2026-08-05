@@ -378,6 +378,68 @@ button.loading::after {
   background: #f7f5f1;
 }
 
+.inspector-split {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  height: calc(100vh - 140px);
+}
+
+.inspector-upper {
+  flex: 1 1 55%;
+  min-height: 120px;
+  overflow: auto;
+}
+
+.inspector-lower {
+  flex: 0 0 42%;
+  min-height: 180px;
+  overflow: auto;
+  border-top: 1px solid var(--border);
+  padding: 12px 0 4px;
+}
+
+.inspector-lower h4 {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+
+.inspector-lower label {
+  display: block;
+  font-size: 11px;
+  font-weight: 500;
+  margin: 8px 0 4px;
+  color: var(--text-2);
+}
+
+.inspector-lower input,
+.inspector-lower select {
+  width: 100%;
+  margin-top: 3px;
+}
+
+.stage-canvas { position: relative; }
+
+.text-drag-handle {
+  position: absolute;
+  z-index: 5;
+  width: 18px;
+  height: 18px;
+  margin: -9px 0 0 -9px;
+  border: 2px solid var(--accent);
+  background: color-mix(in srgb, var(--surface) 70%, var(--accent) 30%);
+  border-radius: 3px;
+  cursor: grab;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+}
+
+.text-drag-handle:active { cursor: grabbing; }
+
 .chk-row {
   display: flex;
   flex-wrap: wrap;

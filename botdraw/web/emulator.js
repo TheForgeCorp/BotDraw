@@ -44,10 +44,20 @@ class EmulatorPlayer {
     this.ghost = null;
     this.paperTexture = null;
 
+    // Joined pen-down chain buffer (for round joins across short mark edges)
+    this._strokeChain = null;
+
+    // Loupe (magnifier) — default off
+    this.loupeOn = false;
+    this.loupeFactor = 4;
+    this.loupeRadiusCss = 72;
+    this._pointerCss = null;
+
     // Callbacks
     this.onStats = null;
     this.onTime = null; // (time, duration, playing)
     this.onPlayState = null; // (playing)
+    this.onLoupeChange = null; // (loupeOn)
 
     this._penInfo = new Map();
     this._theme = this._readTheme();
@@ -142,6 +152,37 @@ class EmulatorPlayer {
   setGhost(v) {
     this.showGhost = !!v;
     this.drawFrame();
+  }
+
+  setLoupe(on) {
+    this.loupeOn = !!on;
+    if (this.onLoupeChange) this.onLoupeChange(this.loupeOn);
+    this.drawFrame();
+  }
+
+  toggleLoupe() {
+    this.setLoupe(!this.loupeOn);
+  }
+
+  /** Client (viewport) coords → paper mm. */
+  clientToMm(clientX, clientY) {
+    const rect = this.canvas.getBoundingClientRect();
+    const mx = (clientX - rect.left) * this.dpr;
+    const my = (clientY - rect.top) * this.dpr;
+    const o = this._origin();
+    const s = this._scale() || 1;
+    return { x_mm: (mx - o.x) / s, y_mm: (my - o.y) / s };
+  }
+
+  /** Paper mm → client (viewport) coords. */
+  mmToClient(xMm, yMm) {
+    const rect = this.canvas.getBoundingClientRect();
+    const o = this._origin();
+    const s = this._scale() || 1;
+    return {
+      x: rect.left + (o.x + xMm * s) / this.dpr,
+      y: rect.top + (o.y + yMm * s) / this.dpr,
+    };
   }
 
   setPassVisible(passId, visible) {
@@ -286,13 +327,21 @@ class EmulatorPlayer {
       { passive: false }
     );
     let drag = null;
+    const trackPointer = (e) => {
+      const rect = el.getBoundingClientRect();
+      this._pointerCss = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+      if (this.loupeOn && !drag) this.drawFrame();
+    };
     el.addEventListener("pointerdown", (e) => {
       if (!this.plan) return;
+      if (this._textDragHit && this._textDragHit(e)) return; // app handles text drag
+      trackPointer(e);
       drag = { x: e.clientX, y: e.clientY, panX: this.panX, panY: this.panY };
       el.setPointerCapture(e.pointerId);
       el.style.cursor = "grabbing";
     });
     el.addEventListener("pointermove", (e) => {
+      trackPointer(e);
       if (!drag) return;
       this.panX = drag.panX + (e.clientX - drag.x);
       this.panY = drag.panY + (e.clientY - drag.y);
@@ -307,6 +356,18 @@ class EmulatorPlayer {
     };
     el.addEventListener("pointerup", endDrag);
     el.addEventListener("pointercancel", endDrag);
+    el.addEventListener("pointerleave", () => {
+      this._pointerCss = null;
+      if (this.loupeOn) this.drawFrame();
+    });
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "l" || e.key === "L") {
+        const tag = (e.target && e.target.tagName) || "";
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || e.target?.isContentEditable) return;
+        e.preventDefault();
+        this.toggleLoupe();
+      }
+    });
   }
 
   /* ---------------- ink layers ---------------- */
@@ -314,6 +375,7 @@ class EmulatorPlayer {
   _rebuildLayers() {
     this.layers = new Map();
     this.ghost = null;
+    this._strokeChain = null;
     if (!this.plan) return;
     const pw = this.plan.width_mm;
     const ph = this.plan.height_mm;
@@ -337,12 +399,14 @@ class EmulatorPlayer {
   }
 
   _clearLayers() {
+    this._flushStrokeChain();
     for (const layer of this.layers.values()) {
       layer.ctx.clearRect(0, 0, layer.canvas.width, layer.canvas.height);
     }
     if (this.ghost) {
       this.ghost.ctx.clearRect(0, 0, this.ghost.canvas.width, this.ghost.canvas.height);
     }
+    this._strokeChain = null;
   }
 
   _layerFor(seg) {
@@ -373,6 +437,17 @@ class EmulatorPlayer {
       this._applySegment(seg);
       this.applied += 1;
     }
+    // Keep open chain if the next (partial) segment continues it; else flush
+    const next = this.applied < segs.length ? segs[this.applied] : null;
+    const chain = this._strokeChain;
+    const continues =
+      next &&
+      chain &&
+      next.kind === "pen_down" &&
+      next.pen_id === chain.pen_id &&
+      (next.pass_id || "default") === chain.pass_id &&
+      this._near(chain.x, chain.y, next.x0, next.y0);
+    if (!continues) this._flushStrokeChain();
     this.time = t;
     this.drawFrame();
     if (forceDraw) this.drawFrame();
@@ -383,58 +458,130 @@ class EmulatorPlayer {
     for (let i = from; i < to && i < segs.length; i++) {
       this._applySegment(segs[i]);
     }
+    this._flushStrokeChain();
     this.applied = Math.min(to, segs.length);
   }
 
   _applySegment(seg) {
     const s = this.layerScale;
     if (seg.kind === "pen_down") {
-      const layer = this._layerFor(seg);
-      const ctx = layer.ctx;
-      this._strokeSegment(ctx, seg, s, 1);
-    } else if (seg.kind === "pen_up") {
-      const ctx = this.ghost.ctx;
-      ctx.strokeStyle = this._theme.ghost;
-      ctx.lineWidth = Math.max(0.75, 0.18 * s);
-      ctx.setLineDash([2.2 * s * 0.5, 2.2 * s * 0.5]);
-      ctx.beginPath();
-      ctx.moveTo(seg.x0 * s, seg.y0 * s);
-      ctx.lineTo(seg.x1 * s, seg.y1 * s);
-      ctx.stroke();
-      ctx.setLineDash([]);
-    } else if (seg.kind === "pen_change") {
-      this._stats(`Pen change → ${seg.pen_id || "?"}`);
+      this._enqueuePenDown(seg);
+    } else {
+      this._flushStrokeChain();
+      if (seg.kind === "pen_up") {
+        const ctx = this.ghost.ctx;
+        ctx.strokeStyle = this._theme.ghost;
+        ctx.lineWidth = Math.max(0.75, 0.18 * s);
+        ctx.setLineDash([2.2 * s * 0.5, 2.2 * s * 0.5]);
+        ctx.beginPath();
+        ctx.moveTo(seg.x0 * s, seg.y0 * s);
+        ctx.lineTo(seg.x1 * s, seg.y1 * s);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      } else if (seg.kind === "pen_change") {
+        this._stats(`Pen change → ${seg.pen_id || "?"}`);
+      }
     }
   }
 
-  /** Stroke one pen-down segment with nib-aware rendering. frac clips the segment. */
-  _strokeSegment(ctx, seg, s, frac) {
-    const pen = this._penInfo.get(seg.pen_id) || {};
+  _near(ax, ay, bx, by, tol = 1e-4) {
+    return Math.abs(ax - bx) <= tol && Math.abs(ay - by) <= tol;
+  }
+
+  _enqueuePenDown(seg) {
+    const chain = this._strokeChain;
+    const samePen =
+      chain &&
+      chain.pen_id === seg.pen_id &&
+      chain.pass_id === (seg.pass_id || "default") &&
+      this._near(chain.x, chain.y, seg.x0, seg.y0);
+    if (!samePen) {
+      this._flushStrokeChain();
+      this._strokeChain = {
+        pen_id: seg.pen_id,
+        pass_id: seg.pass_id || "default",
+        color_hex: seg.color_hex,
+        width_mm: seg.width_mm,
+        opacity: seg.opacity,
+        points: [
+          [seg.x0, seg.y0],
+          [seg.x1, seg.y1],
+        ],
+        x: seg.x1,
+        y: seg.y1,
+      };
+      return;
+    }
+    chain.points.push([seg.x1, seg.y1]);
+    chain.x = seg.x1;
+    chain.y = seg.y1;
+  }
+
+  _flushStrokeChain() {
+    const chain = this._strokeChain;
+    this._strokeChain = null;
+    if (!chain || chain.points.length < 2) return;
+    const layer = this._layerFor({ pass_id: chain.pass_id, pen_id: chain.pen_id });
+    this._strokePolyline(layer.ctx, chain, this.layerScale, 1);
+  }
+
+  /** Stroke a polyline chain with nib-aware rendering and round joins. */
+  _strokePolyline(ctx, chain, s, frac) {
+    const pen = this._penInfo.get(chain.pen_id) || {};
     const nib = pen.nib_type || "fineliner";
-    const width = (seg.width_mm || pen.width_mm || 0.4) * s;
-    const opacity = seg.opacity ?? pen.opacity ?? 1;
-    const x1 = seg.x0 + (seg.x1 - seg.x0) * frac;
-    const y1 = seg.y0 + (seg.y1 - seg.y0) * frac;
+    const width = (chain.width_mm || pen.width_mm || 0.4) * s;
+    const opacity = chain.opacity ?? pen.opacity ?? 1;
+    const pts = chain.points;
+    if (pts.length < 2) return;
+
+    // Optional frac only affects the final segment (live partial)
+    let drawPts = pts;
+    if (frac < 1 && pts.length >= 2) {
+      const a = pts[pts.length - 2];
+      const b = pts[pts.length - 1];
+      drawPts = pts.slice(0, -1).concat([[a[0] + (b[0] - a[0]) * frac, a[1] + (b[1] - a[1]) * frac]]);
+    }
 
     const stroke = (w, alpha, cap) => {
-      ctx.strokeStyle = this._rgba(seg.color_hex || pen.color_hex || "#111111", alpha);
+      ctx.strokeStyle = this._rgba(chain.color_hex || pen.color_hex || "#111111", alpha);
       ctx.lineWidth = Math.max(0.75, w);
       ctx.lineCap = cap;
+      ctx.lineJoin = "round";
       ctx.beginPath();
-      ctx.moveTo(seg.x0 * s, seg.y0 * s);
-      ctx.lineTo(x1 * s, y1 * s);
+      ctx.moveTo(drawPts[0][0] * s, drawPts[0][1] * s);
+      for (let i = 1; i < drawPts.length; i++) {
+        ctx.lineTo(drawPts[i][0] * s, drawPts[i][1] * s);
+      }
       ctx.stroke();
     };
 
     if (nib === "highlighter") {
       stroke(width * 1.15, Math.min(opacity, 0.5), "butt");
     } else if (nib === "brush" || nib === "marker") {
-      // Soft edge: wide faint pass under a narrower solid core
       stroke(width * 1.35, opacity * 0.35, "round");
       stroke(width * 0.85, opacity, "round");
     } else {
       stroke(width, opacity, "round");
     }
+  }
+
+  /** Stroke one pen-down segment (partial preview). */
+  _strokeSegment(ctx, seg, s, frac) {
+    this._strokePolyline(
+      ctx,
+      {
+        pen_id: seg.pen_id,
+        color_hex: seg.color_hex,
+        width_mm: seg.width_mm,
+        opacity: seg.opacity,
+        points: [
+          [seg.x0, seg.y0],
+          [seg.x1, seg.y1],
+        ],
+      },
+      s,
+      frac
+    );
   }
 
   /* ---------------- frame composition ---------------- */
@@ -522,6 +669,61 @@ class EmulatorPlayer {
 
     // Pen head
     this._drawPenHead(ctx, o, s, partial);
+    ctx.restore();
+
+    if (this.loupeOn && this._pointerCss) {
+      this._drawLoupe(ctx);
+    }
+  }
+
+  _drawLoupe(ctx) {
+    const p = this._pointerCss;
+    const r = this.loupeRadiusCss * this.dpr;
+    const factor = this.loupeFactor;
+    const W = this.canvas.width;
+    const H = this.canvas.height;
+    const px = p.x * this.dpr;
+    const py = p.y * this.dpr;
+
+    // Snapshot current frame into an offscreen buffer, then magnify into the clip
+    const snap = document.createElement("canvas");
+    snap.width = W;
+    snap.height = H;
+    snap.getContext("2d").drawImage(this.canvas, 0, 0);
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(px, py, r, 0, Math.PI * 2);
+    ctx.clip();
+    ctx.fillStyle = this._theme.paper;
+    ctx.fillRect(px - r, py - r, r * 2, r * 2);
+    ctx.drawImage(
+      snap,
+      px - r / factor,
+      py - r / factor,
+      (r * 2) / factor,
+      (r * 2) / factor,
+      px - r,
+      py - r,
+      r * 2,
+      r * 2
+    );
+    ctx.restore();
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(px, py, r, 0, Math.PI * 2);
+    ctx.strokeStyle = "rgba(17,17,17,0.55)";
+    ctx.lineWidth = 2 * this.dpr;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(px - 8 * this.dpr, py);
+    ctx.lineTo(px + 8 * this.dpr, py);
+    ctx.moveTo(px, py - 8 * this.dpr);
+    ctx.lineTo(px, py + 8 * this.dpr);
+    ctx.strokeStyle = "rgba(17,17,17,0.35)";
+    ctx.lineWidth = 1 * this.dpr;
+    ctx.stroke();
     ctx.restore();
   }
 
@@ -637,8 +839,9 @@ class EmulatorPlayer {
     if (this.onTime) this.onTime(this.time, this.duration, this.playing);
     if (this.plan && this.plan.stats) {
       const s = this.plan.stats;
+      const loupe = this.loupeOn ? " · loupe" : "";
       this._stats(
-        `${this.applied}/${this.plan.segments.length} segs · ${s.stroke_count} paths · ${s.pen_ids.length} pens`
+        `${this.applied}/${this.plan.segments.length} segs · ${s.stroke_count} paths · ${s.pen_ids.length} pens · zoom ${this.zoom.toFixed(2)}×${loupe}`
       );
     }
   }

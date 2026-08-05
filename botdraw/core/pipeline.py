@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from botdraw.core.jobs import artifact_dir, save_job
+from botdraw.core.jobs import artifact_dir, load_job, save_job
 from botdraw.core.models import (
     JobRecord,
     JobStatus,
@@ -69,6 +69,7 @@ def render_from_layered(
     params_extra: dict | None = None,
     pen_up_speed_mm_s: float = DEFAULT_PEN_UP_MM_S,
     pen_down_speed_mm_s: float = DEFAULT_PEN_DOWN_MM_S,
+    job_id: str | None = None,
 ) -> tuple[JobRecord, dict, dict]:
     """Optimize a pre-built LayeredSVG and write job artifacts (same shape as render_job)."""
     paper_enum = paper if isinstance(paper, PaperSize) else PaperSize(paper)
@@ -89,22 +90,59 @@ def render_from_layered(
         "params_extra": params_extra or {},
         "paper_mm": list(paper_dims(paper_enum, orientation_enum)),
     }
-    job = JobRecord(
-        app=app,
-        style_id=style_id,
-        seed=seed,
-        quality=quality_enum,
-        palette_id=palette_id,
-        paper=paper_enum,
-        orientation=orientation_enum,
-        params={
-            "density": density,
-            "pen_up_speed_mm_s": pen_up_speed_mm_s,
-            "pen_down_speed_mm_s": pen_down_speed_mm_s,
-            **(params_extra or {}),
-        },
-        status=JobStatus.RENDERING,
-    )
+    if job_id:
+        try:
+            job = load_job(job_id)
+            job.app = app
+            job.style_id = style_id
+            job.seed = seed
+            job.quality = quality_enum
+            job.palette_id = palette_id
+            job.paper = paper_enum
+            job.orientation = orientation_enum
+            job.params = {
+                "density": density,
+                "pen_up_speed_mm_s": pen_up_speed_mm_s,
+                "pen_down_speed_mm_s": pen_down_speed_mm_s,
+                **(params_extra or {}),
+            }
+            job.status = JobStatus.RENDERING
+            job.error = None
+        except Exception:
+            job = JobRecord(
+                id=job_id,
+                app=app,
+                style_id=style_id,
+                seed=seed,
+                quality=quality_enum,
+                palette_id=palette_id,
+                paper=paper_enum,
+                orientation=orientation_enum,
+                params={
+                    "density": density,
+                    "pen_up_speed_mm_s": pen_up_speed_mm_s,
+                    "pen_down_speed_mm_s": pen_down_speed_mm_s,
+                    **(params_extra or {}),
+                },
+                status=JobStatus.RENDERING,
+            )
+    else:
+        job = JobRecord(
+            app=app,
+            style_id=style_id,
+            seed=seed,
+            quality=quality_enum,
+            palette_id=palette_id,
+            paper=paper_enum,
+            orientation=orientation_enum,
+            params={
+                "density": density,
+                "pen_up_speed_mm_s": pen_up_speed_mm_s,
+                "pen_down_speed_mm_s": pen_down_speed_mm_s,
+                **(params_extra or {}),
+            },
+            status=JobStatus.RENDERING,
+        )
     save_job(job)
     try:
         palette = load_palette(palette_id)
@@ -120,6 +158,7 @@ def render_from_layered(
         motion_path = out / "motion_plan.json"
         plan.save(motion_path)
         layers = layers_summary(layered, palette)
+        (out / "layered.json").write_text(layered.model_dump_json(indent=2), encoding="utf-8")
         (out / "layers.json").write_text(json.dumps(layers, indent=2), encoding="utf-8")
         (out / "settings.json").write_text(json.dumps(settings, indent=2), encoding="utf-8")
         (out / "palette.json").write_text(palette.model_dump_json(indent=2), encoding="utf-8")

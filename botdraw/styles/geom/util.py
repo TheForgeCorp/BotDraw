@@ -43,18 +43,17 @@ def rect_outline(x0: float, y0: float, x1: float, y1: float) -> list[tuple[float
 MARK_KINDS = ("circle", "square", "diamond", "triangle", "star", "cross")
 
 
-def mark_polyline(
+def mark_polylines(
     cx: float,
     cy: float,
     size: float,
     kind: str = "circle",
-) -> list[tuple[float, float]]:
+) -> list[tuple[list[tuple[float, float]], bool]]:
     """
-    Closed (or multi-segment via repeated points) glyph centered at (cx, cy).
+    Return list of (points, closed) glyphs centered at (cx, cy).
 
-    `size` is a characteristic radius in the same units as cx/cy.
-    Unknown kinds fall back to circle. Cross returns a single polyline that
-    traces both arms (open arms joined through the center).
+    `size` is characteristic radius in the same units as cx/cy.
+    Cross yields two open strokes (H + V); other kinds one closed outline.
     """
     s = max(0.05, float(size))
     k = (kind or "circle").lower().strip()
@@ -62,47 +61,64 @@ def mark_polyline(
         k = "circle"
 
     if k == "circle":
-        return circle_points(cx, cy, s, n=16, closed=True)
+        return [(circle_points(cx, cy, s, n=20, closed=True), True)]
 
     if k == "square":
-        return rect_outline(cx - s * 0.75, cy - s * 0.75, cx + s * 0.75, cy + s * 0.75)
+        return [(rect_outline(cx - s * 0.75, cy - s * 0.75, cx + s * 0.75, cy + s * 0.75), True)]
 
     if k == "diamond":
         return [
-            (cx, cy - s),
-            (cx + s, cy),
-            (cx, cy + s),
-            (cx - s, cy),
-            (cx, cy - s),
+            (
+                [
+                    (cx, cy - s),
+                    (cx + s, cy),
+                    (cx, cy + s),
+                    (cx - s, cy),
+                    (cx, cy - s),
+                ],
+                True,
+            )
         ]
 
     if k == "triangle":
         return [
-            (cx, cy - s),
-            (cx + s * 0.866, cy + s * 0.5),
-            (cx - s * 0.866, cy + s * 0.5),
-            (cx, cy - s),
+            (
+                [
+                    (cx, cy - s),
+                    (cx + s * 0.866, cy + s * 0.5),
+                    (cx - s * 0.866, cy + s * 0.5),
+                    (cx, cy - s),
+                ],
+                True,
+            )
         ]
 
     if k == "star":
-        # 5-point star (outer/inner radius)
         pts: list[tuple[float, float]] = []
-        outer, inner = s, s * 0.4
+        outer, inner = s, s * 0.45
         for i in range(10):
             r = outer if i % 2 == 0 else inner
             ang = -math.pi / 2 + i * math.pi / 5
             pts.append((cx + r * math.cos(ang), cy + r * math.sin(ang)))
         pts.append(pts[0])
-        return pts
+        return [(pts, True)]
 
-    # cross — horizontal then vertical through center (one continuous stroke)
+    # cross — two separate strokes, no retrace
     return [
-        (cx - s, cy),
-        (cx + s, cy),
-        (cx, cy),
-        (cx, cy - s),
-        (cx, cy + s),
+        ([(cx - s, cy), (cx + s, cy)], False),
+        ([(cx, cy - s), (cx, cy + s)], False),
     ]
+
+
+def mark_polyline(
+    cx: float,
+    cy: float,
+    size: float,
+    kind: str = "circle",
+) -> list[tuple[float, float]]:
+    """Single-polyline convenience wrapper (first stroke of mark_polylines)."""
+    strokes = mark_polylines(cx, cy, size, kind)
+    return strokes[0][0] if strokes else []
 
 
 def hatch_rect(

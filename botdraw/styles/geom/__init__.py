@@ -16,6 +16,7 @@ from botdraw.styles.geom.util import (
     hatch_rect,
     margin_box,
     mark_polyline,
+    mark_polylines,
     rect_outline,
     sample_polyline,
 )
@@ -31,6 +32,7 @@ __all__ = [
     "hatch_rect",
     "margin_box",
     "mark_polyline",
+    "mark_polylines",
     "marching_squares",
     "poisson_disc",
     "rect_outline",
