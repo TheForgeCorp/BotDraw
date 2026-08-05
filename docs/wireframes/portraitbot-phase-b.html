@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PortraitBot Phase B — Wireframe Plan</title>
+  <style>
+    :root {
+      --ink: #111;
+      --muted: #555;
+      --line: #111;
+      --dash: #888;
+      --bg: #fff;
+      --fill: #f3f3f3;
+      --note: #0a5;
+      --warn: #a50;
+      --font: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 13px/1.45 var(--font);
+      color: var(--ink);
+      background: var(--bg);
+      padding: 24px 20px 80px;
+      max-width: 1100px;
+    }
+    h1 { font-size: 18px; font-weight: 700; margin: 0 0 8px; letter-spacing: -0.02em; }
+    h2 {
+      font-size: 14px; font-weight: 700; margin: 36px 0 10px;
+      padding-top: 20px; border-top: 2px solid var(--ink);
+    }
+    h3 { font-size: 12px; font-weight: 700; margin: 18px 0 8px; text-transform: uppercase; letter-spacing: 0.06em; }
+    p, li { color: var(--ink); }
+    .muted { color: var(--muted); }
+    .lead { max-width: 72ch; margin: 0 0 16px; }
+    .meta {
+      display: flex; flex-wrap: wrap; gap: 8px 16px;
+      margin: 0 0 24px; padding: 10px 12px; border: 1px solid var(--ink);
+      background: var(--fill);
+    }
+    .meta span { white-space: nowrap; }
+    .legend {
+      display: flex; flex-wrap: wrap; gap: 12px 20px;
+      margin: 0 0 24px; font-size: 11px;
+    }
+    .legend i {
+      display: inline-block; width: 14px; height: 14px;
+      border: 1px solid var(--ink); vertical-align: -2px; margin-right: 4px;
+    }
+    .legend .box { background: var(--fill); }
+    .legend .stage { background: #fff; border-style: dashed; }
+    .legend .ann { background: #e8ffe8; border-color: var(--note); }
+    .legend .gate { background: #fff8e8; border-color: var(--warn); }
+
+    /* Wireframe primitives */
+    .wf {
+      border: 2px solid var(--ink);
+      background: #fff;
+      margin: 0 0 16px;
+      position: relative;
+    }
+    .wf-label {
+      position: absolute; top: -9px; left: 10px;
+      background: #fff; padding: 0 6px;
+      font-size: 10px; font-weight: 700; letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .row { display: flex; gap: 0; min-height: 320px; }
+    .rail {
+      width: 220px; flex-shrink: 0;
+      border-right: 2px solid var(--ink);
+      padding: 20px 10px 12px;
+      background: var(--fill);
+    }
+    .stage {
+      flex: 1; padding: 20px 12px 12px;
+      display: flex; flex-direction: column; gap: 8px;
+      min-width: 0;
+    }
+    .block {
+      border: 1px solid var(--ink);
+      background: #fff;
+      padding: 8px;
+      margin: 0 0 8px;
+      font-size: 11px;
+    }
+    .block.dashed { border-style: dashed; color: var(--muted); }
+    .block.group { background: #ebebeb; padding: 6px; }
+    .block .title { font-weight: 700; margin-bottom: 4px; font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase; }
+    .line {
+      border: 1px solid var(--dash);
+      height: 22px; margin: 3px 0; background: #fff;
+      display: flex; align-items: center; padding: 0 6px;
+      font-size: 10px; color: var(--muted);
+    }
+    .btn-w {
+      border: 1.5px solid var(--ink);
+      padding: 6px 8px; text-align: center;
+      font-size: 10px; font-weight: 700;
+      margin: 4px 0; background: #fff;
+    }
+    .btn-w.primary { background: var(--ink); color: #fff; }
+    .btn-w.ghost { border-style: dashed; color: var(--muted); font-weight: 500; }
+    .seg {
+      display: flex; border: 1.5px solid var(--ink);
+      margin: 0 0 8px; align-self: flex-start;
+    }
+    .seg span {
+      padding: 5px 12px; font-size: 10px; font-weight: 700;
+      border-right: 1px solid var(--ink);
+    }
+    .seg span:last-child { border-right: none; }
+    .seg span.on { background: var(--ink); color: #fff; }
+    .paper {
+      flex: 1; border: 2px dashed var(--dash);
+      background: #fafafa;
+      min-height: 220px;
+      display: flex; align-items: center; justify-content: center;
+      flex-direction: column; gap: 6px;
+      position: relative;
+      margin: 0 0 8px;
+    }
+    .paper .cue { color: var(--muted); font-size: 11px; text-align: center; padding: 8px; }
+    .paper .anno {
+      position: absolute; font-size: 9px; color: var(--note);
+      background: #e8ffe8; border: 1px solid var(--note); padding: 2px 5px;
+    }
+    .craft {
+      border: 1.5px dashed var(--dash);
+      padding: 6px 10px; font-size: 10px; color: var(--muted);
+      text-align: center;
+    }
+    .callout {
+      border: 1.5px solid var(--note);
+      background: #e8ffe8;
+      padding: 10px 12px;
+      margin: 0 0 16px;
+      font-size: 12px;
+    }
+    .callout.warn {
+      border-color: var(--warn);
+      background: #fff8e8;
+    }
+    .callout strong { display: block; margin-bottom: 4px; }
+    .grid2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    @media (max-width: 800px) {
+      .grid2 { grid-template-columns: 1fr; }
+      .row { flex-direction: column; }
+      .rail { width: 100%; border-right: none; border-bottom: 2px solid var(--ink); }
+    }
+    .swatches { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+    .swatch {
+      border: 1px solid var(--ink); padding: 4px 8px; font-size: 10px;
+    }
+    .swatch.teal { border-color: #0a7; color: #0a7; }
+    .swatch.orange { border-color: #c60; color: #c60; }
+    .swatch.heat { border-color: #a30; color: #a30; }
+    table {
+      width: 100%; border-collapse: collapse; font-size: 11px;
+      margin: 0 0 16px;
+    }
+    th, td {
+      border: 1px solid var(--ink); padding: 6px 8px; text-align: left; vertical-align: top;
+    }
+    th { background: var(--fill); font-weight: 700; }
+    .toc a { color: var(--ink); }
+    .toc li { margin: 2px 0; }
+    footer {
+      margin-top: 40px; padding-top: 12px; border-top: 1px solid var(--ink);
+      font-size: 11px; color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+
+  <h1>PortraitBot Phase B — Wireframe Plan</h1>
+  <p class="lead">
+    Low-fidelity HTML wireframes for the physical-world photo lane before visual mockup.
+    Goal: <strong>Source → Ingest (gate) → bare XY / ShadeField</strong>. Restyle (Vector) is post-gate only.
+    Operate mode Dev Lab shell per <code>DESIGN.md</code> — paper is the product; rail is inspector.
+  </p>
+
+  <div class="meta">
+    <span><strong>Surface:</strong> PortraitBot Dev Panel</span>
+    <span><strong>Fidelity:</strong> Wireframe only (no tokens / mock polish)</span>
+    <span><strong>Build next:</strong> Styled HTML mockup</span>
+    <span><strong>Out of scope:</strong> G-code, GenArt, venue Persuade</span>
+  </div>
+
+  <div class="legend">
+    <span><i class="box"></i> Control / rail group</span>
+    <span><i class="stage"></i> Paper stage</span>
+    <span><i class="ann"></i> Annotation / intent</span>
+    <span><i class="gate"></i> Quality gate</span>
+  </div>
+
+  <ol class="toc">
+    <li><a href="#shell">1. App shell</a></li>
+    <li><a href="#source">2. Source stage</a></li>
+    <li><a href="#ingest">3. Ingest stage (gate cockpit)</a></li>
+    <li><a href="#vector">4. Vector stage (post-gate)</a></li>
+    <li><a href="#rail">5. Rail IA (Phase B)</a></li>
+    <li><a href="#shade">6. Dual channel — structure + ShadeField</a></li>
+    <li><a href="#states">7. States &amp; checklist</a></li>
+    <li><a href="#mock">8. Mockup brief (next)</a></li>
+  </ol>
+
+  <!-- 1. SHELL -->
+  <h2 id="shell">1. App shell</h2>
+  <div class="callout">
+    <strong>Preserve incumbent chrome</strong>
+    Top app tabs · left rail (~300px) · desk + paper · floating craft-bar.
+    Stage segment <code>Source | Ingest | Vector</code> stays; Phase B changes <em>defaults and what each stage is for</em>, not a new shell.
+  </div>
+
+  <div class="wf">
+    <span class="wf-label">Shell</span>
+    <div class="block" style="margin:12px 12px 0; border-style:dashed;">
+      <div class="title">Top — App tabs</div>
+      [ GenArt ] [ <strong>Portrait</strong> ] [ Letters ] [ R&amp;D ] [ … ]
+    </div>
+    <div class="row" style="min-height:280px; margin:0 12px 12px; border:2px solid #111; border-top:none;">
+      <div class="rail">
+        <div class="block dashed">Rail / inspector<br/>~300px · groups · Advanced</div>
+        <div class="btn-w primary">Primary CTA zone</div>
+      </div>
+      <div class="stage">
+        <div class="seg">
+          <span>Source</span><span class="on">Ingest</span><span>Vector</span>
+        </div>
+        <div class="paper">
+          <div class="cue">Paper sheet (hero)</div>
+          <span class="anno" style="top:8px;right:8px;">One composition — not a dashboard</span>
+        </div>
+        <div class="craft">Craft-bar: zoom · transport · Export…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 2. SOURCE -->
+  <h2 id="source">2. Source stage</h2>
+  <p class="muted lead">Job: get a framed photo of a person or object onto the sheet. No vector judgment here.</p>
+
+  <div class="wf">
+    <span class="wf-label">Source</span>
+    <div class="row">
+      <div class="rail">
+        <div class="block group">
+          <div class="title">Photo</div>
+          <div class="btn-w">Choose photo…</div>
+          <div class="line">Drop zone (wire: enable DnD)</div>
+          <div class="line">filename.jpg · 1280px max upload</div>
+        </div>
+        <div class="block group">
+          <div class="title">Frame</div>
+          <div class="line">[x] Auto frame</div>
+          <div class="line">[ Reset frame ]</div>
+          <div class="line">Crop overlay on sheet</div>
+        </div>
+        <div class="block group">
+          <div class="title">Mode</div>
+          <div class="line">photo · sketch · lineart · drawing</div>
+        </div>
+        <div class="btn-w primary">Ingest →</div>
+        <div class="btn-w ghost">Vectorize (defer)</div>
+      </div>
+      <div class="stage">
+        <div class="seg">
+          <span class="on">Source</span><span>Ingest</span><span>Vector</span>
+        </div>
+        <div class="paper">
+          <div class="cue">Photo preview<br/>+ crop rectangle</div>
+          <span class="anno" style="bottom:10px;left:10px;">Empty: “Drop a photo”</span>
+          <span class="anno" style="top:10px;left:10px;">Subject fills frame</span>
+        </div>
+        <div class="craft">Export disabled until ingest/vector ready</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout">
+    <strong>Source exit criteria</strong>
+    Photo loaded · crop sensible · operator presses <strong>Ingest</strong> (not Vectorize).
+    Landing stage after success = <strong>Ingest</strong>.
+  </div>
+
+  <!-- 3. INGEST -->
+  <h2 id="ingest">3. Ingest stage — quality gate cockpit</h2>
+  <p class="muted lead">
+    Primary Phase B surface. Bare structure (± tone). Raw SVG download.
+    No style cosmetics. This is where likeness is judged.
+  </p>
+
+  <div class="wf">
+    <span class="wf-label">Ingest</span>
+    <div class="row" style="min-height:420px;">
+      <div class="rail">
+        <div class="block group">
+          <div class="title">Line source</div>
+          <div class="line">classic (default gate)</div>
+          <div class="line">neural (A/B later)</div>
+          <div class="line">auto</div>
+        </div>
+        <div class="block group">
+          <div class="title">Scan mode</div>
+          <div class="line">auto · edges · brightness</div>
+          <div class="line">centerline · color_bands</div>
+        </div>
+        <div class="block group">
+          <div class="title">Structure / tone</div>
+          <div class="line">[x] Structure edges</div>
+          <div class="line">[ ] Tone / hatch (off for gate-1)</div>
+          <div class="line">Simplify 1–3</div>
+          <div class="line">Contrast · posterize</div>
+        </div>
+        <div class="block group" style="border-color:#a50;background:#fff8e8;">
+          <div class="title">Gate checklist</div>
+          <div class="line">[ ] Identity (structure alone)</div>
+          <div class="line">[ ] Noise / travel OK</div>
+          <div class="line">[ ] Path budget OK</div>
+          <div class="line">[ ] Crop OK</div>
+          <div class="line">[ ] Classic-only pass</div>
+          <div class="line muted">Tone-on = gate-2 later</div>
+        </div>
+        <div class="btn-w primary">Re-ingest</div>
+        <div class="btn-w">Download Raw SVG</div>
+        <div class="btn-w ghost">Apply restyle → (locked until gate)</div>
+      </div>
+      <div class="stage">
+        <div class="seg">
+          <span>Source</span><span class="on">Ingest</span><span>Vector</span>
+        </div>
+        <div class="paper" style="min-height:280px;">
+          <div class="cue">
+            Bare polylines on paper<br/>
+            <span class="swatches">
+              <span class="swatch teal">Teal = structure</span>
+              <span class="swatch orange">Orange = hatch (opt)</span>
+              <span class="swatch heat">Underlay = scan / heatmap</span>
+            </span>
+          </div>
+          <span class="anno" style="top:8px;right:8px;">Default land here after Ingest</span>
+          <span class="anno" style="bottom:8px;left:8px;">Hatch OFF first</span>
+        </div>
+        <div class="block" style="margin:0;">
+          <div class="title">Ingest toggles (on-sheet strip)</div>
+          Underlay: none · photo · scan · tone heatmap &nbsp;|&nbsp; Raw SVG link &nbsp;|&nbsp; edge/hatch counts
+        </div>
+        <div class="craft">Zoom / loupe only — transport secondary on Ingest</div>
+      </div>
+    </div>
+  </div>
+
+  <h3>Ingest annotations</h3>
+  <table>
+    <tr><th>Region</th><th>Shows</th><th>Operator action</th></tr>
+    <tr>
+      <td>Paper</td>
+      <td>edge_polylines_mm (± hatch_polylines_mm)</td>
+      <td>Toggle hatch; switch underlay; loupe noisy areas</td>
+    </tr>
+    <tr>
+      <td>Checklist</td>
+      <td>Pass/fail gates (manual or future semi-auto counts)</td>
+      <td>Must pass structure before Vector</td>
+    </tr>
+    <tr>
+      <td>Raw SVG</td>
+      <td>Stroke-only layered SVG (gate artifact)</td>
+      <td>Download for gold-set archive</td>
+    </tr>
+    <tr>
+      <td>Stats line</td>
+      <td>edge_count · hatch_count · path budget · scan · line_source</td>
+      <td>Compare to quality band</td>
+    </tr>
+  </table>
+
+  <!-- 4. VECTOR -->
+  <h2 id="vector">4. Vector stage — post-gate only</h2>
+  <div class="callout warn">
+    <strong>Not the Phase B judge</strong>
+    Vector = one restyle confirmation after Ingest passes (<code>reuse_ingest</code>).
+    Wireframe shows style picker available but secondary.
+  </div>
+
+  <div class="wf">
+    <span class="wf-label">Vector</span>
+    <div class="row">
+      <div class="rail">
+        <div class="block group">
+          <div class="title">Restyle (Phase B+)</div>
+          <div class="line">portrait_linework (default)</div>
+          <div class="line">hatch (simple)</div>
+          <div class="line dashed">other styles — frozen</div>
+        </div>
+        <div class="block group">
+          <div class="title">Reuse ingest</div>
+          <div class="line">ingest_id: abc123…</div>
+          <div class="line">[x] reuse (no re-trace)</div>
+        </div>
+        <div class="btn-w primary">Apply</div>
+        <div class="btn-w">Export SVG / Motion / Pack</div>
+      </div>
+      <div class="stage">
+        <div class="seg">
+          <span>Source</span><span>Ingest</span><span class="on">Vector</span>
+        </div>
+        <div class="paper">
+          <div class="cue">Styled job emulator<br/>(pens · motion replay)</div>
+          <span class="anno" style="top:8px;left:8px;">Confirm subject still reads</span>
+        </div>
+        <div class="craft">Play / pause / speed · Export…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 5. RAIL -->
+  <h2 id="rail">5. Rail IA — Phase B priority</h2>
+  <div class="grid2">
+    <div class="block group">
+      <div class="title">Common path (always visible)</div>
+      <ol style="margin:6px 0 0; padding-left:18px; font-size:11px;">
+        <li>Photo upload / frame</li>
+        <li>Quality (booth-balanced default)</li>
+        <li>Line source → classic</li>
+        <li>Scan mode → auto/edges</li>
+        <li>Tone hatch on/off</li>
+        <li><strong>Ingest</strong> primary CTA</li>
+        <li>Gate checklist</li>
+      </ol>
+    </div>
+    <div class="block dashed">
+      <div class="title">Advanced (collapsed)</div>
+      <ul style="margin:6px 0 0; padding-left:18px; font-size:11px;">
+        <li>Posterize / contrast / simplify</li>
+        <li>Ensemble (off for booth gold)</li>
+        <li>AI review → <strong>off</strong> for gate</li>
+        <li>Ornament / line type — frozen</li>
+        <li>Neural when weights present</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- 6. SHADE -->
+  <h2 id="shade">6. Dual channel — structure + ShadeField</h2>
+  <p class="lead muted">
+    Soft shade without contours becomes mesh metadata → stroke math.
+    Wireframe must make both channels visible and independently toggleable.
+  </p>
+
+  <div class="grid2">
+    <div class="wf" style="padding:12px;">
+      <span class="wf-label">Structure channel</span>
+      <div class="paper" style="min-height:140px;">
+        <div class="cue">Contour / edge polylines<br/><span class="swatch teal">identity</span></div>
+      </div>
+      <div class="block" style="margin:0;">edge_polylines_mm · scan · line_source</div>
+    </div>
+    <div class="wf" style="padding:12px;">
+      <span class="wf-label">ShadeField channel</span>
+      <div class="paper" style="min-height:140px;">
+        <div class="cue">Mesh / tone heatmap<br/>→ hatch density<br/><span class="swatch heat">gradient → pitch</span></div>
+      </div>
+      <div class="block" style="margin:0;">
+        tone_codes · pitch_mm · penmanship<br/>
+        (hatch / cross / stipple / scribble / none)
+      </div>
+    </div>
+  </div>
+
+  <table>
+    <tr><th>UI control</th><th>ShadeField field</th><th>Plotter effect</th></tr>
+    <tr><td>Tone / hatch toggle</td><td>emit hatch or hide</td><td>Show/hide shade strokes</td></tr>
+    <tr><td>Tone heatmap underlay</td><td>tone_codes / ink</td><td>Debug density map</td></tr>
+    <tr><td>Penmanship (later)</td><td>penmanship per cell/region</td><td>Change mark language without re-ingest edges</td></tr>
+    <tr><td>Pitch / density (later)</td><td>pitch_mm from ink</td><td>Darker → tighter lines</td></tr>
+  </table>
+
+  <div class="callout">
+    <strong>Wireframe rule</strong>
+    Gate-1: structure only. Gate-2: turn tone on; heatmap explains density; soft cheeks/cloth must read as form without burying edges.
+  </div>
+
+  <!-- 7. STATES -->
+  <h2 id="states">7. States &amp; checklist</h2>
+  <table>
+    <tr><th>State</th><th>Sheet</th><th>Rail / CTA</th><th>Notes</th></tr>
+    <tr>
+      <td>Empty</td>
+      <td>White + “Drop a photo”</td>
+      <td>Ingest disabled</td>
+      <td>Source segment</td>
+    </tr>
+    <tr>
+      <td>Source ready</td>
+      <td>Photo + crop</td>
+      <td>Ingest enabled</td>
+      <td></td>
+    </tr>
+    <tr>
+      <td>Ingest loading</td>
+      <td>Shimmer / busy stats</td>
+      <td>CTA busy</td>
+      <td></td>
+    </tr>
+    <tr>
+      <td>Ingest ready</td>
+      <td>Bare polylines</td>
+      <td>Re-ingest · Raw SVG · checklist</td>
+      <td><strong>Default Phase B land</strong></td>
+    </tr>
+    <tr>
+      <td>Gate fail</td>
+      <td>Same preview</td>
+      <td>Checklist shows fails; Apply locked</td>
+      <td>Tweak knobs → Re-ingest</td>
+    </tr>
+    <tr>
+      <td>Gate pass</td>
+      <td>Bare polylines</td>
+      <td>Apply / Vector unlocked</td>
+      <td></td>
+    </tr>
+    <tr>
+      <td>Vector ready</td>
+      <td>Styled emulator</td>
+      <td>Export enabled</td>
+      <td>Post-gate smoke only</td>
+    </tr>
+    <tr>
+      <td>Error</td>
+      <td>Prior sheet kept</td>
+      <td>Message in stats</td>
+      <td>Controls usable</td>
+    </tr>
+  </table>
+
+  <h3>Operator loop (wire)</h3>
+  <pre style="border:1px solid #111;padding:12px;background:#f3f3f3;font-size:11px;overflow:auto;">Source: upload + frame
+    → Ingest (classic, hatch OFF)
+    → checklist structure
+    → [optional] hatch ON + heatmap (tone gate)
+    → Raw SVG archive
+    → Vector Apply (reuse_ingest, linework only)
+    → Export</pre>
+
+  <!-- 8. MOCKUP -->
+  <h2 id="mock">8. Mockup brief (next build)</h2>
+  <div class="callout warn">
+    <strong>This file is not the mockup</strong>
+    Next HTML mockup applies <code>DESIGN.md</code> tokens (desk, paper shadow, craft-bar, rail groups)
+    without changing the wireframe IA above.
+  </div>
+  <ul>
+    <li>Implement as static HTML mock (or extend Dev Lab with Phase B defaults) — still Operate mode.</li>
+    <li>Defaults: land on <strong>Ingest</strong> after ingest; AI off; classic line source; hatch off for first paint.</li>
+    <li>Visible gate checklist (can start as static checklist UI; scoring can stay manual).</li>
+    <li>Dual-channel legend + underlay controls on Ingest sheet.</li>
+    <li>Do not redesign GenArt / Letters / top chrome.</li>
+    <li>Mobile: rail stacks above stage (existing ≤900px behavior).</li>
+  </ul>
+
+  <h3>Anti-goals for mockup</h3>
+  <ul>
+    <li>No new permanent strip stealing paper space beyond existing stage-seg.</li>
+    <li>No style gallery expansion in Phase B mock.</li>
+    <li>No G-code / hardware panels.</li>
+    <li>No Persuade / venue chrome.</li>
+  </ul>
+
+  <footer>
+    BotDraw · PortraitBot Phase B wireframe plan · docs/wireframes/portraitbot-phase-b.html<br/>
+    Follows research plan: three lanes · photo→XY first · ShadeField mesh · restyle after gate.
+  </footer>
+
+</body>
+</html>
