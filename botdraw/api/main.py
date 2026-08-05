@@ -8,7 +8,7 @@ from typing import Any, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -17,7 +17,15 @@ from botdraw.core.jobs import list_jobs, load_job
 from botdraw.core.models import Orientation, PaperSize, QualityPreset
 from botdraw.core.pipeline import render_job
 from botdraw.handwriting import load_samples, render_with_clone, save_samples
-from botdraw.letters import render_letter
+from botdraw.letters import (
+    LetterLayerSpec,
+    LineGeom,
+    Margins,
+    SnapSpec,
+    render_letter,
+    render_letter_layers,
+)
+from botdraw.letters.fonts import list_fonts
 from botdraw.llm import draft_wedding_letter, is_loaded, try_local_ollama, unload
 from botdraw.palettes import calibrate_pen, create_palette, list_palette_ids, load_palette
 from botdraw.plotter.axidraw import AxiDrawDriverStub
@@ -40,6 +48,16 @@ if WEB_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")
 
 
+@app.middleware("http")
+async def _dev_lab_no_cache(request, call_next):
+    """Avoid stale Dev Lab JS/CSS when iterating on the UI behind a tunnel."""
+    response = await call_next(request)
+    path = request.url.path or ""
+    if path == "/" or path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-store, max-age=0"
+    return response
+
+
 class RenderRequest(BaseModel):
     app: str = "genartbot"
     style_id: str
@@ -52,6 +70,12 @@ class RenderRequest(BaseModel):
     pen_up_speed_mm_s: float = 100.0
     pen_down_speed_mm_s: float = 25.0
     params_extra: dict[str, Any] = {}
+    paper_id: Optional[str] = None
+    paper_color_hex: Optional[str] = None
+    reuse_ingest: bool = False
+    ingest_id: Optional[str] = None
+    force_reingest: bool = False
+    crop: Optional[dict[str, Any]] = None
 
 
 class PaletteSaveRequest(BaseModel):
@@ -59,6 +83,54 @@ class PaletteSaveRequest(BaseModel):
     name: str
     paper_notes: str = ""
     pens: list[dict[str, Any]]
+
+
+class MarginsModel(BaseModel):
+    left: float = 18.0
+    top: float = 18.0
+    right: float = 18.0
+    bottom: float = 18.0
+
+
+class LineGeomModel(BaseModel):
+    x0_mm: float = 20.0
+    y0_mm: float = 40.0
+    x1_mm: float = 120.0
+    y1_mm: float = 40.0
+    style: str = "solid"
+    dash_mm: float = 2.0
+    gap_mm: float = 1.2
+    width_mm: Optional[float] = None
+
+
+class SnapModel(BaseModel):
+    target_layer_id: Optional[str] = None
+    span_index: Optional[int] = None
+    role: str = "underline"
+
+
+class LetterLayerModel(BaseModel):
+    id: str = "layer-0"
+    name: str = "Ink"
+    body: str = ""
+    font_name: str = "simplex"
+    size_mm: float = 4.5
+    pen_id: str = "ink"
+    language: str = "en"
+    translate_from_en: bool = False
+    offset_x_mm: float = 0.0
+    offset_y_mm: float = 0.0
+    kind: str = "ink"
+    tracking: float = 0.15
+    humanize: float = 0.08
+    line_height: Optional[float] = None
+    highlight_words: list[str] = []
+    draw_mode: str = "text"
+    leading_variation: float = 0.12
+    line_angle_deg: float = 0.0
+    line: Optional[LineGeomModel] = None
+    placement: str = "freehand"
+    snap: Optional[SnapModel] = None
 
 
 class LetterRequest(BaseModel):
@@ -69,8 +141,25 @@ class LetterRequest(BaseModel):
     facts: str = ""
     guest_quote: Optional[str] = None
     highlight: bool = True
+    highlight_words: Optional[list[str]] = None
     palette_id: str = "wedding-highlight"
     seed: int = 7
+    paper: str = "A5"
+    letter_type: str = "personal"
+    # Dev Lab default: skip Ollama. Booth / AI draft sets use_llm=true.
+    use_llm: bool = False
+    # If set, skip drafting and vectorize this body only (fast path).
+    body: Optional[str] = None
+    # Letters are already reading-order; greedy linesort is optional.
+    optimize: bool = False
+    size_mm: float = 4.5
+    line_height: Optional[float] = None
+    tracking: float = 0.15
+    humanize: float = 0.08
+    orientation: str = "portrait"
+    font_name: str = "simplex"
+    margins: Optional[MarginsModel] = None
+    layers: Optional[list[LetterLayerModel]] = None
 
 
 class HandwritingSample(BaseModel):
@@ -85,6 +174,19 @@ class CalibrateRequest(BaseModel):
     color_hex: Optional[str] = None
     opacity: Optional[float] = None
     nib_type: Optional[str] = None
+
+
+class LineSaveRequest(BaseModel):
+    id: str
+    name: str
+    line_type: str = "solid"
+    line_spacing_mm: float = 1.2
+    pattern_period_mm: float = 2.0
+    pattern_amplitude_mm: float = 0.8
+    dash_mm: float = 2.0
+    gap_mm: float = 1.2
+    ornament_target: str = "all"
+    notes: str = ""
 
 
 @app.on_event("startup")
@@ -126,6 +228,402 @@ def api_calibrate(body: CalibrateRequest):
     )
 
 
+@app.get("/api/papers")
+def api_papers():
+    from botdraw.paper import list_papers
+
+    return list_papers()
+
+
+class PaperSaveRequest(BaseModel):
+    id: str
+    name: str
+    color_hex: str = "#f7f1e8"
+    finish: str = "matte"
+    size_hint: Optional[str] = "A4"
+    notes: str = ""
+
+
+@app.post("/api/papers/save")
+def api_paper_save(body: PaperSaveRequest):
+    from botdraw.paper import PaperStock, save_paper
+
+    stock = save_paper(
+        PaperStock(
+            id=body.id,
+            name=body.name,
+            color_hex=body.color_hex,
+            finish=body.finish,
+            size_hint=body.size_hint,
+            notes=body.notes,
+        )
+    )
+    return stock.model_dump()
+
+
+@app.delete("/api/papers/{paper_id}")
+def api_paper_delete(paper_id: str):
+    from botdraw.paper import delete_paper
+
+    try:
+        delete_paper(paper_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    return {"ok": True, "id": paper_id}
+
+
+@app.get("/api/lines")
+def api_lines():
+    from botdraw.lines import list_lines
+
+    return list_lines()
+
+
+@app.get("/api/lines/{line_id}/preview.svg")
+def api_line_preview(line_id: str):
+    from botdraw.lines import load_line, preview_svg
+
+    try:
+        stock = load_line(line_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Line not found") from None
+    svg = preview_svg(stock)
+    return Response(content=svg, media_type="image/svg+xml")
+
+
+@app.post("/api/lines/save")
+def api_line_save(body: LineSaveRequest):
+    from botdraw.lines import LineStock, save_line
+
+    stock = LineStock.model_validate(body.model_dump())
+    save_line(stock)
+    return stock.model_dump()
+
+
+@app.delete("/api/lines/{line_id}")
+def api_line_delete(line_id: str):
+    from botdraw.lines import delete_line
+
+    try:
+        delete_line(line_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from None
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Line not found") from None
+    return {"ok": True, "id": line_id}
+
+
+@app.get("/api/portrait/line-types")
+def api_portrait_line_types():
+    from botdraw.portrait.ornament import LINE_TYPES
+
+    return {"line_types": LINE_TYPES}
+
+
+class PortraitIngestRequest(BaseModel):
+    image_mode: str = "photo"
+    quality: QualityPreset = QualityPreset.BOOTH_BALANCED
+    paper: PaperSize = PaperSize.A4
+    crop: Optional[dict[str, Any]] = None
+    auto_frame: bool = True
+    force_reingest: bool = False
+    ingest_id: Optional[str] = None
+    reuse_ingest: bool = False
+    include_preview_png: bool = True
+    posterize_levels: Optional[int] = None
+    filter_speckle: Optional[int] = None
+    min_path_points: Optional[int] = None
+    contrast: Optional[float] = None
+    contour_simplify: Optional[int] = None
+    hatch_size: Optional[int] = None
+    linedraw_jitter: Optional[float] = None
+    ensemble: Optional[bool] = None
+    scan_mode: Optional[str] = None
+    line_source: Optional[str] = None
+    # off | live | studio | true/false (bool true resolves by quality)
+    ai_review: Any = False
+
+
+def _portrait_ingest_response(pv, *, include_preview_png: bool = True) -> dict[str, Any]:
+    from botdraw.portrait.preview import portrait_vector_preview_dict
+
+    return portrait_vector_preview_dict(pv, include_preview_png=include_preview_png)
+
+
+def _parse_ai_review_value(raw: Any, *, quality: str | None = None) -> str:
+    from botdraw.portrait.claude_review import resolve_ai_review_mode
+
+    return resolve_ai_review_mode(raw, quality=quality)
+
+
+def _ingest_knobs_from_body(body: PortraitIngestRequest) -> dict[str, Any]:
+    mode = _parse_ai_review_value(body.ai_review, quality=body.quality.value)
+    return {
+        "posterize_levels": body.posterize_levels,
+        "filter_speckle": body.filter_speckle,
+        "min_path_points": body.min_path_points,
+        "contrast": body.contrast,
+        "contour_simplify": body.contour_simplify,
+        "hatch_size": body.hatch_size,
+        "linedraw_jitter": body.linedraw_jitter,
+        "ensemble": body.ensemble,
+        "scan_mode": body.scan_mode,
+        "line_source": body.line_source,
+        "ai_review": mode,
+        "quality": body.quality.value,
+    }
+
+
+def _merge_ai_scene_into_knobs(
+    knobs: dict[str, Any],
+    *,
+    image_path: str | None = None,
+    image_bytes: bytes | None = None,
+    quality: str | None = None,
+) -> dict[str, Any]:
+    """Optional scene review before resolve_portrait_vector (live + studio)."""
+    from botdraw.portrait.claude_review import (
+        ai_review_wants_scene,
+        maybe_review_and_merge_knobs,
+        resolve_ai_review_mode,
+    )
+
+    q = quality or knobs.get("quality")
+    mode = resolve_ai_review_mode(knobs.get("ai_review"), quality=q)
+    knobs = {**knobs, "ai_review": mode}
+    if not ai_review_wants_scene(mode):
+        return knobs
+    try:
+        import numpy as np
+        from PIL import Image
+
+        from botdraw.styles.image_utils import synthetic_portrait
+
+        if image_bytes:
+            import io
+
+            img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+            img.thumbnail((1280, 1280), Image.Resampling.LANCZOS)
+            rgb = np.asarray(img, dtype=np.float32)
+        elif image_path:
+            img = Image.open(image_path).convert("RGB")
+            img.thumbnail((1280, 1280), Image.Resampling.LANCZOS)
+            rgb = np.asarray(img, dtype=np.float32)
+        else:
+            rgb = synthetic_portrait(512).astype(np.float32)
+        _rgb2, merged = maybe_review_and_merge_knobs(
+            rgb, dict(knobs), enabled=True, mode=mode, quality=q
+        )
+        return merged
+    except Exception:
+        return {**knobs, "ai_review_status": "scene_failed"}
+
+
+@app.post("/api/portrait/ingest")
+def api_portrait_ingest_json(body: PortraitIngestRequest):
+    """Ingest only (no style/ornament) — synthetic face when no upload."""
+    from botdraw.portrait import resolve_portrait_vector
+
+    knobs = _ingest_knobs_from_body(body)
+    knobs = _merge_ai_scene_into_knobs(knobs, quality=body.quality.value)
+    resolve_keys = {
+        "posterize_levels",
+        "filter_speckle",
+        "min_path_points",
+        "contrast",
+        "contour_simplify",
+        "hatch_size",
+        "linedraw_jitter",
+        "ensemble",
+        "scan_mode",
+        "line_source",
+        "max_tone_code",
+        "suppress_background",
+        "protect_subjects",
+        "orientation_deg",
+        "ai_scene",
+    }
+    resolve_kw = {k: knobs[k] for k in resolve_keys if k in knobs}
+    crop = knobs.get("crop", body.crop)
+    auto_frame = knobs.get("auto_frame", body.auto_frame)
+    if body.reuse_ingest and body.ingest_id and not body.force_reingest:
+        pv, hit = resolve_portrait_vector(
+            image_path=None,
+            mode=body.image_mode,
+            quality=body.quality.value,
+            paper=body.paper.value,
+            crop=crop,
+            reuse_ingest=True,
+            ingest_id=body.ingest_id,
+            force_reingest=False,
+            auto_frame=auto_frame if crop is None else False,
+            **resolve_kw,
+        )
+    else:
+        pv, hit = resolve_portrait_vector(
+            image_path=None,
+            mode=body.image_mode,
+            quality=body.quality.value,
+            paper=body.paper.value,
+            crop=crop,
+            reuse_ingest=False,
+            ingest_id=None,
+            force_reingest=body.force_reingest,
+            auto_frame=auto_frame if crop is None else False,
+            **resolve_kw,
+        )
+    data = _portrait_ingest_response(pv, include_preview_png=body.include_preview_png)
+    data["cache_hit"] = hit
+    data["ai_review"] = knobs.get("ai_review") or "off"
+    if knobs.get("ai_review_status"):
+        data["ai_review_status"] = knobs["ai_review_status"]
+    if knobs.get("ai_scene"):
+        data["ai_scene"] = knobs["ai_scene"]
+    return data
+
+
+@app.post("/api/portrait/ingest/upload")
+async def api_portrait_ingest_upload(
+    image_mode: str = Form("photo"),
+    quality: str = Form("booth-balanced"),
+    paper: str = Form("A4"),
+    crop: Optional[str] = Form(None),
+    auto_frame: bool = Form(True),
+    force_reingest: bool = Form(False),
+    ingest_id: Optional[str] = Form(None),
+    reuse_ingest: bool = Form(False),
+    include_preview_png: bool = Form(True),
+    posterize_levels: Optional[int] = Form(None),
+    filter_speckle: Optional[int] = Form(None),
+    min_path_points: Optional[int] = Form(None),
+    contrast: Optional[float] = Form(None),
+    contour_simplify: Optional[int] = Form(None),
+    hatch_size: Optional[int] = Form(None),
+    linedraw_jitter: Optional[float] = Form(None),
+    ensemble: Optional[str] = Form(None),
+    scan_mode: Optional[str] = Form(None),
+    line_source: Optional[str] = Form(None),
+    ai_review: Optional[str] = Form(None),
+    file: UploadFile = File(...),
+):
+    from uuid import uuid4
+
+    from botdraw.core.jobs import artifact_dir
+    from botdraw.portrait import resolve_portrait_vector
+
+    crop_obj = None
+    if crop:
+        try:
+            crop_obj = json.loads(crop)
+        except json.JSONDecodeError:
+            crop_obj = None
+    ensemble_flag: bool | None = None
+    if ensemble is not None and str(ensemble).strip() != "":
+        ensemble_flag = str(ensemble).strip().lower() in ("1", "true", "yes", "on")
+    ai_mode = _parse_ai_review_value(ai_review, quality=quality)
+    tmp = artifact_dir(uuid4().hex[:8]) / (file.filename or "upload.png")
+    raw = await file.read()
+    tmp.write_bytes(raw)
+    knobs: dict[str, Any] = {
+        "posterize_levels": posterize_levels,
+        "filter_speckle": filter_speckle,
+        "min_path_points": min_path_points,
+        "contrast": contrast,
+        "contour_simplify": contour_simplify,
+        "hatch_size": hatch_size,
+        "linedraw_jitter": linedraw_jitter,
+        "ensemble": ensemble_flag,
+        "scan_mode": scan_mode,
+        "line_source": line_source,
+        "ai_review": ai_mode,
+        "quality": quality,
+        "crop": crop_obj,
+        "auto_frame": auto_frame,
+    }
+    knobs = _merge_ai_scene_into_knobs(
+        knobs, image_path=str(tmp), image_bytes=raw, quality=quality
+    )
+    crop_obj = knobs.get("crop", crop_obj)
+    auto_frame = bool(knobs.get("auto_frame", auto_frame))
+    resolve_kw = {
+        k: knobs[k]
+        for k in (
+            "posterize_levels",
+            "filter_speckle",
+            "min_path_points",
+            "contrast",
+            "contour_simplify",
+            "hatch_size",
+            "linedraw_jitter",
+            "ensemble",
+            "scan_mode",
+            "line_source",
+            "max_tone_code",
+            "suppress_background",
+            "protect_subjects",
+            "orientation_deg",
+            "ai_scene",
+        )
+        if k in knobs and knobs[k] is not None
+    }
+    pv, hit = resolve_portrait_vector(
+        image_path=str(tmp),
+        mode=image_mode or "photo",
+        quality=quality,
+        paper=paper,
+        crop=crop_obj,
+        reuse_ingest=reuse_ingest and not force_reingest,
+        ingest_id=ingest_id,
+        force_reingest=force_reingest,
+        auto_frame=auto_frame if crop_obj is None else False,
+        image_bytes=raw,
+        **resolve_kw,
+    )
+    data = _portrait_ingest_response(pv, include_preview_png=include_preview_png)
+    data["cache_hit"] = hit
+    data["ai_review"] = knobs.get("ai_review") or "off"
+    if knobs.get("ai_review_status"):
+        data["ai_review_status"] = knobs["ai_review_status"]
+    if knobs.get("ai_scene"):
+        data["ai_scene"] = knobs["ai_scene"]
+    # Persist scene JSON on the ingest artifact for debugging
+    if knobs.get("ai_scene") and pv.ingest_id:
+        try:
+            from botdraw.core.jobs import artifact_dir as _ad
+
+            scene_path = _ad(f"ingest-{pv.ingest_id}") / "ai_scene.json"
+            scene_path.write_text(json.dumps(knobs["ai_scene"], indent=2), encoding="utf-8")
+        except Exception:
+            pass
+    return data
+
+
+@app.get("/api/portrait/ingest/{ingest_id}")
+def api_portrait_ingest_get(ingest_id: str, include_preview_png: bool = True):
+    from botdraw.portrait import load_portrait_vector
+
+    pv = load_portrait_vector(ingest_id)
+    if pv is None:
+        raise HTTPException(status_code=404, detail="Ingest not found")
+    data = _portrait_ingest_response(pv, include_preview_png=include_preview_png)
+    data["cache_hit"] = True
+    return data
+
+
+@app.get("/api/portrait/ingest/{ingest_id}/svg")
+def api_portrait_ingest_svg(ingest_id: str, paper_color_hex: str = "#f7f1e8"):
+    from botdraw.portrait import load_portrait_vector
+    from botdraw.portrait.preview import portrait_vector_raw_svg
+
+    pv = load_portrait_vector(ingest_id)
+    if pv is None:
+        raise HTTPException(status_code=404, detail="Ingest not found")
+    svg = portrait_vector_raw_svg(pv, paper_color_hex=paper_color_hex or "#f7f1e8")
+    return Response(content=svg, media_type="image/svg+xml")
+
+
 @app.post("/api/palettes/save")
 def api_palette_save(body: PaletteSaveRequest):
     palette = create_palette(
@@ -139,6 +637,19 @@ def api_palette_save(body: PaletteSaveRequest):
 
 @app.post("/api/render")
 def api_render(body: RenderRequest):
+    extra = dict(body.params_extra or {})
+    if body.paper_id:
+        extra["paper_id"] = body.paper_id
+    if body.paper_color_hex:
+        extra["paper_color_hex"] = body.paper_color_hex
+    if body.reuse_ingest:
+        extra["reuse_ingest"] = True
+    if body.ingest_id:
+        extra["ingest_id"] = body.ingest_id
+    if body.force_reingest:
+        extra["force_reingest"] = True
+    if body.crop:
+        extra["crop"] = body.crop
     job, payload, layers = render_job(
         app=body.app,
         style_id=body.style_id,
@@ -148,7 +659,7 @@ def api_render(body: RenderRequest):
         quality=body.quality,
         seed=body.seed,
         density=body.density,
-        params_extra=body.params_extra,
+        params_extra=extra,
         pen_up_speed_mm_s=body.pen_up_speed_mm_s,
         pen_down_speed_mm_s=body.pen_down_speed_mm_s,
     )
@@ -167,11 +678,42 @@ async def api_render_upload(
     density: float = Form(1.0),
     pen_up_speed_mm_s: float = Form(100.0),
     pen_down_speed_mm_s: float = Form(25.0),
+    image_mode: str = Form("photo"),
+    params_extra: Optional[str] = Form(None),
+    paper_id: Optional[str] = Form(None),
+    paper_color_hex: Optional[str] = Form(None),
+    reuse_ingest: bool = Form(False),
+    ingest_id: Optional[str] = Form(None),
+    force_reingest: bool = Form(False),
+    crop: Optional[str] = Form(None),
     file: UploadFile = File(...),
 ):
     from botdraw.core.jobs import artifact_dir
     from uuid import uuid4
 
+    extra: dict[str, Any] = {"image_mode": image_mode or "photo"}
+    if params_extra:
+        try:
+            parsed = json.loads(params_extra)
+            if isinstance(parsed, dict):
+                extra.update(parsed)
+        except json.JSONDecodeError:
+            pass
+    if paper_id:
+        extra["paper_id"] = paper_id
+    if paper_color_hex:
+        extra["paper_color_hex"] = paper_color_hex
+    if reuse_ingest:
+        extra["reuse_ingest"] = True
+    if ingest_id:
+        extra["ingest_id"] = ingest_id
+    if force_reingest:
+        extra["force_reingest"] = True
+    if crop:
+        try:
+            extra["crop"] = json.loads(crop)
+        except json.JSONDecodeError:
+            pass
     tmp = artifact_dir(uuid4().hex[:8]) / (file.filename or "upload.png")
     tmp.write_bytes(await file.read())
     job, payload, layers = render_job(
@@ -184,32 +726,139 @@ async def api_render_upload(
         seed=seed,
         density=density,
         image_path=str(tmp),
+        params_extra=extra,
         pen_up_speed_mm_s=pen_up_speed_mm_s,
         pen_down_speed_mm_s=pen_down_speed_mm_s,
     )
     return {"job": job.model_dump(), "emulator": payload, "layers": layers}
 
 
+@app.get("/api/letters/fonts")
+def api_letter_fonts():
+    return {"fonts": list_fonts()}
+
+
 @app.post("/api/letters/draft")
 def api_letter_draft(body: LetterRequest):
-    try_local_ollama()
-    draft = draft_wedding_letter(
-        names=body.names,
-        language=body.language,
-        era=body.era,
-        mood=body.mood,
-        facts=body.facts,
-        guest_quote=body.guest_quote,
-    )
-    unload()
-    layered = render_letter(
-        draft["body"],
-        palette_id=body.palette_id,
-        language=body.language,
-        guest_quote=body.guest_quote,
-        highlight_words=["forever", "heart", "love"] if body.highlight else None,
-        seed=body.seed,
-    )
+    import time
+
+    t0 = time.perf_counter()
+    layer_models = body.layers or []
+    primary_body = None
+    if layer_models:
+        primary_body = (layer_models[0].body or "").strip() or None
+    if primary_body is None and body.body and body.body.strip():
+        primary_body = body.body.strip()
+
+    if primary_body:
+        draft = {
+            "source": "provided",
+            "body": primary_body,
+            "motif": None,
+        }
+    elif body.use_llm:
+        try_local_ollama()
+        draft = draft_wedding_letter(
+            names=body.names,
+            language=body.language,
+            era=body.era,
+            mood=body.mood,
+            facts=body.facts,
+            guest_quote=body.guest_quote,
+        )
+    else:
+        unload()
+        draft = draft_wedding_letter(
+            names=body.names,
+            language=body.language,
+            era=body.era,
+            mood=body.mood,
+            facts=body.facts,
+            guest_quote=body.guest_quote,
+        )
+    t_draft = time.perf_counter() - t0
+
+    t1 = time.perf_counter()
+    quote_for_layout = None if primary_body else body.guest_quote
+    margins = body.margins or MarginsModel()
+    m = Margins(left=margins.left, top=margins.top, right=margins.right, bottom=margins.bottom)
+
+    if layer_models:
+        specs: list[LetterLayerSpec] = []
+        for i, lm in enumerate(layer_models):
+            btxt = (lm.body or "").strip()
+            if i == 0 and not btxt:
+                btxt = draft["body"]
+            lg = lm.line or LineGeomModel()
+            sn = lm.snap or SnapModel()
+            specs.append(
+                LetterLayerSpec(
+                    id=lm.id or f"layer-{i}",
+                    name=lm.name or f"Layer {i + 1}",
+                    body=btxt,
+                    font_name=lm.font_name or body.font_name,
+                    size_mm=lm.size_mm,
+                    pen_id=lm.pen_id,
+                    language=lm.language or body.language,
+                    translate_from_en=lm.translate_from_en,
+                    offset_x_mm=lm.offset_x_mm,
+                    offset_y_mm=lm.offset_y_mm,
+                    kind=lm.kind,
+                    tracking=lm.tracking,
+                    humanize=lm.humanize,
+                    line_height=lm.line_height,
+                    highlight_words=list(lm.highlight_words or []),
+                    draw_mode=lm.draw_mode or "text",
+                    leading_variation=lm.leading_variation,
+                    line_angle_deg=lm.line_angle_deg,
+                    line=LineGeom(
+                        x0_mm=lg.x0_mm,
+                        y0_mm=lg.y0_mm,
+                        x1_mm=lg.x1_mm,
+                        y1_mm=lg.y1_mm,
+                        style=lg.style,
+                        dash_mm=lg.dash_mm,
+                        gap_mm=lg.gap_mm,
+                        width_mm=lg.width_mm,
+                    ),
+                    placement=lm.placement or "freehand",
+                    snap=SnapSpec(
+                        target_layer_id=sn.target_layer_id,
+                        span_index=sn.span_index,
+                        role=sn.role or "underline",
+                    ),
+                )
+            )
+        layered = render_letter_layers(
+            specs,
+            palette_id=body.palette_id,
+            paper=PaperSize(body.paper),
+            orientation=body.orientation,
+            margins=m,
+            seed=body.seed,
+            guest_quote=quote_for_layout,
+        )
+    else:
+        if body.highlight:
+            hl_words = body.highlight_words if body.highlight_words is not None else ["forever", "heart", "love"]
+        else:
+            hl_words = []
+        layered = render_letter(
+            draft["body"],
+            palette_id=body.palette_id,
+            paper=PaperSize(body.paper),
+            language=body.language,
+            guest_quote=quote_for_layout,
+            highlight_words=hl_words,
+            seed=body.seed,
+            size_mm=body.size_mm,
+            line_height=body.line_height,
+            tracking=body.tracking,
+            humanize=body.humanize,
+            orientation=body.orientation,
+            margins=m,
+            font_name=body.font_name,
+        )
     from botdraw.core.optimize import optimize_layered
     from botdraw.core.motion_plan import compile_motion_plan
     from botdraw.core.jobs import artifact_dir, save_job
@@ -218,20 +867,46 @@ def api_letter_draft(body: LetterRequest):
     from botdraw.core.pipeline import layers_summary
 
     palette = load_palette(body.palette_id)
-    layered = optimize_layered(layered)
+    if body.optimize:
+        layered = optimize_layered(layered)
+    else:
+        layered.meta["optimizer"] = "skipped-reading-order"
     plan = compile_motion_plan(layered, palette)
     layers = layers_summary(layered, palette)
+    t_vector = time.perf_counter() - t1
+    translate_pending = bool(layered.meta.get("translate_pending"))
     settings = {
         "app": "lettersbot",
         "style_id": "letter",
+        "letter_type": body.letter_type,
         "palette_id": body.palette_id,
         "seed": body.seed,
+        "paper": body.paper,
+        "orientation": body.orientation,
+        "margins": margins.model_dump(),
         "language": body.language,
         "era": body.era,
         "mood": body.mood,
         "names": body.names,
         "guest_quote": body.guest_quote,
         "highlight": body.highlight,
+        "size_mm": body.size_mm,
+        "tracking": body.tracking,
+        "humanize": body.humanize,
+        "font_name": body.font_name,
+        "use_llm": body.use_llm,
+        "optimize": body.optimize,
+        "draft_source": draft.get("source"),
+        "missing_scripts": layered.meta.get("missing_scripts", []),
+        "translate_pending": translate_pending,
+        "translate_note": (
+            "AI translation not processed yet — English source kept; enable when translator ships."
+            if translate_pending
+            else None
+        ),
+        "letter_layers": layered.meta.get("layers", []),
+        "layer_spans": layered.meta.get("layer_spans", {}),
+        "timing_s": {"draft": round(t_draft, 3), "vectorize": round(t_vector, 3)},
     }
     job = JobRecord(app="lettersbot", style_id="letter", status=JobStatus.READY, seed=body.seed, palette_id=body.palette_id)
     out = artifact_dir(job.id)

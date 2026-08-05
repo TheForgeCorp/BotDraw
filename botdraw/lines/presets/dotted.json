@@ -1,0 +1,12 @@
+{
+  "id": "dotted",
+  "name": "Dotted",
+  "line_type": "dotted",
+  "line_spacing_mm": 1.2,
+  "pattern_period_mm": 2.0,
+  "pattern_amplitude_mm": 0.8,
+  "dash_mm": 0.35,
+  "gap_mm": 1.4,
+  "ornament_target": "all",
+  "notes": ""
+}

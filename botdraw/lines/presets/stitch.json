@@ -1,0 +1,12 @@
+{
+  "id": "stitch",
+  "name": "Stitch",
+  "line_type": "stitch",
+  "line_spacing_mm": 1.2,
+  "pattern_period_mm": 2.0,
+  "pattern_amplitude_mm": 0.8,
+  "dash_mm": 2.0,
+  "gap_mm": 1.0,
+  "ornament_target": "all",
+  "notes": ""
+}

@@ -1,147 +1,239 @@
-/* BotDraw emulator — aspect-true, layered, time-based canvas player.
- *
- * Design notes:
- * - All plan geometry is in mm. A single uniform scale (px/mm) is computed to
- *   fit the paper into the canvas, so the paper aspect ratio is always exact.
- * - Ink is accumulated incrementally into one offscreen canvas per pass, so a
- *   frame costs O(new segments), not O(all segments). Layers are composited
- *   with `multiply` so overlapping pens mix like real ink on paper.
- * - Playback is clocked in plan-seconds with within-segment interpolation, so
- *   the pen head moves continuously and the timeline is scrubbable.
- */
+/* BotDraw emulator canvas player — HiDPI, zoom-to-cursor, pan, loupe */
 class EmulatorPlayer {
   constructor(canvas) {
     this.canvas = canvas;
-    this.ctx = canvas.getContext("2d");
+    // Write-oriented playback; avoid willReadFrequently (DESIGN.md).
+    this.ctx = canvas.getContext("2d", { willReadFrequently: false, alpha: true });
     this.plan = null;
-
-    // Playback state
+    this.index = 0;
     this.playing = false;
     this.speed = 16;
-    this.time = 0; // plan seconds
-    this.duration = 0;
-    this.applied = 0; // segments fully drawn into layers
-    this.starts = []; // cumulative start time per segment
+    this.ink = [];
     this.raf = null;
+    this.acc = 0;
     this.lastTs = 0;
-
-    // Visibility filters
+    this.onStats = null;
     this.hiddenPassIds = new Set();
     this.hiddenPenIds = new Set();
-    this.soloPassId = null;
     this.showGhost = true;
-
-    // View transform (fit + user zoom/pan, in device px)
-    this.dpr = window.devicePixelRatio || 1;
-    this.fitScale = 1; // px per mm at zoom 1
+    this.soloPassId = null;
     this.zoom = 1;
     this.panX = 0;
     this.panY = 0;
+    this.paperColor = "#ffffff";
+    this.loupeOn = false;
+    this.loupeFactor = 4;
+    this.loupeRadiusCss = 72;
+    this._pointerCss = null;
+    this.editLine = null;
+    this.snapGhost = null;
+    this.onLineEdit = null;
+    this.onZoomChange = null;
+    this._drag = null;
+    this._panDrag = null;
+    this._settleRaf = null;
+    this._spaceDown = false;
+    this._bound = false;
+    this._dpr = 1;
+    this._cssW = 0;
+    this._cssH = 0;
+    this.syncSize();
+  }
 
-    // Offscreen ink layers, keyed by pass id, plus a ghost (pen-up) layer
-    this.layers = new Map(); // passId -> {canvas, ctx, penId}
-    this.layerScale = 1; // px per mm in layer space
-    this.ghost = null;
-    this.paperTexture = null;
-
-    // Callbacks
-    this.onStats = null;
-    this.onTime = null; // (time, duration, playing)
-    this.onPlayState = null; // (playing)
-
-    this._penInfo = new Map();
-    this._theme = this._readTheme();
-    this._bindView();
-    this._observeResize();
-    this._observeTheme();
-    this._layout();
+  syncSize() {
+    const c = this.canvas;
+    const rect = c.getBoundingClientRect();
+    const cssW = Math.max(1, Math.round(rect.width || c.clientWidth || 640));
+    const cssH = Math.max(1, Math.round(rect.height || c.clientHeight || 480));
+    const dpr = Math.min(3, window.devicePixelRatio || 1);
+    if (cssW === this._cssW && cssH === this._cssH && dpr === this._dpr) return;
+    this._cssW = cssW;
+    this._cssH = cssH;
+    this._dpr = dpr;
+    c.width = Math.round(cssW * dpr);
+    c.height = Math.round(cssH * dpr);
+    c.style.width = `${cssW}px`;
+    c.style.height = `${cssH}px`;
+    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     this.drawFrame();
   }
 
-  /* ---------------- public API ---------------- */
-
-  load(plan) {
+  load(plan, opts = {}) {
+    const preserve = !!opts.preserveVisibility;
+    const savedHiddenPass = preserve ? new Set(this.hiddenPassIds) : null;
+    const savedHiddenPen = preserve ? new Set(this.hiddenPenIds) : null;
+    const savedSolo = preserve ? this.soloPassId : null;
     this.plan = plan;
+    if (plan?.paper_color_hex) this.paperColor = plan.paper_color_hex;
+    if (opts.paperColor) this.paperColor = opts.paperColor;
+    this.index = 0;
+    this.ink = [];
     this.playing = false;
-    this.time = 0;
-    this.applied = 0;
-    this.hiddenPassIds.clear();
-    this.hiddenPenIds.clear();
-    this.soloPassId = null;
-    this.zoom = 1;
-    this.panX = 0;
-    this.panY = 0;
-
-    this._penInfo = new Map();
-    for (const p of plan.palette_snapshot || plan.palette || []) {
-      this._penInfo.set(p.id, p);
+    if (!preserve) {
+      this.hiddenPassIds.clear();
+      this.hiddenPenIds.clear();
+      this.soloPassId = null;
+    } else {
+      this.hiddenPassIds = savedHiddenPass;
+      this.hiddenPenIds = savedHiddenPen;
+      this.soloPassId = savedSolo;
     }
-    // Cumulative timeline
-    this.starts = new Array(plan.segments.length);
-    let t = 0;
-    for (let i = 0; i < plan.segments.length; i++) {
-      this.starts[i] = t;
-      t += Math.max(plan.segments[i].duration_s || 0, 0);
-    }
-    this.duration = t;
-
-    this._layout();
-    this._rebuildLayers();
+    this.syncSize();
     this.drawFrame();
-    this._emitTime();
     this._stats("Loaded");
   }
 
-  play() {
-    if (!this.plan || this.playing) return;
-    if (this.time >= this.duration) this.setTime(0);
-    this.playing = true;
-    this.lastTs = performance.now();
-    if (this.onPlayState) this.onPlayState(true);
-    const loop = (ts) => {
-      if (!this.playing) return;
-      const dt = (ts - this.lastTs) / 1000;
-      this.lastTs = ts;
-      this._advance(this.time + dt * this.speed);
-      if (this.time >= this.duration) {
-        this.playing = false;
-        if (this.onPlayState) this.onPlayState(false);
-        this._stats("Complete");
-        this._emitTime();
+  setPaperColor(hex) {
+    this.paperColor = hex || "#ffffff";
+    this.drawFrame();
+  }
+
+  setSpeed(v) { this.speed = Number(v) || 1; }
+  setGhost(v) { this.showGhost = !!v; this.drawFrame(); }
+
+  setZoom(z, anchorCss = null) {
+    this._cancelSettle();
+    const next = Math.max(0.25, Math.min(16, Number(z) || 1));
+    if (anchorCss && this._cssW) {
+      // Zoom toward cursor (CSS px space)
+      const { w, h } = this._paperScaleCss();
+      const ax = anchorCss.x;
+      const ay = anchorCss.y;
+      const worldX = (ax - (w / 2 + this.panX)) / this.zoom + w / 2;
+      const worldY = (ay - (h / 2 + this.panY)) / this.zoom + h / 2;
+      this.zoom = next;
+      this.panX = ax - w / 2 - (worldX - w / 2) * this.zoom;
+      this.panY = ay - h / 2 - (worldY - h / 2) * this.zoom;
+    } else {
+      this.zoom = next;
+    }
+    const hard = this._clampPan(this.panX, this.panY);
+    this.panX = hard.x;
+    this.panY = hard.y;
+    this.drawFrame();
+    if (this.onZoomChange) this.onZoomChange(this.zoom);
+  }
+
+  zoomBy(factor, anchorCss = null) {
+    this.setZoom(this.zoom * factor, anchorCss);
+  }
+
+  fitZoom() {
+    this._cancelSettle();
+    this.zoom = 1;
+    this.panX = 0;
+    this.panY = 0;
+    this.drawFrame();
+    if (this.onZoomChange) this.onZoomChange(this.zoom);
+  }
+
+  _panLimits() {
+    const { w, h } = this._paperScaleCss();
+    const maxX = Math.max(24, (w * Math.max(0, this.zoom - 1)) / 2 + 24);
+    const maxY = Math.max(24, (h * Math.max(0, this.zoom - 1)) / 2 + 24);
+    return { maxX, maxY };
+  }
+
+  _clampPan(x, y, { rubber = false } = {}) {
+    const { maxX, maxY } = this._panLimits();
+    const axis = (v, max) => {
+      if (!rubber) return Math.max(-max, Math.min(max, v));
+      if (v > max) return max + (v - max) * 0.35;
+      if (v < -max) return -max + (v + max) * 0.35;
+      return v;
+    };
+    return { x: axis(x, maxX), y: axis(y, maxY) };
+  }
+
+  _cancelSettle() {
+    if (this._settleRaf) {
+      cancelAnimationFrame(this._settleRaf);
+      this._settleRaf = null;
+    }
+  }
+
+  _settlePan(vx = 0, vy = 0) {
+    this._cancelSettle();
+    const reduce = typeof window !== "undefined"
+      && window.matchMedia
+      && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduce) {
+      const hard = this._clampPan(this.panX, this.panY);
+      this.panX = hard.x;
+      this.panY = hard.y;
+      this.drawFrame();
+      return;
+    }
+    let velX = vx;
+    let velY = vy;
+    const step = () => {
+      const hard = this._clampPan(this.panX, this.panY);
+      const ax = (hard.x - this.panX) * 0.22;
+      const ay = (hard.y - this.panY) * 0.22;
+      velX = velX * 0.88 + ax;
+      velY = velY * 0.88 + ay;
+      this.panX += velX;
+      this.panY += velY;
+      const settled =
+        Math.abs(this.panX - hard.x) < 0.45
+        && Math.abs(this.panY - hard.y) < 0.45
+        && Math.hypot(velX, velY) < 0.35;
+      if (settled) {
+        this.panX = hard.x;
+        this.panY = hard.y;
+        this._settleRaf = null;
+        this.drawFrame();
         return;
       }
-      this._emitTime();
-      this.raf = requestAnimationFrame(loop);
+      this.drawFrame();
+      this._settleRaf = requestAnimationFrame(step);
     };
-    this.raf = requestAnimationFrame(loop);
+    this._settleRaf = requestAnimationFrame(step);
   }
 
-  pause() {
-    this.playing = false;
-    if (this.raf) cancelAnimationFrame(this.raf);
-    if (this.onPlayState) this.onPlayState(false);
-    this._emitTime();
-  }
-
-  toggle() {
-    if (this.playing) this.pause();
-    else this.play();
-  }
-
-  skipEnd() {
-    if (!this.plan) return;
-    this.pause();
-    this.setTime(this.duration);
-    this._stats("Skipped to end");
-  }
-
-  setSpeed(v) {
-    this.speed = Math.max(0.1, Number(v) || 1);
-  }
-
-  setGhost(v) {
-    this.showGhost = !!v;
+  setLoupe(on) {
+    this.loupeOn = !!on;
     this.drawFrame();
+  }
+
+  toggleLoupe() {
+    this.setLoupe(!this.loupeOn);
+  }
+
+  setEditLine(line) {
+    this.editLine = line ? { ...line } : null;
+    this.drawFrame();
+  }
+
+  setSnapGhost(span) {
+    this.snapGhost = span ? { ...span } : null;
+    this.drawFrame();
+  }
+
+  enableInteraction() {
+    if (this._bound) return;
+    this._bound = true;
+    const c = this.canvas;
+    c.style.touchAction = "none";
+    c.addEventListener("pointerdown", (e) => this._onPointerDown(e));
+    c.addEventListener("pointermove", (e) => this._onPointerMove(e));
+    c.addEventListener("pointerup", (e) => this._onPointerUp(e));
+    c.addEventListener("pointerleave", (e) => this._onPointerUp(e));
+    c.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      const rect = c.getBoundingClientRect();
+      const anchor = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+      const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+      this.zoomBy(factor, anchor);
+    }, { passive: false });
+    window.addEventListener("keydown", (e) => {
+      if (e.code === "Space") this._spaceDown = true;
+      if (e.key === "l" || e.key === "L") this.toggleLoupe();
+    });
+    window.addEventListener("keyup", (e) => {
+      if (e.code === "Space") this._spaceDown = false;
+    });
+    window.addEventListener("resize", () => this.syncSize());
   }
 
   setPassVisible(passId, visible) {
@@ -161,486 +253,340 @@ class EmulatorPlayer {
     this.drawFrame();
   }
 
-  /** Seek to plan time in seconds (scrubbing). */
-  setTime(t) {
+  play() {
     if (!this.plan) return;
-    t = Math.min(Math.max(t, 0), this.duration);
-    if (t >= this.time) {
-      this._advance(t);
-    } else {
-      // Backward seek: replay layers from scratch up to t
-      this.time = t;
-      this.applied = 0;
-      this._clearLayers();
-      this._advance(t, true);
-    }
-    this._emitTime();
-  }
-
-  seekFraction(f) {
-    this.setTime(this.duration * Math.min(Math.max(f, 0), 1));
-  }
-
-  nudge(seconds) {
-    this.setTime(this.time + seconds);
-  }
-
-  fitView() {
-    this.zoom = 1;
-    this.panX = 0;
-    this.panY = 0;
-    this.drawFrame();
-  }
-
-  /* ---------------- layout & view ---------------- */
-
-  _observeResize() {
-    const ro = new ResizeObserver(() => {
-      this._layout();
-      this._rebuildLayers();
-      this.drawFrame();
-    });
-    ro.observe(this.canvas.parentElement || this.canvas);
-  }
-
-  _observeTheme() {
-    const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    const onChange = () => {
-      this._theme = this._readTheme();
-      this.paperTexture = null;
-      this.drawFrame();
-    };
-    if (mq.addEventListener) mq.addEventListener("change", onChange);
-  }
-
-  _readTheme() {
-    const cs = getComputedStyle(document.documentElement);
-    const v = (name, fallback) => (cs.getPropertyValue(name) || "").trim() || fallback;
-    return {
-      paper: v("--emu-paper", "#ffffff"),
-      paperShadow: v("--emu-paper-shadow", "rgba(15, 18, 25, 0.22)"),
-      margin: v("--emu-margin", "rgba(60, 90, 200, 0.10)"),
-      ghost: v("--emu-ghost", "rgba(90, 100, 120, 0.35)"),
-      empty: v("--emu-empty", "rgba(120, 125, 135, 0.4)"),
-      turntable: v("--emu-turntable", "rgba(120, 130, 150, 0.35)"),
-    };
-  }
-
-  _layout() {
-    const host = this.canvas.parentElement || this.canvas;
-    const rect = host.getBoundingClientRect();
-    const w = Math.max(64, rect.width);
-    const h = Math.max(64, rect.height);
-    this.dpr = window.devicePixelRatio || 1;
-    const bw = Math.round(w * this.dpr);
-    const bh = Math.round(h * this.dpr);
-    if (this.canvas.width !== bw || this.canvas.height !== bh) {
-      this.canvas.width = bw;
-      this.canvas.height = bh;
-      this.canvas.style.width = `${w}px`;
-      this.canvas.style.height = `${h}px`;
-    }
-    const pw = this.plan ? this.plan.width_mm : 210;
-    const ph = this.plan ? this.plan.height_mm : 297;
-    const pad = 28 * this.dpr;
-    this.fitScale = Math.min((bw - pad * 2) / pw, (bh - pad * 2) / ph);
-  }
-
-  /** Current scale in device px per mm. */
-  _scale() {
-    return this.fitScale * this.zoom;
-  }
-
-  /** Top-left of the paper in device px. */
-  _origin() {
-    const s = this._scale();
-    const pw = this.plan ? this.plan.width_mm : 210;
-    const ph = this.plan ? this.plan.height_mm : 297;
-    return {
-      x: (this.canvas.width - pw * s) / 2 + this.panX * this.dpr,
-      y: (this.canvas.height - ph * s) / 2 + this.panY * this.dpr,
-    };
-  }
-
-  _bindView() {
-    const el = this.canvas;
-    el.addEventListener(
-      "wheel",
-      (e) => {
-        if (!this.plan) return;
-        e.preventDefault();
-        const rect = el.getBoundingClientRect();
-        const mx = (e.clientX - rect.left) * this.dpr;
-        const my = (e.clientY - rect.top) * this.dpr;
-        const prev = this.zoom;
-        const next = Math.min(12, Math.max(0.4, prev * Math.exp(-e.deltaY * 0.0015)));
-        if (next === prev) return;
-        // Keep the point under the cursor stationary
-        const o = this._origin();
-        const k = next / prev;
-        this.zoom = next;
-        this.panX += ((mx - o.x) * (1 - k)) / this.dpr;
-        this.panY += ((my - o.y) * (1 - k)) / this.dpr;
-        this.drawFrame();
-      },
-      { passive: false }
-    );
-    let drag = null;
-    el.addEventListener("pointerdown", (e) => {
-      if (!this.plan) return;
-      drag = { x: e.clientX, y: e.clientY, panX: this.panX, panY: this.panY };
-      el.setPointerCapture(e.pointerId);
-      el.style.cursor = "grabbing";
-    });
-    el.addEventListener("pointermove", (e) => {
-      if (!drag) return;
-      this.panX = drag.panX + (e.clientX - drag.x);
-      this.panY = drag.panY + (e.clientY - drag.y);
-      this.drawFrame();
-    });
-    const endDrag = (e) => {
-      if (drag && el.hasPointerCapture && el.hasPointerCapture(e.pointerId)) {
-        el.releasePointerCapture(e.pointerId);
+    this.playing = true;
+    this.lastTs = performance.now();
+    const loop = (ts) => {
+      if (!this.playing) return;
+      const dt = (ts - this.lastTs) / 1000;
+      this.lastTs = ts;
+      this.acc += dt * this.speed;
+      while (this.plan && this.index < this.plan.segments.length) {
+        const seg = this.plan.segments[this.index];
+        const need = Math.max(seg.duration_s || 0.0001, 0.0001);
+        if (this.acc < need) break;
+        this.acc -= need;
+        this._apply(seg);
+        this.index += 1;
       }
-      drag = null;
-      el.style.cursor = "";
+      this.drawFrame();
+      if (this.index >= this.plan.segments.length) {
+        this.playing = false;
+        this._stats("Complete");
+        return;
+      }
+      this.raf = requestAnimationFrame(loop);
     };
-    el.addEventListener("pointerup", endDrag);
-    el.addEventListener("pointercancel", endDrag);
+    this.raf = requestAnimationFrame(loop);
   }
 
-  /* ---------------- ink layers ---------------- */
+  pause() { this.playing = false; }
 
-  _rebuildLayers() {
-    this.layers = new Map();
-    this.ghost = null;
+  skipEnd() {
     if (!this.plan) return;
-    const pw = this.plan.width_mm;
-    const ph = this.plan.height_mm;
-    // Fixed layer resolution: crisp at fit, still good when zoomed in.
-    const target = this.fitScale * 1.6;
-    this.layerScale = Math.min(target, 4096 / Math.max(pw, ph));
-    const mk = () => {
-      const c = document.createElement("canvas");
-      c.width = Math.max(2, Math.round(pw * this.layerScale));
-      c.height = Math.max(2, Math.round(ph * this.layerScale));
-      const cx = c.getContext("2d");
-      cx.lineCap = "round";
-      cx.lineJoin = "round";
-      return { canvas: c, ctx: cx, penId: null };
-    };
-    this.ghost = mk();
-    // Replay applied segments into fresh layers
-    const upto = this.applied;
-    this.applied = 0;
-    this._applyRange(0, upto);
-  }
-
-  _clearLayers() {
-    for (const layer of this.layers.values()) {
-      layer.ctx.clearRect(0, 0, layer.canvas.width, layer.canvas.height);
+    while (this.index < this.plan.segments.length) {
+      this._apply(this.plan.segments[this.index]);
+      this.index += 1;
     }
-    if (this.ghost) {
-      this.ghost.ctx.clearRect(0, 0, this.ghost.canvas.width, this.ghost.canvas.height);
-    }
-  }
-
-  _layerFor(seg) {
-    const key = seg.pass_id || "default";
-    let layer = this.layers.get(key);
-    if (!layer) {
-      const c = document.createElement("canvas");
-      c.width = this.ghost.canvas.width;
-      c.height = this.ghost.canvas.height;
-      const cx = c.getContext("2d");
-      cx.lineCap = "round";
-      cx.lineJoin = "round";
-      layer = { canvas: c, ctx: cx, penId: seg.pen_id || null };
-      this.layers.set(key, layer);
-    }
-    return layer;
-  }
-
-  /** Advance the clock to t, drawing crossed segments into layers. */
-  _advance(t, forceDraw = false) {
-    if (!this.plan) return;
-    t = Math.min(Math.max(t, 0), this.duration);
-    const segs = this.plan.segments;
-    while (this.applied < segs.length) {
-      const seg = segs[this.applied];
-      const end = this.starts[this.applied] + Math.max(seg.duration_s || 0, 0);
-      if (end > t) break;
-      this._applySegment(seg);
-      this.applied += 1;
-    }
-    this.time = t;
+    this.playing = false;
     this.drawFrame();
-    if (forceDraw) this.drawFrame();
+    this._stats("Skipped to end");
   }
 
-  _applyRange(from, to) {
-    const segs = this.plan.segments;
-    for (let i = from; i < to && i < segs.length; i++) {
-      this._applySegment(segs[i]);
-    }
-    this.applied = Math.min(to, segs.length);
-  }
-
-  _applySegment(seg) {
-    const s = this.layerScale;
-    if (seg.kind === "pen_down") {
-      const layer = this._layerFor(seg);
-      const ctx = layer.ctx;
-      this._strokeSegment(ctx, seg, s, 1);
-    } else if (seg.kind === "pen_up") {
-      const ctx = this.ghost.ctx;
-      ctx.strokeStyle = this._theme.ghost;
-      ctx.lineWidth = Math.max(0.75, 0.18 * s);
-      ctx.setLineDash([2.2 * s * 0.5, 2.2 * s * 0.5]);
-      ctx.beginPath();
-      ctx.moveTo(seg.x0 * s, seg.y0 * s);
-      ctx.lineTo(seg.x1 * s, seg.y1 * s);
-      ctx.stroke();
-      ctx.setLineDash([]);
-    } else if (seg.kind === "pen_change") {
-      this._stats(`Pen change → ${seg.pen_id || "?"}`);
-    }
-  }
-
-  /** Stroke one pen-down segment with nib-aware rendering. frac clips the segment. */
-  _strokeSegment(ctx, seg, s, frac) {
-    const pen = this._penInfo.get(seg.pen_id) || {};
-    const nib = pen.nib_type || "fineliner";
-    const width = (seg.width_mm || pen.width_mm || 0.4) * s;
-    const opacity = seg.opacity ?? pen.opacity ?? 1;
-    const x1 = seg.x0 + (seg.x1 - seg.x0) * frac;
-    const y1 = seg.y0 + (seg.y1 - seg.y0) * frac;
-
-    const stroke = (w, alpha, cap) => {
-      ctx.strokeStyle = this._rgba(seg.color_hex || pen.color_hex || "#111111", alpha);
-      ctx.lineWidth = Math.max(0.75, w);
-      ctx.lineCap = cap;
-      ctx.beginPath();
-      ctx.moveTo(seg.x0 * s, seg.y0 * s);
-      ctx.lineTo(x1 * s, y1 * s);
-      ctx.stroke();
-    };
-
-    if (nib === "highlighter") {
-      stroke(width * 1.15, Math.min(opacity, 0.5), "butt");
-    } else if (nib === "brush" || nib === "marker") {
-      // Soft edge: wide faint pass under a narrower solid core
-      stroke(width * 1.35, opacity * 0.35, "round");
-      stroke(width * 0.85, opacity, "round");
-    } else {
-      stroke(width, opacity, "round");
-    }
-  }
-
-  /* ---------------- frame composition ---------------- */
-
-  drawFrame() {
-    const ctx = this.ctx;
-    const W = this.canvas.width;
-    const H = this.canvas.height;
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, W, H);
-    if (!this.plan) {
-      this._drawEmpty(ctx, W, H);
-      return;
-    }
-
-    const s = this._scale();
-    const o = this._origin();
-    const pw = this.plan.width_mm;
-    const ph = this.plan.height_mm;
-    const cx = o.x + (pw / 2) * s;
-    const cy = o.y + (ph / 2) * s;
-
-    // Turntable rotation (mm-space, about the page center, uniform scale
-    // applied afterwards — no shear)
-    const current = this._currentSegment();
-    const theta = current && current.base_theta_rad ? current.base_theta_rad : 0;
-
-    ctx.save();
-    if (theta) {
-      // Turntable platter under the paper
-      ctx.strokeStyle = this._theme.turntable;
-      ctx.lineWidth = 1.25 * this.dpr;
-      ctx.beginPath();
-      ctx.arc(cx, cy, (Math.hypot(pw, ph) / 2) * s * 1.04, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.translate(cx, cy);
-      ctx.rotate(theta);
-      ctx.translate(-cx, -cy);
-    }
-
-    // Paper with soft shadow
-    ctx.save();
-    ctx.shadowColor = this._theme.paperShadow;
-    ctx.shadowBlur = 18 * this.dpr;
-    ctx.shadowOffsetY = 6 * this.dpr;
-    ctx.fillStyle = this._theme.paper;
-    ctx.fillRect(o.x, o.y, pw * s, ph * s);
-    ctx.restore();
-
-    // Subtle paper grain
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(o.x, o.y, pw * s, ph * s);
-    ctx.clip();
-    ctx.fillStyle = this._texture();
-    ctx.fillRect(o.x, o.y, pw * s, ph * s);
-    ctx.restore();
-
-    // 10mm margin guide
-    ctx.strokeStyle = this._theme.margin;
-    ctx.lineWidth = 1 * this.dpr;
-    ctx.strokeRect(o.x + 10 * s, o.y + 10 * s, (pw - 20) * s, (ph - 20) * s);
-
-    // Ghost (pen-up travel) — plain alpha compositing
-    if (this.showGhost && this.ghost) {
-      ctx.drawImage(this.ghost.canvas, o.x, o.y, pw * s, ph * s);
-    }
-
-    // Ink layers — multiply so overlapping pens blend like ink
-    ctx.save();
-    ctx.globalCompositeOperation = "multiply";
-    for (const [passId, layer] of this.layers) {
-      if (!this._passVisible(passId, layer.penId)) continue;
-      ctx.drawImage(layer.canvas, o.x, o.y, pw * s, ph * s);
-    }
-
-    // Live partial segment on top of its layer content
-    const partial = this._partialSegment();
-    if (partial && partial.seg.kind === "pen_down" && this._passVisible(partial.seg.pass_id, partial.seg.pen_id)) {
-      ctx.translate(o.x, o.y);
-      this._strokeSegment(ctx, partial.seg, s, partial.frac);
-      ctx.translate(-o.x, -o.y);
-    }
-    ctx.restore();
-
-    // Pen head
-    this._drawPenHead(ctx, o, s, partial);
-    ctx.restore();
-  }
-
-  _drawEmpty(ctx, W, H) {
-    const s = this.fitScale;
-    const pw = 210;
-    const ph = 297;
-    const x = (W - pw * s) / 2;
-    const y = (H - ph * s) / 2;
-    ctx.strokeStyle = this._theme.empty;
-    ctx.lineWidth = 1.25 * this.dpr;
-    ctx.setLineDash([6 * this.dpr, 6 * this.dpr]);
-    ctx.strokeRect(x, y, pw * s, ph * s);
-    ctx.setLineDash([]);
-    ctx.fillStyle = this._theme.empty;
-    ctx.font = `${13 * this.dpr}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
-    ctx.textAlign = "center";
-    ctx.fillText("Render a job to see the plotter emulator", W / 2, y + (ph * s) / 2);
-  }
-
-  _drawPenHead(ctx, o, s, partial) {
-    if (!this.plan || !this.plan.segments.length) return;
-    let seg;
-    let frac = 1;
-    if (partial) {
-      seg = partial.seg;
-      frac = partial.frac;
-    } else {
-      seg = this.plan.segments[Math.min(Math.max(this.applied - 1, 0), this.plan.segments.length - 1)];
-    }
-    if (!seg) return;
-    const x = o.x + (seg.x0 + (seg.x1 - seg.x0) * frac) * s;
-    const y = o.y + (seg.y0 + (seg.y1 - seg.y0) * frac) * s;
-    const pen = this._penInfo.get(seg.pen_id) || {};
-    const color = seg.color_hex || pen.color_hex || "#111111";
-    const down = seg.kind === "pen_down";
-    const r = (down ? 4.5 : 5.5) * this.dpr;
-    ctx.save();
-    ctx.shadowColor = "rgba(0,0,0,0.35)";
-    ctx.shadowBlur = 4 * this.dpr;
-    ctx.fillStyle = this._theme.paper;
-    ctx.beginPath();
-    ctx.arc(x, y, r, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 1.5 * this.dpr;
-    ctx.beginPath();
-    ctx.arc(x, y, r, 0, Math.PI * 2);
-    ctx.stroke();
-    if (down) {
-      ctx.fillStyle = color;
-      ctx.beginPath();
-      ctx.arc(x, y, r * 0.45, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
-
-  _texture() {
-    if (this.paperTexture) return this.paperTexture;
-    const size = 96;
-    const c = document.createElement("canvas");
-    c.width = size;
-    c.height = size;
-    const cx = c.getContext("2d");
-    const img = cx.createImageData(size, size);
-    for (let i = 0; i < img.data.length; i += 4) {
-      const n = 110 + Math.random() * 60;
-      img.data[i] = n;
-      img.data[i + 1] = n;
-      img.data[i + 2] = n;
-      img.data[i + 3] = 6; // near-invisible grain
-    }
-    cx.putImageData(img, 0, 0);
-    this.paperTexture = this.ctx.createPattern(c, "repeat");
-    return this.paperTexture;
-  }
-
-  /* ---------------- helpers ---------------- */
-
-  _currentSegment() {
-    if (!this.plan || !this.plan.segments.length) return null;
-    const i = Math.min(this.applied, this.plan.segments.length - 1);
-    return this.plan.segments[i];
-  }
-
-  _partialSegment() {
-    if (!this.plan) return null;
-    if (this.applied >= this.plan.segments.length) return null;
-    const seg = this.plan.segments[this.applied];
-    const dur = Math.max(seg.duration_s || 0, 0);
-    if (dur <= 0) return { seg, frac: 1 };
-    const frac = Math.min(Math.max((this.time - this.starts[this.applied]) / dur, 0), 1);
-    return { seg, frac };
-  }
-
-  _passVisible(passId, penId) {
-    if (this.soloPassId && passId !== this.soloPassId) return false;
-    if (passId && this.hiddenPassIds.has(passId)) return false;
-    if (penId && this.hiddenPenIds.has(penId)) return false;
+  _visible(seg) {
+    if (this.soloPassId && seg.pass_id !== this.soloPassId) return false;
+    if (seg.pass_id && this.hiddenPassIds.has(seg.pass_id)) return false;
+    if (seg.pen_id && this.hiddenPenIds.has(seg.pen_id)) return false;
     return true;
   }
 
-  _rgba(hex, opacity) {
+  _apply(seg) {
+    if (seg.kind === "pen_down") this.ink.push(seg);
+    if (seg.kind === "pen_change") this._stats(`Pen change → ${seg.pen_id || "?"}`);
+  }
+
+  /** CSS-pixel paper scale (after ctx DPR transform). */
+  _paperScaleCss() {
+    if (!this.plan) return { sx: 1, sy: 1, w: this._cssW || 1, h: this._cssH || 1 };
+    const w = this._cssW || this.canvas.clientWidth || 1;
+    const h = this._cssH || this.canvas.clientHeight || 1;
+    return { sx: w / this.plan.width_mm, sy: h / this.plan.height_mm, w, h };
+  }
+
+  _applyViewTransform(ctx) {
+    const { w, h } = this._paperScaleCss();
+    ctx.translate(w / 2 + this.panX, h / 2 + this.panY);
+    ctx.scale(this.zoom, this.zoom);
+    ctx.translate(-w / 2, -h / 2);
+  }
+
+  _cssFromClient(clientX, clientY) {
+    const rect = this.canvas.getBoundingClientRect();
+    return { x: clientX - rect.left, y: clientY - rect.top };
+  }
+
+  canvasToMm(clientX, clientY) {
+    const { x: cssX, y: cssY } = this._cssFromClient(clientX, clientY);
+    const { sx, sy, w, h } = this._paperScaleCss();
+    let x = (cssX - (w / 2 + this.panX)) / this.zoom + w / 2;
+    let y = (cssY - (h / 2 + this.panY)) / this.zoom + h / 2;
+    return { x_mm: x / sx, y_mm: y / sy };
+  }
+
+  _handleScreen(x_mm, y_mm) {
+    const { sx, sy, w, h } = this._paperScaleCss();
+    let x = x_mm * sx;
+    let y = y_mm * sy;
+    x = (x - w / 2) * this.zoom + w / 2 + this.panX;
+    y = (y - h / 2) * this.zoom + h / 2 + this.panY;
+    return { x, y };
+  }
+
+  _hitHandle(clientX, clientY) {
+    if (!this.editLine) return null;
+    const a = this._handleScreen(this.editLine.x0_mm, this.editLine.y0_mm);
+    const b = this._handleScreen(this.editLine.x1_mm, this.editLine.y1_mm);
+    const { x, y } = this._cssFromClient(clientX, clientY);
+    const r = 10;
+    if (Math.hypot(x - a.x, y - a.y) <= r) return "a";
+    if (Math.hypot(x - b.x, y - b.y) <= r) return "b";
+    return null;
+  }
+
+  _onPointerDown(e) {
+    this._pointerCss = this._cssFromClient(e.clientX, e.clientY);
+    const hit = this._hitHandle(e.clientX, e.clientY);
+    if (hit && this.editLine) {
+      this._drag = { end: hit };
+      this.canvas.setPointerCapture?.(e.pointerId);
+      e.preventDefault();
+      return;
+    }
+    if (this._spaceDown || e.button === 1 || e.buttons === 4) {
+      this._cancelSettle();
+      this._panDrag = {
+        x: e.clientX,
+        y: e.clientY,
+        panX: this.panX,
+        panY: this.panY,
+        lastX: e.clientX,
+        lastY: e.clientY,
+        lastT: performance.now(),
+        vx: 0,
+        vy: 0,
+      };
+      this.canvas.setPointerCapture?.(e.pointerId);
+      e.preventDefault();
+    }
+  }
+
+  _onPointerMove(e) {
+    this._pointerCss = this._cssFromClient(e.clientX, e.clientY);
+    if (this.loupeOn) this.drawFrame();
+    if (this._panDrag) {
+      const now = performance.now();
+      const dt = Math.max(8, now - this._panDrag.lastT);
+      const idx = e.clientX - this._panDrag.lastX;
+      const idy = e.clientY - this._panDrag.lastY;
+      this._panDrag.vx = (idx / dt) * 16;
+      this._panDrag.vy = (idy / dt) * 16;
+      this._panDrag.lastX = e.clientX;
+      this._panDrag.lastY = e.clientY;
+      this._panDrag.lastT = now;
+      const rawX = this._panDrag.panX + (e.clientX - this._panDrag.x);
+      const rawY = this._panDrag.panY + (e.clientY - this._panDrag.y);
+      const c = this._clampPan(rawX, rawY, { rubber: true });
+      this.panX = c.x;
+      this.panY = c.y;
+      this.drawFrame();
+      return;
+    }
+    if (!this._drag || !this.editLine) return;
+    const mm = this.canvasToMm(e.clientX, e.clientY);
+    if (this._drag.end === "a") {
+      this.editLine.x0_mm = mm.x_mm;
+      this.editLine.y0_mm = mm.y_mm;
+    } else {
+      this.editLine.x1_mm = mm.x_mm;
+      this.editLine.y1_mm = mm.y_mm;
+    }
+    this.drawFrame();
+    if (this.onLineEdit) this.onLineEdit({ ...this.editLine }, { live: true });
+  }
+
+  _onPointerUp(e) {
+    if (this._panDrag) {
+      const vx = this._panDrag.vx;
+      const vy = this._panDrag.vy;
+      this._panDrag = null;
+      this._settlePan(vx, vy);
+      return;
+    }
+    if (!this._drag) return;
+    this._drag = null;
+    if (this.onLineEdit && this.editLine) this.onLineEdit({ ...this.editLine }, { live: false });
+  }
+
+  _drawInk(ctx, sx, sy) {
+    for (const seg of this.ink) {
+      if (!this._visible(seg)) continue;
+      ctx.beginPath();
+      ctx.strokeStyle = this._color(seg.color_hex || "#111", seg.opacity ?? 1);
+      ctx.lineWidth = Math.max(0.5, (seg.width_mm || 0.4) * sx);
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.moveTo(seg.x0 * sx, seg.y0 * sy);
+      ctx.lineTo(seg.x1 * sx, seg.y1 * sy);
+      ctx.stroke();
+    }
+  }
+
+  drawFrame() {
+    this.syncSize();
+    const ctx = this.ctx;
+    const { w, h, sx, sy } = this._paperScaleCss();
+    ctx.save();
+    ctx.setTransform(this._dpr, 0, 0, this._dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = this.paperColor || "#ffffff";
+    ctx.fillRect(0, 0, w, h);
+    if (!this.plan) {
+      ctx.restore();
+      return;
+    }
+
+    const current = this.plan.segments[Math.min(this.index, this.plan.segments.length - 1)];
+    const theta = current && current.base_theta_rad ? current.base_theta_rad : 0;
+    ctx.save();
+    this._applyViewTransform(ctx);
+    if (theta) {
+      ctx.translate(w / 2, h / 2);
+      ctx.rotate(theta);
+      ctx.translate(-w / 2, -h / 2);
+      ctx.strokeStyle = "rgba(47,111,106,0.25)";
+      ctx.beginPath();
+      ctx.arc(w / 2, h / 2, Math.min(w, h) * 0.42, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    if (this.snapGhost) {
+      const g = this.snapGhost;
+      ctx.fillStyle = "rgba(59, 130, 246, 0.12)";
+      ctx.strokeStyle = "rgba(59, 130, 246, 0.45)";
+      ctx.lineWidth = 1;
+      ctx.fillRect(g.x * sx, g.y * sy, g.w * sx, g.h * sy);
+      ctx.strokeRect(g.x * sx, g.y * sy, g.w * sx, g.h * sy);
+    }
+
+    this._drawInk(ctx, sx, sy);
+
+    if (current) {
+      ctx.fillStyle = "#9b3b2e";
+      ctx.beginPath();
+      ctx.arc(current.x1 * sx, current.y1 * sy, 4, 0, Math.PI * 2);
+      ctx.fill();
+      if (this.showGhost && current.kind === "pen_up") {
+        ctx.strokeStyle = "rgba(0,0,0,0.2)";
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(current.x0 * sx, current.y0 * sy);
+        ctx.lineTo(current.x1 * sx, current.y1 * sy);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    }
+    ctx.restore();
+
+    if (this.editLine) {
+      const a = this._handleScreen(this.editLine.x0_mm, this.editLine.y0_mm);
+      const b = this._handleScreen(this.editLine.x1_mm, this.editLine.y1_mm);
+      ctx.save();
+      ctx.strokeStyle = "rgba(17,17,17,0.55)";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      for (const p of [a, b]) {
+        ctx.fillStyle = "#fff";
+        ctx.strokeStyle = "#111";
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.rect(p.x - 5, p.y - 5, 10, 10);
+        ctx.fill();
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    if (this.loupeOn && this._pointerCss) {
+      this._drawLoupe(ctx, sx, sy);
+    }
+
+    if (this.plan.stats) {
+      const s = this.plan.stats;
+      const visibleInk = this.ink.filter((seg) => this._visible(seg)).length;
+      const mm = this._pointerCss
+        ? this.canvasToMm(
+            this.canvas.getBoundingClientRect().left + this._pointerCss.x,
+            this.canvas.getBoundingClientRect().top + this._pointerCss.y
+          )
+        : null;
+      const mmLabel = mm ? ` · ${mm.x_mm.toFixed(1)},${mm.y_mm.toFixed(1)}mm` : "";
+      this._stats(
+        `ink ${visibleInk}/${this.ink.length} · paths ${s.stroke_count} · pens ${s.pen_ids.length} · ETA ${s.estimated_time_s.toFixed(1)}s · zoom ${this.zoom.toFixed(2)}×${this.loupeOn ? " · loupe" : ""}${mmLabel}`
+      );
+    }
+    ctx.restore();
+  }
+
+  _drawLoupe(ctx, sx, sy) {
+    const p = this._pointerCss;
+    const r = this.loupeRadiusCss;
+    const factor = this.loupeFactor;
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+    ctx.clip();
+    // Fill paper in loupe
+    ctx.fillStyle = this.paperColor || "#ffffff";
+    ctx.fillRect(p.x - r, p.y - r, r * 2, r * 2);
+    ctx.save();
+    // Map: zoom extra around pointer in CSS space
+    const { w, h } = this._paperScaleCss();
+    ctx.translate(p.x, p.y);
+    ctx.scale(factor, factor);
+    ctx.translate(-p.x, -p.y);
+    ctx.translate(w / 2 + this.panX, h / 2 + this.panY);
+    ctx.scale(this.zoom, this.zoom);
+    ctx.translate(-w / 2, -h / 2);
+    this._drawInk(ctx, sx, sy);
+    ctx.restore();
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+    ctx.strokeStyle = "rgba(17,17,17,0.55)";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(p.x - 8, p.y);
+    ctx.lineTo(p.x + 8, p.y);
+    ctx.moveTo(p.x, p.y - 8);
+    ctx.lineTo(p.x, p.y + 8);
+    ctx.strokeStyle = "rgba(17,17,17,0.35)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  _color(hex, opacity) {
     const h = (hex || "#111111").replace("#", "");
     const r = parseInt(h.slice(0, 2), 16);
     const g = parseInt(h.slice(2, 4), 16);
     const b = parseInt(h.slice(4, 6), 16);
     return `rgba(${r},${g},${b},${opacity})`;
-  }
-
-  _emitTime() {
-    if (this.onTime) this.onTime(this.time, this.duration, this.playing);
-    if (this.plan && this.plan.stats) {
-      const s = this.plan.stats;
-      this._stats(
-        `${this.applied}/${this.plan.segments.length} segs · ${s.stroke_count} paths · ${s.pen_ids.length} pens`
-      );
-    }
   }
 
   _stats(msg) {

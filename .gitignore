@@ -6,6 +6,9 @@ jobs/artifacts/
 jobs/records/
 jobs/handwriting/
 jobs/palettes/
+jobs/ingest_index/
+jobs/paper/
+jobs/lines/
 *.egg-info/
 .pytest_cache/
 .ruff_cache/

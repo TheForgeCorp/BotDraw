@@ -54,6 +54,7 @@ def create_palette(
                 id=p["id"],
                 name=p["name"],
                 color_hex=p.get("color_hex", "#000000"),
+                board_id=p.get("board_id"),
                 profile=LineProfile(**profile_data) if profile_data else LineProfile(),
             )
         )
