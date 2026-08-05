@@ -68,6 +68,8 @@ Map real-world telemetry into symmetrical / asymmetrical / pattern drawings:
 
 - **Kinds:** 1D series (temperature, metrics), GPS/XY paths, 3-axis G-force vectors
 - **Modes:** `ribbon`, `mirror`, `radial`, `spiral`, `path`, `mandala`
+- **GPS:** lon/lat (WGS84) is Web-Mercator projected before page fit (same formula as [gpx2svg](https://github.com/enginefeeder101/gpx2svg)); cartesian XY (`unit: mm` / out-of-range coords) skips projection
+- **G-force:** magnitude / axis ribbons only — never double-integrated to position
 - **UI:** R&D → Sensor → Art (demo datasets + CSV/JSON upload)
 - **API:** `GET /api/rdlab/sensor/demos` · `POST /api/rdlab/sensor/demo` · `POST /api/rdlab/sensor/upload`
 

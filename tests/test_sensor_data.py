@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 
 import numpy as np
 import pytest
@@ -11,7 +12,12 @@ from fastapi.testclient import TestClient
 from botdraw.api.main import app
 from botdraw.core.models import Orientation, PaperSize
 from botdraw.data import MODES, data_to_layered, list_demos, load_demo, parse_bytes, parse_csv_text, parse_json_obj
-from botdraw.data.map import default_mode
+from botdraw.data.map import (
+    default_mode,
+    is_geographic_lonlat,
+    prepare_path_xy,
+    web_mercator_project,
+)
 
 
 client = TestClient(app)
@@ -117,3 +123,70 @@ def test_api_bad_mode():
         data={"demo_id": "temperature", "mode": "not-a-mode"},
     )
     assert r.status_code == 400
+
+
+def test_web_mercator_matches_gpx2svg_formula():
+    """San Francisco lon/lat → EPSG:3857 metres (gpx2svg formula)."""
+    lon, lat = -122.4194, 37.7749
+    pts = web_mercator_project(np.array([[lon, lat]], dtype=np.float64))
+    r = 6_378_137.0
+    expected_x = math.radians(lon) * r
+    expected_y = math.log(math.tan(math.pi / 4.0 + math.radians(lat) / 2.0)) * r
+    assert abs(pts[0, 0] - expected_x) < 1e-6
+    assert abs(pts[0, 1] - expected_y) < 1e-6
+
+
+def test_geographic_heuristic_and_prepare():
+    gps = np.array([[-122.4, 37.7], [-122.41, 37.71], [-122.42, 37.72]])
+    assert is_geographic_lonlat(gps, unit="deg", kind="path")
+    assert is_geographic_lonlat(gps, kind="path")
+    art = np.array([[0.0, 0.0], [0.2, 0.1], [0.5, 0.4]])
+    assert not is_geographic_lonlat(art, kind="path")
+    assert not is_geographic_lonlat(gps, kind="vectors")
+
+    from botdraw.data.map import SensorRecord
+
+    rec = SensorRecord(kind="path", label="walk", unit="deg", points=gps)
+    xy = prepare_path_xy(rec)
+    assert xy.shape == gps.shape
+    # Projected metres are large absolute values
+    assert abs(xy[0, 0]) > 1_000_000
+
+
+def test_gps_path_uses_mercator_crs():
+    rec = load_demo("gps_walk")
+    layered = data_to_layered(rec, mode="path")
+    assert layered.meta["crs"] == "web_mercator"
+    # Aspect should not collapse: bounding box of strokes spans both axes
+    pts = layered.passes[0].polylines[0].points
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    assert max(xs) - min(xs) > 10
+    assert max(ys) - min(ys) > 10
+
+
+def test_mercator_corrects_lon_lat_aspect_at_mid_latitudes():
+    """1° lon vs 1° lat at 60°N must not keep equal span after projection."""
+    # Square in degree space at high latitude is a wide rectangle in metres
+    square_deg = np.array(
+        [
+            [10.0, 60.0],
+            [11.0, 60.0],
+            [11.0, 61.0],
+            [10.0, 61.0],
+            [10.0, 60.0],
+        ]
+    )
+    merc = web_mercator_project(square_deg)
+    span_x = float(merc[:, 0].max() - merc[:, 0].min())
+    span_y = float(merc[:, 1].max() - merc[:, 1].min())
+    # At 60°N, 1° lon ≈ half of 1° lat in metres (cos60=0.5); Mercator
+    # stretches Y further, so span_x < span_y clearly.
+    assert span_x < span_y * 0.85
+
+
+def test_cartesian_path_skips_mercator():
+    pts = np.array([[0.0, 0.0], [100.0, 50.0], [200.0, 0.0]])  # outside lat range
+    rec = parse_json_obj({"kind": "path", "unit": "mm", "points": pts.tolist()})
+    layered = data_to_layered(rec, mode="path")
+    assert layered.meta["crs"] == "cartesian"

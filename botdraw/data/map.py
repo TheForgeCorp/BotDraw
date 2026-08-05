@@ -20,6 +20,8 @@ Mode = Literal["ribbon", "mirror", "radial", "spiral", "path", "mandala"]
 MODES: tuple[Mode, ...] = ("ribbon", "mirror", "radial", "spiral", "path", "mandala")
 
 _GOLDEN = 137.5
+# WGS-84 semi-major axis (m) — Web Mercator / EPSG:3857, same as gpx2svg
+_WGS84_A = 6_378_137.0
 
 
 @dataclass
@@ -28,7 +30,7 @@ class SensorRecord:
     label: str = "sensor"
     unit: str | None = None
     values: np.ndarray | None = None  # 1D series
-    points: np.ndarray | None = None  # Nx2 path
+    points: np.ndarray | None = None  # Nx2 path (lon/lat degrees or cartesian)
     samples: np.ndarray | None = None  # Nx3 vectors
     meta: dict = field(default_factory=dict)
 
@@ -37,10 +39,11 @@ class SensorRecord:
         if self.kind == "series" and self.values is not None:
             return np.asarray(self.values, dtype=np.float64).ravel()
         if self.kind == "vectors" and self.samples is not None:
+            # Magnitude only — do not double-integrate accel (drifts; see GestureAirDraw).
             s = np.asarray(self.samples, dtype=np.float64)
             return np.linalg.norm(s, axis=1)
         if self.kind == "path" and self.points is not None:
-            p = np.asarray(self.points, dtype=np.float64)
+            p = prepare_path_xy(self)
             if len(p) < 2:
                 return np.zeros(1)
             d = np.diff(p, axis=0)
@@ -58,6 +61,65 @@ class SensorRecord:
         v = self.series_values()
         idx = np.arange(len(v), dtype=np.float64)
         return np.column_stack([idx, v])
+
+
+def is_geographic_lonlat(
+    pts: np.ndarray,
+    *,
+    unit: str | None = None,
+    kind: Kind | str = "path",
+) -> bool:
+    """Heuristic: lon/lat degrees (WGS84) vs already-cartesian XY.
+
+    Path kind + degree-like bounds → geographic. Vectors / series never.
+    Explicit units override the heuristic.
+    """
+    if str(kind) != "path":
+        return False
+    u = (unit or "").strip().lower()
+    if u in ("deg", "degree", "degrees", "lonlat", "wgs84", "epsg:4326", "gps"):
+        return True
+    if u in ("m", "metre", "meter", "metres", "meters", "mm", "px", "g", "cartesian"):
+        return False
+    p = np.asarray(pts, dtype=np.float64)
+    if p.ndim != 2 or p.shape[1] < 2 or len(p) < 2:
+        return False
+    xs = p[:, 0]
+    ys = p[:, 1]
+    if not (np.all(np.isfinite(xs)) and np.all(np.isfinite(ys))):
+        return False
+    if not (np.all(np.abs(xs) <= 180.0) and np.all(np.abs(ys) <= 90.0)):
+        return False
+    span = max(float(xs.max() - xs.min()), float(ys.max() - ys.min()))
+    if span < 1e-9:
+        return False
+    # Tiny unit-square art paths stay cartesian unless unit says degrees
+    if float(np.max(np.abs(p))) <= 1.0 and span <= 0.5:
+        return False
+    return True
+
+
+def web_mercator_project(pts: np.ndarray) -> np.ndarray:
+    """Project lon/lat degrees → Web Mercator metres (EPSG:3857).
+
+    Matches enginefeeder101/gpx2svg MercatorProjection.project.
+    Column 0 = longitude, column 1 = latitude.
+    """
+    p = np.asarray(pts, dtype=np.float64)
+    lon = np.clip(p[:, 0], -180.0, 180.0)
+    # Mercator undefined at poles; clamp like typical web-map practice
+    lat = np.clip(p[:, 1], -85.05112878, 85.05112878)
+    x = np.radians(lon) * _WGS84_A
+    y = np.log(np.tan(math.pi / 4.0 + np.radians(lat) / 2.0)) * _WGS84_A
+    return np.column_stack([x, y])
+
+
+def prepare_path_xy(record: SensorRecord) -> np.ndarray:
+    """Raw path points → drawable XY (Mercator metres when geographic)."""
+    raw = record.path_points()
+    if is_geographic_lonlat(raw, unit=record.unit, kind=record.kind):
+        return web_mercator_project(raw)
+    return np.asarray(raw, dtype=np.float64)
 
 
 def _downsample(arr: np.ndarray, max_n: int) -> np.ndarray:
@@ -80,7 +142,7 @@ def _normalize(vals: np.ndarray, *, center: bool = True) -> np.ndarray:
 
 
 def _fit_path(pts: np.ndarray, box: tuple[float, float, float, float]) -> list[tuple[float, float]]:
-    """Fit Nx2 points into margin box, preserving aspect."""
+    """Fit Nx2 points into margin box, preserving aspect (Y up → plotter Y down)."""
     x0, y0, x1, y1 = box
     usable_w = max(1.0, x1 - x0)
     usable_h = max(1.0, y1 - y0)
@@ -97,6 +159,7 @@ def _fit_path(pts: np.ndarray, box: tuple[float, float, float, float]) -> list[t
     cy = (y0 + y1) / 2
     out = []
     for x, y in p:
+        # Flip Y so geographic/math north stays visually "up" on the page
         out.append((cx + (x - mid[0]) * scale, cy - (y - mid[1]) * scale))
     return out
 
@@ -141,8 +204,14 @@ def data_to_layered(
     p1 = pens[1].id if len(pens) > 1 else p0
     p2 = pens[2].id if len(pens) > 2 else p0
 
+    path_crs = None
     if mode_e == "path":
-        pts = _downsample(record.path_points(), max_pts)
+        raw_pts = record.path_points()
+        geographic = is_geographic_lonlat(raw_pts, unit=record.unit, kind=record.kind)
+        # Downsample in source space, then Mercator-project geographic lon/lat
+        sampled = _downsample(raw_pts, max_pts)
+        pts = web_mercator_project(sampled) if geographic else sampled
+        path_crs = "web_mercator" if geographic else "cartesian"
         fitted = _fit_path(pts, box)
         if len(fitted) >= 2:
             buckets[p0].append(Polyline(points=fitted, pen_id=p0))
@@ -163,7 +232,7 @@ def data_to_layered(
     elif mode_e == "mandala":
         _draw_mandala(record, buckets, pens, cx, cy, min(usable_w, usable_h) * 0.42, max_pts, folds=folds)
 
-    # Vector components as extra faint ribbons when applicable
+    # Vector axis overlays: component art only — never integrate accel to position
     if record.kind == "vectors" and record.samples is not None and mode_e in ("ribbon", "mirror"):
         _draw_vector_overlays(record, buckets, pens, box, max_pts)
 
@@ -184,6 +253,7 @@ def data_to_layered(
             "mode": mode_e,
             "label": record.label,
             "unit": record.unit,
+            "crs": path_crs,
             "n": int(
                 len(record.values)
                 if record.values is not None
