@@ -9,6 +9,7 @@ import numpy as np  # noqa: F401 — used throughout restylers
 from botdraw.core.models import (
     QUALITY_LIMITS,
     LayeredSVG,
+    Pen,
     Polyline,
     QualityPreset,
     StyleParams,
@@ -19,7 +20,21 @@ from botdraw.portrait.models import PortraitVector
 from botdraw.styles.image_utils import map_to_page
 
 
-def _pen_for(pv: PortraitVector, palette, cluster_id: str | None = None, rgb=None):
+def _saturation_hex(hex_color: str) -> float:
+    h = hex_color.lstrip("#")
+    r, g, b = (int(h[i : i + 2], 16) / 255.0 for i in (0, 2, 4))
+    mx, mn = max(r, g, b), min(r, g, b)
+    return 0.0 if mx <= 1e-6 else (mx - mn) / mx
+
+
+def _pen_for(
+    pv: PortraitVector,
+    palette,
+    cluster_id: str | None = None,
+    rgb=None,
+    *,
+    respect_monochrome: bool = True,
+) -> Pen:
     pens = ink_pens(palette) or list(palette.pens)
     if cluster_id and cluster_id in pv.pen_map:
         try:
@@ -37,6 +52,20 @@ def _pen_for(pv: PortraitVector, palette, cluster_id: str | None = None, rgb=Non
         except KeyError:
             pass
     if rgb is not None:
+        # Region ids (e.g. "r0") aren't in pv.pen_map, so this is the path
+        # region-based styles (Cubism, Pen Sketch's region-outline pass)
+        # actually take. On a monochrome source photo, restrict the search
+        # to the palette's own low-saturation pens first — same reasoning
+        # as assign_pens() in pens.py — so a B&W photo's outline regions
+        # don't get quantized onto an arbitrary saturated hue. Callers that
+        # need multiple distinguishable colors regardless of source chroma
+        # (Cubism's facet fills, where color *is* the visual language) opt
+        # out with respect_monochrome=False.
+        if respect_monochrome and (pv.meta or {}).get("monochrome_source"):
+            low_chroma = [p for p in pens if _saturation_hex(p.color_hex) < 0.25]
+            if low_chroma:
+                restricted = palette.model_copy(update={"pens": low_chroma})
+                return nearest_pen(restricted, int(rgb[0]), int(rgb[1]), int(rgb[2]))
         return nearest_pen(palette, int(rgb[0]), int(rgb[1]), int(rgb[2]))
     return pens[0]
 
@@ -535,7 +564,12 @@ def restyle_regions_mosaic(pv: PortraitVector, palette, params: StyleParams) -> 
     fills: dict[str, list[Polyline]] = {}
     border = ink_pens(palette)[0] if ink_pens(palette) else palette.pens[0]
     for r in pv.regions:
-        pen = _pen_for(pv, palette, r.id, r.mean_rgb)
+        # Cubism's facets rely on multiple distinguishable colors to read
+        # as facets at all; collapsing them to black on a B&W source (as
+        # the outline-only regions in restyle_linework correctly do) turns
+        # every facet into one continuous black fill instead. Keep full
+        # palette access here.
+        pen = _pen_for(pv, palette, r.id, r.mean_rgb, respect_monochrome=False)
         pts = list(r.points_mm)
         if len(pts) >= 3:
             outline.append(Polyline(points=pts, pen_id=border.id, closed=True))
