@@ -12,11 +12,15 @@ look garbled on real photos while every existing test stayed green.
 |---|---|---|---|
 | `armstrong_headshot.jpg` | Neil Armstrong, official Apollo 11 portrait | [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Portrait_of_Neil_Armstrong.jpg) | Public domain (NASA, US government work) |
 | `jemison_headshot.jpg` | Mae Jemison, official NASA astronaut portrait | [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Mae_Carol_Jemison.jpg) | Public domain (NASA, US government work) |
+| `armstrong_headshot_bw.jpg` | Grayscale desaturation of `armstrong_headshot.jpg` | Derived from the above | Public domain (derivative of NASA work) |
 
 Chosen deliberately for contrast: different skin tone, gender, lighting,
 and background treatment (dark backdrop vs. soft gradient) — head-and-
 shoulders studio photography, comparable in composition to a real client
-headshot.
+headshot. `armstrong_headshot_bw.jpg` exists specifically to reproduce the
+reported real-world failure mode (a true black-and-white headshot): the
+other two are full-color photographs (measured mean saturation 0.33 and
+0.41) that don't exercise the monochrome pen policy in `pens.py` at all.
 
 Add more real photos here over time (any permissively licensed headshot
 works) rather than relying solely on the two above.
