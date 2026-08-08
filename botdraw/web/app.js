@@ -1203,6 +1203,144 @@ async function downscalePortraitForUpload(file, maxSide = 1280) {
   }
 }
 
+/**
+ * Live-sitting capture: opens a full-viewport overlay with a getUserMedia
+ * video feed, lets the user capture/retake, then calls onConfirm(file)
+ * with a File — the exact same shape a file-picker selection produces
+ * (see applyPortraitSourceFile in renderPortrait()), so the capture flow
+ * feeds the identical ingest path an uploaded photo does. Always stops
+ * camera tracks on every exit path (confirm, cancel, click-outside) so
+ * the camera indicator light doesn't stay on after the modal closes.
+ */
+function openPortraitCameraCapture(onConfirm) {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    alert("Camera capture isn't supported in this browser. Use the file picker instead.");
+    return null;
+  }
+
+  const overlay = document.createElement("div");
+  overlay.className = "camera-overlay";
+  overlay.innerHTML = `
+    <div class="camera-modal">
+      <div class="camera-stage">
+        <video class="camera-video" autoplay playsinline muted></video>
+        <canvas class="camera-canvas" style="display:none"></canvas>
+        <img class="camera-still" style="display:none" alt="Captured photo" />
+      </div>
+      <p class="camera-error" style="display:none"></p>
+      <div class="camera-actions">
+        <button type="button" class="btn btn-ghost" data-action="cancel">Cancel</button>
+        <button type="button" class="btn btn-primary" data-action="capture">Capture</button>
+        <button type="button" class="btn btn-ghost" data-action="retake" style="display:none">Retake</button>
+        <button type="button" class="btn btn-primary" data-action="use" style="display:none">Use photo</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  const video = overlay.querySelector(".camera-video");
+  const canvas = overlay.querySelector(".camera-canvas");
+  const still = overlay.querySelector(".camera-still");
+  const errorEl = overlay.querySelector(".camera-error");
+  const captureBtn = overlay.querySelector('[data-action="capture"]');
+  const retakeBtn = overlay.querySelector('[data-action="retake"]');
+  const useBtn = overlay.querySelector('[data-action="use"]');
+  const cancelBtn = overlay.querySelector('[data-action="cancel"]');
+
+  let stream = null;
+  let capturedBlob = null;
+
+  const stopStream = () => {
+    if (stream) {
+      stream.getTracks().forEach((t) => t.stop());
+      stream = null;
+    }
+  };
+  const close = () => {
+    stopStream();
+    if (still.src) URL.revokeObjectURL(still.src);
+    overlay.remove();
+  };
+  const showError = (msg) => {
+    errorEl.textContent = msg;
+    errorEl.style.display = "block";
+    captureBtn.style.display = "none";
+  };
+
+  cancelBtn.onclick = close;
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) close(); // click outside the modal card
+  });
+
+  captureBtn.onclick = () => {
+    const w = video.videoWidth || 1280;
+    const h = video.videoHeight || 960;
+    // Same downscale ceiling upload gets (downscalePortraitForUpload) so a
+    // captured frame doesn't blow past the multipart/proxy limits that
+    // ceiling exists for.
+    const maxSide = 1280;
+    const scale = Math.min(1, maxSide / Math.max(w, h));
+    canvas.width = Math.max(1, Math.round(w * scale));
+    canvas.height = Math.max(1, Math.round(h * scale));
+    canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+    canvas.toBlob(
+      (blob) => {
+        if (!blob) {
+          showError("Could not capture a frame — try again.");
+          return;
+        }
+        capturedBlob = blob;
+        still.src = URL.createObjectURL(blob);
+        still.style.display = "block";
+        video.style.display = "none";
+        captureBtn.style.display = "none";
+        retakeBtn.style.display = "inline-flex";
+        useBtn.style.display = "inline-flex";
+      },
+      "image/jpeg",
+      0.88
+    );
+  };
+
+  retakeBtn.onclick = () => {
+    if (still.src) URL.revokeObjectURL(still.src);
+    still.style.display = "none";
+    video.style.display = "block";
+    retakeBtn.style.display = "none";
+    useBtn.style.display = "none";
+    captureBtn.style.display = "inline-flex";
+    capturedBlob = null;
+  };
+
+  useBtn.onclick = async () => {
+    if (!capturedBlob) return;
+    const file = new File([capturedBlob], `sitting-${Date.now()}.jpg`, {
+      type: "image/jpeg",
+      lastModified: Date.now(),
+    });
+    close();
+    await onConfirm(file);
+  };
+
+  navigator.mediaDevices
+    .getUserMedia({ video: { facingMode: "user" }, audio: false })
+    .then((s) => {
+      stream = s;
+      video.srcObject = stream;
+    })
+    .catch((err) => {
+      const name = err && err.name ? err.name : "";
+      const reason =
+        name === "NotAllowedError"
+          ? "Camera permission was denied."
+          : name === "NotFoundError"
+          ? "No camera was found on this device."
+          : `Camera unavailable (${(err && err.message) || err}).`;
+      showError(`${reason} Use the file picker instead, or check camera permissions and try again.`);
+    });
+
+  return close;
+}
+
 function portraitNetworkErrorMessage(err) {
   const msg = String(err?.message || err || "");
   if (/failed to fetch|networkerror|load failed|network request failed/i.test(msg)) {
@@ -1588,7 +1726,10 @@ function renderPortrait() {
         <div class="group-title">Image</div>
         <div class="portrait-drop ${portraitFile ? "has-file" : ""}" id="portrait-drop">
           ${portraitFile ? portraitFile.name : "Drop a photo or choose a file"}
-          <div style="margin-top:0.45rem"><input id="portrait-photo" type="file" accept="image/*" /></div>
+          <div class="row" style="margin-top:0.45rem">
+            <input id="portrait-photo" type="file" accept="image/*" />
+            <button type="button" class="btn btn-ghost" id="portrait-take-photo">Take photo…</button>
+          </div>
         </div>
         <div class="row" style="margin-top:0.35rem">
           <label><input type="checkbox" id="auto-frame" ${portraitAutoFrame ? "checked" : ""}/> Auto frame</label>
@@ -1891,9 +2032,9 @@ function renderPortrait() {
       renderPortrait();
     };
   });
-  const fileInput = root.querySelector("#portrait-photo");
-  fileInput.onchange = async () => {
-    const raw = fileInput.files?.[0] || null;
+  // Shared by file-picker selection and camera capture: both end up with a
+  // File and need the exact same ingest-state reset + preview redraw.
+  const applyPortraitSourceFile = async (raw) => {
     try {
       portraitFile = raw ? await snapshotPortraitFile(raw) : null;
       portraitIngestId = null;
@@ -1918,6 +2059,12 @@ function renderPortrait() {
       drop.childNodes[0].textContent = portraitFile ? portraitFile.name : "Drop a photo or choose a file";
     }
   };
+  const fileInput = root.querySelector("#portrait-photo");
+  fileInput.onchange = () => applyPortraitSourceFile(fileInput.files?.[0] || null);
+  const takePhotoBtn = root.querySelector("#portrait-take-photo");
+  if (takePhotoBtn) {
+    takePhotoBtn.onclick = () => openPortraitCameraCapture(applyPortraitSourceFile);
+  }
   drawPortraitSourcePreview(portraitFile);
   drawPortraitIngestPreview(portraitIngestPreview);
   setPortraitDownloads(!!lastJob?.id && lastJob?.app === "portraitbot", lastJob?.id);
