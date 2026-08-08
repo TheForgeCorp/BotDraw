@@ -404,6 +404,18 @@ def _edge_polylines(
     return out[:max_paths]
 
 
+def _mean_scalar_in_bbox(arr: np.ndarray, pts_px: list[tuple[float, float]]) -> float:
+    """Cheap bbox-mean sample, same approximation _mean_rgb_in_poly uses."""
+    h, w = arr.shape[:2]
+    xs = [p[0] for p in pts_px]
+    ys = [p[1] for p in pts_px]
+    x0, x1 = max(0, int(min(xs))), min(w, int(max(xs)) + 1)
+    y0, y1 = max(0, int(min(ys))), min(h, int(max(ys)) + 1)
+    if x1 <= x0 or y1 <= y0:
+        return 0.0
+    return float(arr[y0:y1, x0:x1].mean())
+
+
 def _vtracer_regions(
     rgb: np.ndarray,
     *,
@@ -415,6 +427,8 @@ def _vtracer_regions(
     filter_speckle: int | None = None,
     min_path_points: int = 6,
     min_area_px: float = 64.0,
+    subject_mask: np.ndarray | None = None,
+    subject_min_mean: float = 0.35,
 ) -> list[RegionPoly]:
     h, w = rgb.shape[:2]
     img = Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8), mode="RGB")
@@ -472,6 +486,11 @@ def _vtracer_regions(
             continue
         if area >= 0.82 * img_area:
             continue
+        if subject_mask is not None:
+            # Drop background-only regions so facet/outline passes stop
+            # painting background contours over the face (Pen Sketch).
+            if _mean_scalar_in_bbox(subject_mask, pts_clean) < subject_min_mean:
+                continue
         mean = _parse_hex_rgb(fill) or _mean_rgb_in_poly(rgb, pts_clean)
         scored.append((area, pts_clean, mean))
 
@@ -654,11 +673,14 @@ def ingest_portrait(
 
     # Neural detection pass (artist-line raster + person matte + parse labels)
     neural_pack = None
+    neural_warning: str | None = None
     ls = (line_source or "auto").lower()
     if ls in ("auto", "neural"):
-        from botdraw.portrait.neural import neural_portrait_pack
+        from botdraw.portrait.neural import neural_portrait_pack, neural_unavailable_reason
 
         neural_pack = neural_portrait_pack(rgb_cropped)
+        if neural_pack is None:
+            neural_warning = neural_unavailable_reason()
     line_source_resolved = "neural" if neural_pack is not None else "classic"
     if neural_pack is not None:
         use_ensemble = False
@@ -797,6 +819,15 @@ def ingest_portrait(
     # Subject matte: dilate when pets are protected so fur isn't gated as background
     subject_mask = neural_pack["mask"] if neural_pack is not None else None
     protect = {str(s).lower() for s in (protect_subjects or [])}
+    background_warning: str | None = None
+    if suppress_background and subject_mask is None:
+        # There is no classic-path subject matte, so this knob is a no-op
+        # without neural — previously it was accepted, cached, and echoed
+        # back in meta as if it had taken effect.
+        background_warning = (
+            "suppress_background requested but has no effect: it requires the "
+            "neural subject matte (line_source=neural/auto with weights fetched)."
+        )
     if subject_mask is not None and ("pet" in protect or suppress_background):
         from scipy import ndimage as _ndi
 
@@ -842,6 +873,24 @@ def ingest_portrait(
             subject_mask=subject_mask,
             ink_is_authoritative=neural_ink is not None,
         )
+        if neural_pack is not None and neural_pack.get("labels") is not None:
+            from botdraw.portrait.neural import FEATURE_CLASSES, HAIR_CLASSES
+            from botdraw.portrait.portrait_mesh import apply_face_label_bias
+
+            grid_h, grid_w = tone_pack["tone_codes"].shape
+            labels_grid = np.asarray(
+                Image.fromarray(neural_pack["labels"]).resize(
+                    (grid_w, grid_h), Image.Resampling.NEAREST
+                ),
+                dtype=np.uint8,
+            )
+            tone_pack["tone_codes"] = apply_face_label_bias(
+                tone_pack["tone_codes"],
+                labels_grid,
+                hair_classes=HAIR_CLASSES,
+                feature_classes=FEATURE_CLASSES,
+                max_code=max_tone_code,
+            )
         if neural_pack is not None:
             # The line model + person matte already did semantic pruning
             edges_px_pruned = edges_px_pending
@@ -908,6 +957,7 @@ def ingest_portrait(
         filter_speckle=speckle,
         min_path_points=min_pts,
         min_area_px=80.0 if quality_enum == QualityPreset.BOOTH_FAST else 48.0,
+        subject_mask=neural_pack["mask"] if neural_pack is not None else None,
     )
     t_trace = time.perf_counter()
 
@@ -977,9 +1027,11 @@ def ingest_portrait(
                 else ("linedraw_ensemble" if use_ensemble else "linedraw")
             ),
             "line_source": line_source_resolved,
+            "line_source_warning": neural_warning,
             "ensemble": ensemble_meta,
             "scan_mode": scan,
             "suppress_background": bool(suppress_background) if suppress_background is not None else None,
+            "suppress_background_warning": background_warning,
             "protect_subjects": list(protect_subjects or []),
             "orientation_deg": int(orient),
             "ai_scene": ai_scene,
@@ -1008,5 +1060,6 @@ def ingest_portrait(
                 if tone_pack.get("link_h") is not None
                 else 0,
             },
+            "face_label_bias": bool(neural_pack is not None and neural_pack.get("labels") is not None),
         },
     )

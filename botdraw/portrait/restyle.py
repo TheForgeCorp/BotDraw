@@ -9,6 +9,7 @@ import numpy as np  # noqa: F401 — used throughout restylers
 from botdraw.core.models import (
     QUALITY_LIMITS,
     LayeredSVG,
+    Pen,
     Polyline,
     QualityPreset,
     StyleParams,
@@ -19,7 +20,21 @@ from botdraw.portrait.models import PortraitVector
 from botdraw.styles.image_utils import map_to_page
 
 
-def _pen_for(pv: PortraitVector, palette, cluster_id: str | None = None, rgb=None):
+def _saturation_hex(hex_color: str) -> float:
+    h = hex_color.lstrip("#")
+    r, g, b = (int(h[i : i + 2], 16) / 255.0 for i in (0, 2, 4))
+    mx, mn = max(r, g, b), min(r, g, b)
+    return 0.0 if mx <= 1e-6 else (mx - mn) / mx
+
+
+def _pen_for(
+    pv: PortraitVector,
+    palette,
+    cluster_id: str | None = None,
+    rgb=None,
+    *,
+    respect_monochrome: bool = True,
+) -> Pen:
     pens = ink_pens(palette) or list(palette.pens)
     if cluster_id and cluster_id in pv.pen_map:
         try:
@@ -37,6 +52,20 @@ def _pen_for(pv: PortraitVector, palette, cluster_id: str | None = None, rgb=Non
         except KeyError:
             pass
     if rgb is not None:
+        # Region ids (e.g. "r0") aren't in pv.pen_map, so this is the path
+        # region-based styles (Cubism, Pen Sketch's region-outline pass)
+        # actually take. On a monochrome source photo, restrict the search
+        # to the palette's own low-saturation pens first — same reasoning
+        # as assign_pens() in pens.py — so a B&W photo's outline regions
+        # don't get quantized onto an arbitrary saturated hue. Callers that
+        # need multiple distinguishable colors regardless of source chroma
+        # (Cubism's facet fills, where color *is* the visual language) opt
+        # out with respect_monochrome=False.
+        if respect_monochrome and (pv.meta or {}).get("monochrome_source"):
+            low_chroma = [p for p in pens if _saturation_hex(p.color_hex) < 0.25]
+            if low_chroma:
+                restricted = palette.model_copy(update={"pens": low_chroma})
+                return nearest_pen(restricted, int(rgb[0]), int(rgb[1]), int(rgb[2]))
         return nearest_pen(palette, int(rgb[0]), int(rgb[1]), int(rgb[2]))
     return pens[0]
 
@@ -307,8 +336,69 @@ def restyle_linework(
     )
 
 
-def restyle_hatch(pv: PortraitVector, palette, params: StyleParams, *, line_spacing_mm: float | None = None) -> LayeredSVG:
-    """Prefer tone-grid / ingest hatch; fall back to midtone-masked adaptive grid."""
+def _tone_code_at(pv: PortraitVector, x_mm: float, y_mm: float) -> int | None:
+    """Look up the mesh tone-code band under a page-space point, using the
+    same cell grid build_portrait_mesh laid down for this ingest."""
+    codes = pv.tone_codes
+    cell = float(pv.tone_cell_mm or 0.0)
+    if codes is None or cell <= 0:
+        return None
+    codes = np.asarray(codes)
+    ox, oy = pv.tone_origin_mm
+    row = int((y_mm - oy) / cell)
+    col = int((x_mm - ox) / cell)
+    if 0 <= row < codes.shape[0] and 0 <= col < codes.shape[1]:
+        return int(codes[row, col])
+    return None
+
+
+def _tone_band_pen_ids(pv: PortraitVector, palette) -> dict[int, str]:
+    """
+    Map tone-code bands (1..4, lightest to darkest shade) onto distinct
+    ink pens ordered lightest-to-darkest — the multi-pen tonal shading
+    "Color Shade Portrait" is named for. Without this, its ingest-first
+    hatch path picked from the single ingest-assigned pen role just like
+    "Hatch Portrait", making the two styles byte-identical output despite
+    advertising different names.
+
+    Respects the monochrome pen policy (see pens.py): on a low-chroma
+    source, bands stay within the palette's own low-saturation pens.
+    """
+    candidates = ink_pens(palette) or list(palette.pens)
+    if (pv.meta or {}).get("monochrome_source"):
+        low_chroma = [p for p in candidates if _saturation_hex(p.color_hex) < 0.25]
+        if low_chroma:
+            candidates = low_chroma
+
+    def _lum(p) -> float:
+        h = p.color_hex.lstrip("#")
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+        return 0.299 * r + 0.587 * g + 0.114 * b
+
+    ordered = sorted(candidates, key=_lum, reverse=True)  # lightest first
+    if not ordered:
+        return {}
+    return {
+        code: ordered[min(len(ordered) - 1, round((code - 1) / 3 * (len(ordered) - 1)))].id
+        for code in range(1, 5)
+    }
+
+
+def restyle_hatch(
+    pv: PortraitVector,
+    palette,
+    params: StyleParams,
+    *,
+    line_spacing_mm: float | None = None,
+    multi_pen_bands: bool = False,
+) -> LayeredSVG:
+    """Prefer tone-grid / ingest hatch; fall back to midtone-masked adaptive grid.
+
+    multi_pen_bands=True is "Color Shade Portrait": re-tags ingest hatch
+    strokes by their tone-code band onto distinct pens (lightest code to
+    lightest pen) instead of the single ingest-assigned hatch pen every
+    other hatch-based style uses.
+    """
     limit = _budget(params)
     edge_limit = max(40, limit // 8)
     edges = _edge_polys(pv, palette, limit=edge_limit)
@@ -317,13 +407,25 @@ def restyle_hatch(pv: PortraitVector, palette, params: StyleParams, *, line_spac
     fallback_limit = max(fill_limit, max(0, limit - len(edges)))
     ingest, src = _ingest_first_hatch_polys(pv, palette, limit=fallback_limit, style="hatch", seed=1)
     if ingest:
+        style_id = "portrait_hatch"
+        if multi_pen_bands and pv.tone_codes is not None:
+            band_pens = _tone_band_pen_ids(pv, palette)
+            if len(set(band_pens.values())) > 1:
+                retagged = []
+                for poly in ingest:
+                    mx, my = poly.points[len(poly.points) // 2]
+                    code = _tone_code_at(pv, mx, my)
+                    pen_id = band_pens.get(code) if code else None
+                    retagged.append(poly.model_copy(update={"pen_id": pen_id or poly.pen_id}))
+                ingest = retagged
+                style_id = "portrait_color_shade"
         buckets = _bucketize(edges + ingest)
         return LayeredSVG(
             width_mm=pv.page_w_mm,
             height_mm=pv.page_h_mm,
             passes=_passes_from_buckets("hatch", "Hatch", buckets),
             seed=params.seed,
-            meta={"style": "portrait_hatch", "quality": params.quality.value, "vector_source": src},
+            meta={"style": style_id, "quality": params.quality.value, "vector_source": src},
         )
 
     # Classic adaptive fallback — only when hatch and tone_codes are both absent
@@ -475,6 +577,59 @@ def restyle_stipple(pv: PortraitVector, palette, params: StyleParams, *, density
     )
 
 
+def _polygon_scanline_fill(
+    pts: list[tuple[float, float]], step: float
+) -> list[list[tuple[float, float]]]:
+    """
+    Horizontal scanline fill clipped to the true polygon shape.
+
+    Replaces the previous bounding-box scanline fill, which drew every facet
+    as a full-width rectangle regardless of its actual outline — the cause of
+    the blocky, face-unrelated grid in Cubism renders. Returns one point list
+    per fill segment (a concave/notched row can yield more than one).
+    """
+    from shapely.geometry import GeometryCollection, LineString, MultiLineString, Polygon
+
+    if len(pts) < 3:
+        return []
+    try:
+        poly = Polygon(pts)
+        if not poly.is_valid:
+            poly = poly.buffer(0)
+    except Exception:
+        return []
+    if poly.is_empty or poly.bounds == ():
+        return []
+
+    minx, miny, maxx, maxy = poly.bounds
+    pad = max(1.0, (maxx - minx) * 0.05)
+    step = max(0.1, float(step))
+    segments: list[list[tuple[float, float]]] = []
+    yy = miny + step / 2.0
+    while yy <= maxy:
+        scan = LineString([(minx - pad, yy), (maxx + pad, yy)])
+        try:
+            clipped = poly.intersection(scan)
+        except Exception:
+            yy += step
+            continue
+        if clipped.is_empty:
+            yy += step
+            continue
+        if isinstance(clipped, LineString):
+            lines = [clipped]
+        elif isinstance(clipped, (MultiLineString, GeometryCollection)):
+            lines = [g for g in clipped.geoms if isinstance(g, LineString) and not g.is_empty]
+        else:
+            lines = []
+        for line in lines:
+            coords = list(line.coords)
+            if len(coords) >= 2:
+                segments.append([(float(x), float(y)) for x, y in coords])
+        yy += step
+    return segments
+
+
 def restyle_regions_mosaic(pv: PortraitVector, palette, params: StyleParams) -> LayeredSVG:
     if not pv.regions:
         return restyle_hatch(pv, palette, params)
@@ -482,19 +637,18 @@ def restyle_regions_mosaic(pv: PortraitVector, palette, params: StyleParams) -> 
     fills: dict[str, list[Polyline]] = {}
     border = ink_pens(palette)[0] if ink_pens(palette) else palette.pens[0]
     for r in pv.regions:
-        pen = _pen_for(pv, palette, r.id, r.mean_rgb)
+        # Cubism's facets rely on multiple distinguishable colors to read
+        # as facets at all; collapsing them to black on a B&W source (as
+        # the outline-only regions in restyle_linework correctly do) turns
+        # every facet into one continuous black fill instead. Keep full
+        # palette access here.
+        pen = _pen_for(pv, palette, r.id, r.mean_rgb, respect_monochrome=False)
         pts = list(r.points_mm)
         if len(pts) >= 3:
             outline.append(Polyline(points=pts, pen_id=border.id, closed=True))
-        xs = [p[0] for p in pts]
-        ys = [p[1] for p in pts]
-        y0, y1 = min(ys), max(ys)
-        x0, x1 = min(xs), max(xs)
         step = max(0.6, pen.profile.width_mm)
-        yy = y0
-        while yy <= y1:
-            fills.setdefault(pen.id, []).append(Polyline(points=[(x0, yy), (x1, yy)], pen_id=pen.id))
-            yy += step
+        for seg_pts in _polygon_scanline_fill(pts, step):
+            fills.setdefault(pen.id, []).append(Polyline(points=seg_pts, pen_id=pen.id))
     # Prefer ingest edges as additional outline structure
     outline.extend(_edge_polys(pv, palette, limit=80))
     passes = [make_pass("mosaic-outline", "Facet outline", border.id, outline)]
@@ -626,7 +780,9 @@ def restyle_scribble_tone(pv: PortraitVector, palette, params: StyleParams, *, l
 RESTYLERS = {
     "portrait_linework": restyle_linework,
     "portrait_hatch": restyle_hatch,
-    "portrait_color_shade": restyle_hatch,
+    "portrait_color_shade": lambda pv, palette, params, **kw: restyle_hatch(
+        pv, palette, params, multi_pen_bands=True, **kw
+    ),
     "portrait_squiggle": restyle_squiggle,
     "portrait_pointillism": restyle_stipple,
     "portrait_dots": lambda pv, palette, params, **kw: restyle_stipple(pv, palette, params, density_mul=0.55, **kw),
@@ -668,5 +824,7 @@ def render_from_vector(
         "quality": params.quality.value if isinstance(params.quality, QualityPreset) else params.quality,
         "edge_count": len(pv.edge_polylines_mm),
         "hatch_count": len(pv.hatch_polylines_mm),
+        "line_source": (pv.meta or {}).get("line_source"),
+        "line_source_warning": (pv.meta or {}).get("line_source_warning"),
     }
     return layered

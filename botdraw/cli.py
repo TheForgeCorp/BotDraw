@@ -24,6 +24,8 @@ vision_app = typer.Typer(help="Vision review providers (Anthropic / OpenAI / Gem
 app.add_typer(vision_app, name="vision")
 gold_app = typer.Typer(help="PortraitBot Phase B classic gold-set gate")
 app.add_typer(gold_app, name="gold")
+portrait_app = typer.Typer(help="PortraitBot review tools")
+app.add_typer(portrait_app, name="portrait")
 
 
 @gold_app.command("ensure-fixtures")
@@ -66,6 +68,48 @@ def gold_report(
         print(f"  [{color}]{mark}[/{color}] {r.case.id} · edges={r.edge_count} hatch={r.hatch_count}")
     if with_vision_fixtures:
         print("[dim]vision fixtures section appended (manual 3-turn loop)[/dim]")
+
+
+@portrait_app.command("contact-sheet")
+def portrait_contact_sheet(
+    image: Path = typer.Argument(..., help="Photo to render across styles"),
+    out: Path = typer.Option(
+        Path("docs/wireframes/portraitbot-contact-sheet.html"),
+        help="Self-contained HTML contact sheet (+ .json metrics sidecar next to it)",
+    ),
+    styles: Optional[str] = typer.Option(
+        None, help="Comma-separated style ids (default: all portrait_* styles)"
+    ),
+    quality: QualityPreset = typer.Option(QualityPreset.STUDIO_HQ, help="Ingest + render quality"),
+    line_source: str = typer.Option("auto", help="auto | classic | neural"),
+) -> None:
+    """
+    Render one photo across every portrait style and score each against the
+    source photo (tone correlation + page coverage) — the human-review
+    surface for judging whether output actually looks right, not just
+    whether it passes structural checks.
+    """
+    from botdraw.portrait.neural import neural_available
+    from botdraw.portrait.scoreboard import write_contact_sheet
+
+    if not image.exists():
+        raise typer.BadParameter(f"image not found: {image}")
+    style_list = [s.strip() for s in styles.split(",")] if styles else None
+    path, result = write_contact_sheet(
+        image, out, styles=style_list, quality=quality, line_source=line_source
+    )
+    print(f"[bold]{len(result.scores)}[/bold] styles → {path}")
+    print(f"line_source: [bold]{result.line_source_resolved}[/bold] (neural_available={neural_available()})")
+    if result.line_source_warning:
+        print(f"[yellow]⚠ {result.line_source_warning}[/yellow]")
+    for s in result.scores:
+        tone_flag = "" if s.tone_corr > 0 else " [red]tone_corr<=0[/red]"
+        cov_flag = "" if s.max_single_pass_coverage < 0.35 else " [red]max_pass_cov>=0.35[/red]"
+        print(
+            f"  {s.style_id:24s} tone_corr={s.tone_corr:+.3f}{tone_flag} "
+            f"coverage={s.total_coverage:.1%} max_pass={s.max_single_pass_coverage:.1%}{cov_flag} "
+            f"paths={s.path_count} wall={s.wall_s:.2f}s"
+        )
 
 
 @models_app.command("status")
@@ -225,6 +269,9 @@ def render_cmd(
     print(f"SVG: {job.svg_path}")
     print(f"Motion: {job.motion_path}")
     print(f"ETA: {payload['stats']['estimated_time_s']:.1f}s paths={payload['stats']['stroke_count']}")
+    warning = ((payload.get("layers") or {}).get("meta") or {}).get("line_source_warning")
+    if warning:
+        print(f"[yellow]⚠ {warning}[/yellow]")
 
 
 @app.command("bench")

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from botdraw.core.models import LayeredSVG, Polyline
+from botdraw.core.models import LayeredSVG, PassLayer, Polyline
+from botdraw.core.optimize import optimize_layered
 from botdraw.core.svg import make_pass
 from botdraw.portrait.ornament import LINE_TYPES, StrokeOrnamentParams, decorate_layered, decorate_polyline
 
@@ -59,3 +60,45 @@ def test_decorate_layered_respects_budget():
     )
     n = sum(len(p.polylines) for p in out.passes)
     assert n <= 5
+
+
+def test_decorate_layered_multi_pass_never_falls_back_to_undecorated_pass():
+    """
+    Regression guard: once max_paths is exhausted by an earlier pass, later
+    passes must stay capped at zero new polylines, not silently restore
+    their full original (undecorated) polyline list. The bug this guards
+    against overshot a 200-path budget to 580 with dotted/ladder line
+    types on a 20-pass fixture.
+    """
+    passes = []
+    for i in range(10):
+        polys = [
+            Polyline(points=[(x, float(i) * 2.0) for x in range(0, 20, 2)], pen_id="black")
+            for _ in range(10)
+        ]
+        passes.append(PassLayer(id=f"p{i}", name=f"Pass {i}", pen_id="black", polylines=polys))
+    layered = LayeredSVG(width_mm=100, height_mm=100, passes=passes, seed=1, meta={"quality": "booth-fast"})
+    assert sum(len(p.polylines) for p in layered.passes) == 100
+
+    for line_type in ("dotted", "solid", "zigzag"):
+        out = decorate_layered(
+            layered,
+            StrokeOrnamentParams(line_type=line_type, ornament_target="all", max_paths=20),
+        )
+        total = sum(len(p.polylines) for p in out.passes)
+        assert total <= 20, f"{line_type}: budget overshot ({total} > 20)"
+
+
+def test_decorate_layered_writes_flat_linetype_meta_optimize_reads():
+    """
+    optimize_layered() reads meta["linetype"] (flat) to decide whether
+    vpype's merge() is safe — merge glues dash/dot gaps back together since
+    it only sees geometry. decorate_layered previously only ever nested it
+    at meta["ornament"]["line_type"], which optimize_layered never read.
+    """
+    layered = _sample_layered()
+    out = decorate_layered(layered, StrokeOrnamentParams(line_type="dashed", dash_mm=5.0, gap_mm=5.0))
+    assert out.meta.get("linetype") == "dashed"
+
+    optimized = optimize_layered(out, use_vpype=False)
+    assert optimized.meta.get("optimizer") == "greedy-linetype"

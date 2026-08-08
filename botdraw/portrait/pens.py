@@ -5,6 +5,8 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+import numpy as np
+
 from botdraw.core.models import LineProfile, NibType, PaletteSet, Pen
 from botdraw.palettes import ink_pens
 from botdraw.portrait.models import PortraitVector
@@ -15,6 +17,34 @@ def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
     if len(h) < 6:
         return (0, 0, 0)
     return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+def _saturation(hex_color: str) -> float:
+    r, g, b = (v / 255.0 for v in _hex_to_rgb(hex_color))
+    mx, mn = max(r, g, b), min(r, g, b)
+    return 0.0 if mx <= 1e-6 else (mx - mn) / mx
+
+
+def photo_is_low_chroma(pv: PortraitVector, *, threshold: float = 0.12) -> bool:
+    """
+    True for black-and-white / desaturated photos.
+
+    Cluster and hatch pen assignment otherwise pick the nearest-by-color
+    palette pen with no floor on how saturated that pen is allowed to be —
+    on a palette with no true gray (e.g. default-6: black plus navy,
+    crimson, ochre, teal), a neutral gray photo tone gets mapped onto
+    whichever saturated hue happens to be least-far away. That reads as an
+    arbitrary color choice, not a deliberate one, and is why real B&W
+    headshots were coming out navy/ochre/teal instead of monochrome.
+    """
+    rgb = np.asarray(pv.rgb, dtype=np.float32)
+    if rgb.size == 0:
+        return False
+    r, g, b = rgb[..., 0], rgb[..., 1], rgb[..., 2]
+    mx = np.maximum(np.maximum(r, g), b)
+    mn = np.minimum(np.minimum(r, g), b)
+    sat = np.where(mx > 1e-6, (mx - mn) / np.maximum(mx, 1e-6), 0.0)
+    return float(np.mean(sat)) < threshold
 
 
 def _rgb_to_approx_lab(r: float, g: float, b: float) -> tuple[float, float, float]:
@@ -83,6 +113,14 @@ def assign_pens(
         pens = list(palette.pens)
     pen_by_id = {p.id: p for p in pens}
 
+    # On a genuinely low-chroma (B&W) photo, restrict candidates to the
+    # palette's own low-saturation pens so a neutral tone doesn't get
+    # mapped onto an arbitrary saturated hue. Fall back to the full
+    # palette only if it has no low-saturation pens at all to offer.
+    monochrome_source = photo_is_low_chroma(pv)
+    chroma_pens = [p for p in pens if _saturation(p.color_hex) < 0.25]
+    tone_pens = chroma_pens if (monochrome_source and chroma_pens) else pens
+
     # Sort clusters by area desc
     clusters = sorted(pv.clusters, key=lambda c: -c.area)
     used: set[str] = set()
@@ -92,7 +130,7 @@ def assign_pens(
         best = None
         best_d = float("inf")
         # Prefer unused pens first
-        candidates = [p for p in pens if p.id not in used] or pens
+        candidates = [p for p in tone_pens if p.id not in used] or tone_pens
         # Prefer wider markers for large colorful areas
         for p in candidates:
             pr, pg, pb = _hex_to_rgb(p.color_hex)
@@ -116,11 +154,18 @@ def assign_pens(
         r, g, b = _hex_to_rgb(p.color_hex)
         return 0.299 * r + 0.587 * g + 0.114 * b
 
-    dark = sorted(pens, key=lambda p: (_lum(p), -p.profile.width_mm))
+    dark = sorted(tone_pens, key=lambda p: (_lum(p), -p.profile.width_mm))
     hatch_pen = next((p for p in dark if p.id != edge_pen.id and _lum(p) < 80), None)
     if hatch_pen is None:
-        wider = sorted(pens, key=lambda p: (p.profile.width_mm, p.id))
-        hatch_pen = wider[min(1, len(wider) - 1)] if len(wider) > 1 else edge_pen
+        if monochrome_source:
+            # No second low-chroma pen to differentiate with — reuse the
+            # edge pen rather than spilling into a saturated accent color
+            # (the previous behavior, and the reason B&W photos always
+            # hatched in whichever pen was "next darkest" — usually navy).
+            hatch_pen = edge_pen
+        else:
+            wider = sorted(pens, key=lambda p: (p.profile.width_mm, p.id))
+            hatch_pen = wider[min(1, len(wider) - 1)] if len(wider) > 1 else edge_pen
     auto_map["hatch"] = hatch_pen.id
 
     # Merge overrides
@@ -138,6 +183,7 @@ def assign_pens(
     pv.pen_map = final
     pv.meta = {
         **pv.meta,
+        "monochrome_source": monochrome_source,
         "pen_assignment": [
             {
                 "cluster_id": cid,
