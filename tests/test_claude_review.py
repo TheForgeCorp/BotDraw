@@ -92,6 +92,32 @@ def test_provider_status_and_default(monkeypatch):
     assert status["anthropic"]["ready"] is False
 
 
+def test_default_model_ids_are_not_the_known_stale_or_shutdown_ones(monkeypatch):
+    """
+    Regression guard, not a pin on "the current best model" (that will
+    always drift) — just a floor against regressing to specific known-bad
+    values. gemini-2.0-flash in particular is not a staleness nitpick: it
+    was fully shut down (ai.google.dev/gemini-api/docs/deprecations), so
+    the old default couldn't serve a single real request.
+    """
+    monkeypatch.delenv("BOTDRAW_CLAUDE_MODEL", raising=False)
+    monkeypatch.delenv("BOTDRAW_OPENAI_MODEL", raising=False)
+    monkeypatch.delenv("BOTDRAW_GEMINI_MODEL", raising=False)
+    status = cr.provider_status()
+    assert status["anthropic"]["model"] != "claude-sonnet-4-20250514"
+    assert status["openai"]["model"] != "gpt-4.1"
+    assert status["gemini"]["model"] != "gemini-2.0-flash"
+    assert status["anthropic"]["model"] == cr.DEFAULT_CLAUDE_MODEL
+    assert status["openai"]["model"] == cr.DEFAULT_OPENAI_MODEL
+    assert status["gemini"]["model"] == cr.DEFAULT_GEMINI_MODEL
+
+
+def test_model_env_overrides_still_win_over_defaults(monkeypatch):
+    monkeypatch.setenv("BOTDRAW_CLAUDE_MODEL", "claude-custom-pin")
+    status = cr.provider_status()
+    assert status["anthropic"]["model"] == "claude-custom-pin"
+
+
 def test_load_scene_json_normalizes_rich_manual(tmp_path):
     path = tmp_path / "scene.json"
     path.write_text(

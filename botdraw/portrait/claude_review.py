@@ -39,6 +39,21 @@ import numpy as np
 from PIL import Image
 from pydantic import BaseModel, Field, ValidationError
 
+# Defaults for BOTDRAW_CLAUDE_MODEL / BOTDRAW_OPENAI_MODEL / BOTDRAW_GEMINI_MODEL
+# when unset. These drift out of date — the previous defaults
+# (claude-sonnet-4-20250514, gpt-4.1, gemini-2.0-flash) were a full major
+# version behind current production models, and gemini-2.0-flash had been
+# shut down entirely (see https://ai.google.dev/gemini-api/docs/deprecations),
+# meaning the "default" Gemini path silently could not work at all. Prefer
+# aliases that track the current flagship where the vendor documents one
+# (OpenAI's "gpt-5.6", Google's "gemini-flash-latest"), so this default
+# doesn't quietly go stale again the same way. Anthropic has no such
+# "-latest" alias for dateless major-version IDs, so pin the current one
+# explicitly and expect to revisit when Claude 6 ships.
+DEFAULT_CLAUDE_MODEL = "claude-sonnet-5"
+DEFAULT_OPENAI_MODEL = "gpt-5.6"
+DEFAULT_GEMINI_MODEL = "gemini-flash-latest"
+
 ProviderName = Literal["anthropic", "openai", "gemini", "manual"]
 PROVIDERS: tuple[ProviderName, ...] = ("anthropic", "openai", "gemini", "manual")
 
@@ -264,7 +279,7 @@ def provider_status() -> dict[str, dict[str, Any]]:
         "key": bool(os.environ.get("ANTHROPIC_API_KEY")),
         "package": anth_pkg,
         "ready": bool(os.environ.get("ANTHROPIC_API_KEY")) and anth_pkg,
-        "model": os.environ.get("BOTDRAW_CLAUDE_MODEL", "claude-sonnet-4-20250514"),
+        "model": os.environ.get("BOTDRAW_CLAUDE_MODEL", DEFAULT_CLAUDE_MODEL),
     }
     # openai
     try:
@@ -277,7 +292,7 @@ def provider_status() -> dict[str, dict[str, Any]]:
         "key": bool(os.environ.get("OPENAI_API_KEY")),
         "package": oai_pkg,
         "ready": bool(os.environ.get("OPENAI_API_KEY")) and oai_pkg,
-        "model": os.environ.get("BOTDRAW_OPENAI_MODEL", "gpt-4.1"),
+        "model": os.environ.get("BOTDRAW_OPENAI_MODEL", DEFAULT_OPENAI_MODEL),
     }
     # gemini
     try:
@@ -296,7 +311,7 @@ def provider_status() -> dict[str, dict[str, Any]]:
         "key": gem_key,
         "package": gem_pkg,
         "ready": gem_key and gem_pkg,
-        "model": os.environ.get("BOTDRAW_GEMINI_MODEL", "gemini-2.0-flash"),
+        "model": os.environ.get("BOTDRAW_GEMINI_MODEL", DEFAULT_GEMINI_MODEL),
     }
     # manual / subscription JSON (multi-turn dir or single files)
     scene_path = os.environ.get("BOTDRAW_VISION_SCENE_JSON") or ""
@@ -396,7 +411,7 @@ def _call_anthropic_vision(
         )
     content.append({"type": "text", "text": prompt})
     msg = client.messages.create(
-        model=model or os.environ.get("BOTDRAW_CLAUDE_MODEL", "claude-sonnet-4-20250514"),
+        model=model or os.environ.get("BOTDRAW_CLAUDE_MODEL", DEFAULT_CLAUDE_MODEL),
         max_tokens=1024,
         system=system,
         messages=[{"role": "user", "content": content}],
@@ -429,7 +444,7 @@ def _call_openai_vision(
             }
         )
     resp = client.chat.completions.create(
-        model=model or os.environ.get("BOTDRAW_OPENAI_MODEL", "gpt-4.1"),
+        model=model or os.environ.get("BOTDRAW_OPENAI_MODEL", DEFAULT_OPENAI_MODEL),
         max_tokens=1024,
         messages=[
             {"role": "system", "content": system},
@@ -451,7 +466,7 @@ def _call_gemini_vision(
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY / GOOGLE_API_KEY missing")
-    model_name = model or os.environ.get("BOTDRAW_GEMINI_MODEL", "gemini-2.0-flash")
+    model_name = model or os.environ.get("BOTDRAW_GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
     # Prefer new google-genai SDK; fall back to google-generativeai
     try:
         from google import genai
