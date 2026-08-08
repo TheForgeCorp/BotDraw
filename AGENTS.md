@@ -36,10 +36,37 @@ the classic pipeline automatically.
 - CI has no weights, so tests must not require them; integration tests are
   `skipif`-gated on `neural_available()`.
 
+## Generative portrait ink (studio)
+
+`line_source=generative` runs a generative ink stage
+(`botdraw/portrait/generative.py`) **before** contour/mesh vectorization.
+Booth stays on `auto` → neural → classic.
+
+| Provider (`BOTDRAW_GENERATIVE_PROVIDER`) | Env | Notes |
+|---|---|---|
+| `manual` | `BOTDRAW_GENERATIVE_INK` | PNG/JPEG line drawing on disk (subscription/chat) |
+| `openai` | `OPENAI_API_KEY` | Images API edit → line drawing |
+| `gemini` | `GEMINI_API_KEY` / `GOOGLE_API_KEY` | Gemini image generation |
+
+- Fail closed → neural → classic with `line_source_warning`.
+- Artifacts: `generative_ink.png`, `generative_meta.json` next to ingest.
+- CLI: `botdraw generative status`.
+- Fidelity: ingest-time tone correlation + one retry; meta `generative_fidelity`.
+- CI mocks providers; never calls live image APIs.
+
+## Pen Library schema (AI selection later)
+
+`Pen` / `LineProfile` carry optional `diameter_mm`, `tip_shape`, and
+`preferred_uses` (outline/shade/fill/accent). **Not wired into `assign_pens`
+yet.** Future AI pen choice must emit closed `pen_map` /
+`pass_overrides` only — see
+[`docs/handoffs/pen-library-ai-contract.md`](docs/handoffs/pen-library-ai-contract.md).
+
 ## Vision review (live vs studio)
 
 A vision model reviews the photo (scene knobs) and optionally critiques one render.
-It does **not** generate strokes — U2-Net / mesh / restyle stay the drawing path.
+It does **not** generate strokes — generative ink / U2-Net / mesh / restyle stay
+the drawing path.
 
 ### Modes (`ai_review`)
 

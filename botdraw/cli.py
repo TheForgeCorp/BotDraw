@@ -22,6 +22,11 @@ models_app = typer.Typer(help="Neural model weight management")
 app.add_typer(models_app, name="models")
 vision_app = typer.Typer(help="Vision review providers (Anthropic / OpenAI / Gemini / manual)")
 app.add_typer(vision_app, name="vision")
+generative_app = typer.Typer(
+    help="Studio generative portrait ink (manual PNG / OpenAI / Gemini). "
+    "Use line_source=generative on ingest/render."
+)
+app.add_typer(generative_app, name="generative")
 gold_app = typer.Typer(help="PortraitBot Phase B classic gold-set gate")
 app.add_typer(gold_app, name="gold")
 
@@ -106,6 +111,26 @@ def vision_status() -> None:
         )
         if name == "manual" and info.get("scene_json"):
             print(f"    scene_json={info['scene_json']}")
+
+
+@generative_app.command("status")
+def generative_status() -> None:
+    """Show which generative ink providers are ready (key/file + package)."""
+    from botdraw.portrait.generative import default_provider, provider_status
+
+    status = provider_status()
+    print(f"default provider: [bold]{default_provider()}[/bold]")
+    print("line_source values: classic | neural | auto | [bold]generative[/bold]")
+    for name, info in status.items():
+        ready = "ready" if info.get("ready") else "not ready"
+        color = "green" if info.get("ready") else "yellow"
+        print(
+            f"  [{color}]{name}[/{color}]: {ready} "
+            f"(key={info.get('key')} package={info.get('package')} "
+            f"model={info.get('model')})"
+        )
+        if name == "manual" and info.get("ink_path"):
+            print(f"    BOTDRAW_GENERATIVE_INK={info['ink_path']}")
 
 
 @vision_app.command("loop-demo")

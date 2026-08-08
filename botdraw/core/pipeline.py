@@ -580,6 +580,9 @@ def render_job(
                 protect_subjects=extra.get("protect_subjects"),
                 orientation_deg=extra.get("orientation_deg"),
                 ai_scene=extra.get("ai_scene"),
+                generative_provider=extra.get("generative_provider"),
+                generative_ink_path=extra.get("generative_ink_path"),
+                generative_seed=extra.get("generative_seed"),
             )
             pv = assign_pens(pv, palette, pen_map=extra.get("pen_map"))
             ingest_id = pv.ingest_id
@@ -628,6 +631,9 @@ def render_job(
                         protect_subjects=extra.get("protect_subjects"),
                         orientation_deg=extra.get("orientation_deg"),
                         ai_scene=extra.get("ai_scene"),
+                        generative_provider=extra.get("generative_provider"),
+                        generative_ink_path=extra.get("generative_ink_path"),
+                        generative_seed=extra.get("generative_seed"),
                     )
                     pv = assign_pens(pv, palette, pen_map=extra.get("pen_map"))
                     ingest_id = pv.ingest_id

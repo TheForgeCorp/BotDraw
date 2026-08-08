@@ -1670,6 +1670,7 @@ function renderPortrait() {
                 <option value="classic"${portraitLineSource === "classic" ? " selected" : ""}>Classic</option>
                 <option value="neural"${portraitLineSource === "neural" ? " selected" : ""}>Neural</option>
                 <option value="auto"${portraitLineSource === "auto" ? " selected" : ""}>Auto</option>
+                <option value="generative"${portraitLineSource === "generative" ? " selected" : ""}>Generative</option>
               </select>`
             )}
             ${field(
@@ -1681,6 +1682,7 @@ function renderPortrait() {
               </select>`
             )}
           </div>
+          <p class="muted" id="line-source-hint">Generative = studio AI ink (manual PNG via BOTDRAW_GENERATIVE_INK, or OpenAI/Gemini). Falls back to neural/classic.</p>
           <p class="muted" id="ai-review-hint">Phase B gate: AI off. Live = scene only; Studio may re-ingest once.</p>
           <label title="5+1 ensemble"><input type="checkbox" id="ensemble-5plus1" ${
             portraitEnsemble === true || (portraitEnsemble == null && state.quality === "studio-hq" && portraitImageMode === "photo") ? "checked" : ""

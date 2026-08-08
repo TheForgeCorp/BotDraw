@@ -47,6 +47,9 @@ def make_ingest_key(
     suppress_background: bool | None = None,
     protect_subjects: list[str] | None = None,
     orientation_deg: int | None = None,
+    generative_provider: str | None = None,
+    generative_ink_path: str | None = None,
+    generative_seed: int | None = None,
 ) -> str:
     h = hashlib.sha256()
     if image_bytes:
@@ -62,6 +65,7 @@ def make_ingest_key(
         f"|cs{contour_simplify}|hs{hatch_size}|lj{linedraw_jitter}|e{ensemble}"
         f"|sm{scan_mode}|ls{line_source}|mt{max_tone_code}|sb{suppress_background}"
         f"|ps{prot}|od{orientation_deg}|mesh3ai1"
+        f"|gp{generative_provider}|gi{generative_ink_path}|gs{generative_seed}"
     )
     h.update(knobs.encode())
     return h.hexdigest()[:24]
@@ -85,6 +89,9 @@ def save_portrait_vector(pv: PortraitVector, ingest_id: str | None = None) -> st
     if "mesh_edge" in arrays:
         save_kw["mesh_edge"] = arrays["mesh_edge"]
     np.savez_compressed(out / "arrays.npz", **save_kw)
+    # Keep bulky generative PNG out of vector.json (written as a sidecar file).
+    meta_slim = dict(pv.meta or {})
+    b64 = meta_slim.pop("generative_ink_png_b64", None)
     meta = {
         "width_px": pv.width_px,
         "height_px": pv.height_px,
@@ -101,9 +108,21 @@ def save_portrait_vector(pv: PortraitVector, ingest_id: str | None = None) -> st
         "image_mode": pv.image_mode,
         "quality": pv.quality,
         "ingest_id": iid,
-        "meta": pv.meta,
+        "meta": meta_slim,
     }
     (out / "vector.json").write_text(json.dumps(meta), encoding="utf-8")
+    try:
+        gen_meta = meta_slim.get("generative")
+        if gen_meta:
+            (out / "generative_meta.json").write_text(
+                json.dumps(gen_meta, indent=2), encoding="utf-8"
+            )
+        if b64:
+            import base64
+
+            (out / "generative_ink.png").write_bytes(base64.b64decode(b64))
+    except Exception:
+        pass
     _MEM[iid] = (time.time(), pv)
     return iid
 
@@ -194,13 +213,16 @@ def resolve_portrait_vector(
     orientation_deg: int | None = None,
     ai_scene: dict | None = None,
     image_array: Any = None,
+    generative_provider: str | None = None,
+    generative_ink_path: str | None = None,
+    generative_seed: int | None = None,
 ) -> tuple[PortraitVector, bool]:
     """Return (vector, cache_hit)."""
     from botdraw.portrait.ingest import ingest_portrait
 
     contrast_v = 1.12 if contrast is None else float(contrast)
     # Resolve "auto" before keying so cache entries don't go stale when
-    # model weights are installed later.
+    # model weights are installed later. Leave generative as-is (studio path).
     if line_source in (None, "auto"):
         from botdraw.portrait.neural import neural_available
 
@@ -220,6 +242,9 @@ def resolve_portrait_vector(
         suppress_background=suppress_background,
         protect_subjects=protect_subjects,
         orientation_deg=orientation_deg,
+        generative_provider=generative_provider,
+        generative_ink_path=generative_ink_path,
+        generative_seed=0 if generative_seed is None else int(generative_seed),
     )
     ingest_extra = dict(ai_scene=ai_scene) if ai_scene is not None else {}
 
