@@ -225,6 +225,9 @@ def render_cmd(
     print(f"SVG: {job.svg_path}")
     print(f"Motion: {job.motion_path}")
     print(f"ETA: {payload['stats']['estimated_time_s']:.1f}s paths={payload['stats']['stroke_count']}")
+    warning = ((payload.get("layers") or {}).get("meta") or {}).get("line_source_warning")
+    if warning:
+        print(f"[yellow]⚠ {warning}[/yellow]")
 
 
 @app.command("bench")

@@ -673,11 +673,14 @@ def ingest_portrait(
 
     # Neural detection pass (artist-line raster + person matte + parse labels)
     neural_pack = None
+    neural_warning: str | None = None
     ls = (line_source or "auto").lower()
     if ls in ("auto", "neural"):
-        from botdraw.portrait.neural import neural_portrait_pack
+        from botdraw.portrait.neural import neural_portrait_pack, neural_unavailable_reason
 
         neural_pack = neural_portrait_pack(rgb_cropped)
+        if neural_pack is None:
+            neural_warning = neural_unavailable_reason()
     line_source_resolved = "neural" if neural_pack is not None else "classic"
     if neural_pack is not None:
         use_ensemble = False
@@ -816,6 +819,15 @@ def ingest_portrait(
     # Subject matte: dilate when pets are protected so fur isn't gated as background
     subject_mask = neural_pack["mask"] if neural_pack is not None else None
     protect = {str(s).lower() for s in (protect_subjects or [])}
+    background_warning: str | None = None
+    if suppress_background and subject_mask is None:
+        # There is no classic-path subject matte, so this knob is a no-op
+        # without neural — previously it was accepted, cached, and echoed
+        # back in meta as if it had taken effect.
+        background_warning = (
+            "suppress_background requested but has no effect: it requires the "
+            "neural subject matte (line_source=neural/auto with weights fetched)."
+        )
     if subject_mask is not None and ("pet" in protect or suppress_background):
         from scipy import ndimage as _ndi
 
@@ -997,9 +1009,11 @@ def ingest_portrait(
                 else ("linedraw_ensemble" if use_ensemble else "linedraw")
             ),
             "line_source": line_source_resolved,
+            "line_source_warning": neural_warning,
             "ensemble": ensemble_meta,
             "scan_mode": scan,
             "suppress_background": bool(suppress_background) if suppress_background is not None else None,
+            "suppress_background_warning": background_warning,
             "protect_subjects": list(protect_subjects or []),
             "orientation_deg": int(orient),
             "ai_scene": ai_scene,

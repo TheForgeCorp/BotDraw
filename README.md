@@ -79,6 +79,23 @@ Example JSON:
 {"kind": "series", "label": "daily mean temp", "unit": "C", "values": [12.1, 11.8, 13.0]}
 ```
 
+## PortraitBot: neural line detector
+
+PortraitBot prefers a neural detection layer (U2-Net portrait lines, U2-Net
+human-segmentation matte, BiSeNet face parsing) over the classic Sobel-edge
+fallback — it produces substantially more recognizable portraits from real
+photos. Without it, every ingest silently uses the weaker classic path.
+
+```bash
+pip install -e ".[neural]"   # onnxruntime, CPU-only
+botdraw models fetch          # ~387 MB one-time download, cached in ~/.botdraw/models
+botdraw models status         # confirm all three weights are present
+```
+
+If either the package or the weights are missing, ingest still works (classic
+fallback) but surfaces a warning in the job's `layers.meta.line_source_warning`
+(and the CLI prints it) so the gap is visible instead of silent.
+
 ## Notes
 
 - No physical plotter required for the MVP PoC.

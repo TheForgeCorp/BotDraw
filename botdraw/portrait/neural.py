@@ -120,6 +120,31 @@ def neural_available() -> bool:
     return _get_session("u2net_portrait") is not None and _get_session("u2net_human_seg") is not None
 
 
+def neural_unavailable_reason() -> str | None:
+    """
+    Human-readable reason the neural line detector is unavailable, or None
+    when it is available. Ingest surfaces this on every classic fallback so
+    the gap is visible in the UI/job metadata instead of silent.
+    """
+    if neural_available():
+        return None
+    try:
+        import onnxruntime  # noqa: F401
+    except ImportError:
+        return (
+            "neural line detector unavailable: onnxruntime is not installed. "
+            "Install with `pip install -e \".[neural]\"`, then run `botdraw models fetch`."
+        )
+    required = ("u2net_portrait", "u2net_human_seg")
+    missing = [name for name in required if not model_path(name).exists()]
+    if missing:
+        return (
+            f"neural line detector unavailable: model weights missing ({', '.join(missing)}). "
+            "Run `botdraw models fetch` (~387 MB, one-time)."
+        )
+    return "neural line detector unavailable for an unknown reason; falling back to classic."
+
+
 def shadow_lift(rgb: np.ndarray) -> np.ndarray:
     """Percentile autocontrast + gamma lift; the portrait model was trained on
     well-lit studio crops, so dim photos need exposure normalization first."""

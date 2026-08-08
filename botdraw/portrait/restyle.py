@@ -715,5 +715,7 @@ def render_from_vector(
         "quality": params.quality.value if isinstance(params.quality, QualityPreset) else params.quality,
         "edge_count": len(pv.edge_polylines_mm),
         "hatch_count": len(pv.hatch_polylines_mm),
+        "line_source": (pv.meta or {}).get("line_source"),
+        "line_source_warning": (pv.meta or {}).get("line_source_warning"),
     }
     return layered
