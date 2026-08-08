@@ -182,6 +182,8 @@ def test_vertical_bar_contour_extent():
 
 
 def test_ingest_dark_bg_hatch_meta():
+    # This targets the classic linedraw extractor specifically, so pin
+    # line_source rather than relying on neural weights being absent.
     pv = ingest_portrait(
         image_array=_dark_bg_bright_face(160),
         mode="photo",
@@ -190,6 +192,7 @@ def test_ingest_dark_bg_hatch_meta():
         auto_frame=False,
         hatch_size=18,
         linedraw_jitter=0.04,
+        line_source="classic",
     )
     assert pv.meta.get("edge_extractor") == "linedraw"
     assert pv.meta.get("linedraw_jitter") == 0.04
