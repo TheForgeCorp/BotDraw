@@ -151,6 +151,48 @@ def vision_loop_demo(
         print(f"  pass {p.turn:02d} ({mark}) overall={ov} edges={p.edge_count} · {p.summary}")
 
 
+@vision_app.command("select")
+def vision_select_cmd(
+    image: Path = typer.Argument(..., help="Photo to render variants of"),
+    style: str = typer.Option(..., help="Portrait style id, e.g. portrait_linework"),
+    out: Path = typer.Option(
+        Path("docs/wireframes/portraitbot-variant-selection.html"),
+        help="Self-contained HTML selection sheet (+ .json sidecar next to it)",
+    ),
+    n: int = typer.Option(4, help="Number of seeded variants to render"),
+    seed0: int = typer.Option(1, help="First seed; variants use seed0..seed0+n-1"),
+    quality: QualityPreset = typer.Option(QualityPreset.STUDIO_HQ, help="Render quality"),
+    use_vision: bool = typer.Option(
+        False, "--use-vision", help="Ask the configured vision provider to rank variants"
+    ),
+) -> None:
+    """
+    Render N seeded variants of a photo/style and write a selection sheet
+    — vision's best-suited role with today's architecture is picking
+    among finished renders, not twiddling the closed knob vocabulary a
+    single critique call can express. Works with zero vision calls
+    (--use-vision off, the default): open the sheet and pick by eye.
+    """
+    from botdraw.portrait.variant_selection import write_selection_sheet
+
+    if not image.exists():
+        raise typer.BadParameter(f"image not found: {image}")
+    path, result = write_selection_sheet(
+        image, out, style_id=style, n=n, seed0=seed0, quality=quality, use_vision=use_vision
+    )
+    print(f"[bold]{len(result.variants)}[/bold] variants → {path}")
+    if result.vision_best_index is not None:
+        picked_seed = result.variants[result.vision_best_index].seed
+        print(
+            f"[green]vision pick: seed {picked_seed}[/green] "
+            f"(confidence {result.vision_confidence:.2f}) — {result.vision_reasoning}"
+        )
+    elif use_vision:
+        print("[yellow]--use-vision requested but no provider ready/responded — pick by eye[/yellow]")
+    for v in result.variants:
+        print(f"  seed {v.seed:4d}  paths={v.path_count}")
+
+
 @vision_app.command("brief")
 def vision_brief_cmd(
     job_id: str = typer.Argument(..., help="Job id to prepare a manual-workflow brief for"),

@@ -170,6 +170,20 @@ Return ONLY valid JSON matching this schema (no markdown):
 }
 Only use the listed fix/action keys. Prefer the smallest change that helps likeness."""
 
+SELECT_SYSTEM = """You compare several pen-plotter portrait render variants of the same
+source photo (different random seeds, same style) and pick the one that most resembles
+the source. Return ONLY valid JSON matching this schema (no markdown):
+{
+  "best_index": 0..N-1,
+  "ranked_indices": [0..N-1, ...],
+  "reasoning": "one short sentence",
+  "confidence": 0..1
+}
+best_index must equal the first entry of ranked_indices. Judge likeness to the source
+photo first, legibility as a plotted line drawing second. Do not judge artistic style
+preference or which is "prettier" in isolation — only which variant most looks like the
+person (or subject) in the source photo."""
+
 
 class SubjectInfo(BaseModel):
     kind: Literal["person", "pet", "other"] = "person"
@@ -224,6 +238,19 @@ class PortraitCritique(BaseModel):
     issues: list[CritiqueIssue] = Field(default_factory=list)
     actions: CritiqueActions = Field(default_factory=CritiqueActions)
     summary: str = ""
+
+
+class VariantSelection(BaseModel):
+    """Best-of-N result: which of several seeded renders most resembles
+    the source photo. Deliberately has no knob-adjustment vocabulary —
+    selection among finished renders is the one thing today's closed
+    CritiqueActions dictionary cannot express (it can nudge density or
+    swap style_id, not choose "this specific seed's composition")."""
+
+    best_index: int = Field(ge=0)
+    ranked_indices: list[int] = Field(default_factory=list)
+    reasoning: str = ""
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
 
 
 def default_provider() -> ProviderName:
@@ -775,6 +802,80 @@ def critique_structure(
         turn=turn,
         structure=True,
     )
+
+
+def select_best_variant(
+    source_rgb: np.ndarray,
+    variant_pngs: list[bytes],
+    *,
+    client_call=_call_vision,
+    provider: ProviderName | None = None,
+) -> VariantSelection | None:
+    """
+    Best-of-N selection: given several seeded renders of the same style,
+    ask vision which one most resembles the source photo.
+
+    This is vision's genuinely strong role with today's architecture:
+    ranking finished output, rather than twiddling CritiqueActions' closed
+    knob vocabulary, which cannot express "pick this specific seed" (or,
+    more importantly down the line, structural choices like facet layout
+    that a knob dictionary was never designed to carry).
+
+    Fails closed exactly like review_photo/critique_render: no provider
+    ready, manual mode with no reply file, or a validation error on the
+    response all return None. Callers should default to variant 0 (or
+    let a human pick from the selection sheet) rather than block on this —
+    see botdraw/portrait/variant_selection.py's write_selection_sheet for
+    the human-reviewable fallback that works with zero vision calls.
+    """
+    if not variant_pngs:
+        return None
+    p = provider or default_provider()
+    if p == "manual" and client_call is _call_vision:
+        path_str = os.environ.get("BOTDRAW_VISION_SELECTION_JSON") or ""
+        path = Path(path_str) if path_str and Path(path_str).exists() else None
+        if path is None:
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            selection = VariantSelection.model_validate(data)
+        except (ValidationError, json.JSONDecodeError, Exception):
+            return None
+        return selection if 0 <= selection.best_index < len(variant_pngs) else None
+    if client_call is _call_vision and not vision_available(p):
+        return None
+    try:
+        src_b64 = _rgb_to_jpeg_b64(source_rgb)
+        variant_b64s = [base64.standard_b64encode(png).decode("ascii") for png in variant_pngs]
+        n = len(variant_b64s)
+        prompt = (
+            f"Image 1 = source photo. Images 2..{n + 1} = render variants, "
+            f"indices 0..{n - 1} in the same order. Pick the closest to the source. JSON only."
+        )
+        if client_call is not _call_vision:
+            # Tests inject a single-image stub matching review_photo/critique_render's convention.
+            raw = client_call(
+                system=SELECT_SYSTEM,
+                prompt=f"{n} render variants to compare against a source portrait. JSON only.",
+                image_b64=variant_b64s[0],
+                media_type="image/png",
+            )
+        else:
+            raw = client_call(
+                system=SELECT_SYSTEM,
+                prompt=prompt,
+                image_b64=src_b64,
+                media_type="image/jpeg",
+                provider=p,
+                images=[(src_b64, "image/jpeg")] + [(b64, "image/png") for b64 in variant_b64s],
+            )
+        data = _extract_json(raw)
+        selection = VariantSelection.model_validate(data)
+        if not (0 <= selection.best_index < len(variant_pngs)):
+            return None
+        return selection
+    except (ValidationError, json.JSONDecodeError, Exception):
+        return None
 
 
 def apply_structure_critique_to_knobs(
