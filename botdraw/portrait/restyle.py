@@ -475,6 +475,59 @@ def restyle_stipple(pv: PortraitVector, palette, params: StyleParams, *, density
     )
 
 
+def _polygon_scanline_fill(
+    pts: list[tuple[float, float]], step: float
+) -> list[list[tuple[float, float]]]:
+    """
+    Horizontal scanline fill clipped to the true polygon shape.
+
+    Replaces the previous bounding-box scanline fill, which drew every facet
+    as a full-width rectangle regardless of its actual outline — the cause of
+    the blocky, face-unrelated grid in Cubism renders. Returns one point list
+    per fill segment (a concave/notched row can yield more than one).
+    """
+    from shapely.geometry import GeometryCollection, LineString, MultiLineString, Polygon
+
+    if len(pts) < 3:
+        return []
+    try:
+        poly = Polygon(pts)
+        if not poly.is_valid:
+            poly = poly.buffer(0)
+    except Exception:
+        return []
+    if poly.is_empty or poly.bounds == ():
+        return []
+
+    minx, miny, maxx, maxy = poly.bounds
+    pad = max(1.0, (maxx - minx) * 0.05)
+    step = max(0.1, float(step))
+    segments: list[list[tuple[float, float]]] = []
+    yy = miny + step / 2.0
+    while yy <= maxy:
+        scan = LineString([(minx - pad, yy), (maxx + pad, yy)])
+        try:
+            clipped = poly.intersection(scan)
+        except Exception:
+            yy += step
+            continue
+        if clipped.is_empty:
+            yy += step
+            continue
+        if isinstance(clipped, LineString):
+            lines = [clipped]
+        elif isinstance(clipped, (MultiLineString, GeometryCollection)):
+            lines = [g for g in clipped.geoms if isinstance(g, LineString) and not g.is_empty]
+        else:
+            lines = []
+        for line in lines:
+            coords = list(line.coords)
+            if len(coords) >= 2:
+                segments.append([(float(x), float(y)) for x, y in coords])
+        yy += step
+    return segments
+
+
 def restyle_regions_mosaic(pv: PortraitVector, palette, params: StyleParams) -> LayeredSVG:
     if not pv.regions:
         return restyle_hatch(pv, palette, params)
@@ -486,15 +539,9 @@ def restyle_regions_mosaic(pv: PortraitVector, palette, params: StyleParams) -> 
         pts = list(r.points_mm)
         if len(pts) >= 3:
             outline.append(Polyline(points=pts, pen_id=border.id, closed=True))
-        xs = [p[0] for p in pts]
-        ys = [p[1] for p in pts]
-        y0, y1 = min(ys), max(ys)
-        x0, x1 = min(xs), max(xs)
         step = max(0.6, pen.profile.width_mm)
-        yy = y0
-        while yy <= y1:
-            fills.setdefault(pen.id, []).append(Polyline(points=[(x0, yy), (x1, yy)], pen_id=pen.id))
-            yy += step
+        for seg_pts in _polygon_scanline_fill(pts, step):
+            fills.setdefault(pen.id, []).append(Polyline(points=seg_pts, pen_id=pen.id))
     # Prefer ingest edges as additional outline structure
     outline.extend(_edge_polys(pv, palette, limit=80))
     passes = [make_pass("mosaic-outline", "Facet outline", border.id, outline)]
