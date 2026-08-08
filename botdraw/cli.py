@@ -151,6 +151,32 @@ def vision_loop_demo(
         print(f"  pass {p.turn:02d} ({mark}) overall={ov} edges={p.edge_count} · {p.summary}")
 
 
+@vision_app.command("brief")
+def vision_brief_cmd(
+    job_id: str = typer.Argument(..., help="Job id to prepare a manual-workflow brief for"),
+    out: Optional[Path] = typer.Option(
+        None, help="Output folder (default: jobs/artifacts/<job_id>/vision_brief/turnNN)"
+    ),
+    turn: int = typer.Option(1, help="1=scene, 2=structure critique, 3=confirm critique"),
+) -> None:
+    """
+    Write a ready-to-paste folder for the manual Claude/ChatGPT subscription
+    workflow: the exact prompt, the source photo + render preview to
+    attach, and a save-the-reply-here filename that already matches what
+    BOTDRAW_VISION_TURNS_DIR expects. No API key needed.
+    """
+    from botdraw.core.jobs import artifact_dir
+    from botdraw.portrait.vision_brief import write_vision_brief
+
+    out_dir = out or (artifact_dir(job_id) / "vision_brief" / f"turn{turn:02d}")
+    path = write_vision_brief(job_id, out_dir, turn=turn)
+    print(f"[green]Vision brief written[/green] → {path}")
+    print(f"  {path / 'README.md'}")
+    print(f"  {path / 'prompt.txt'}")
+    for img in sorted(path.glob("*.png")) + sorted(path.glob("*.jpg")) + sorted(path.glob("*.jpeg")):
+        print(f"  {img}")
+
+
 @vision_app.command("compare")
 def vision_compare(
     image: Path = typer.Argument(..., help="Portrait photo to review"),
