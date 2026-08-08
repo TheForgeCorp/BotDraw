@@ -336,8 +336,69 @@ def restyle_linework(
     )
 
 
-def restyle_hatch(pv: PortraitVector, palette, params: StyleParams, *, line_spacing_mm: float | None = None) -> LayeredSVG:
-    """Prefer tone-grid / ingest hatch; fall back to midtone-masked adaptive grid."""
+def _tone_code_at(pv: PortraitVector, x_mm: float, y_mm: float) -> int | None:
+    """Look up the mesh tone-code band under a page-space point, using the
+    same cell grid build_portrait_mesh laid down for this ingest."""
+    codes = pv.tone_codes
+    cell = float(pv.tone_cell_mm or 0.0)
+    if codes is None or cell <= 0:
+        return None
+    codes = np.asarray(codes)
+    ox, oy = pv.tone_origin_mm
+    row = int((y_mm - oy) / cell)
+    col = int((x_mm - ox) / cell)
+    if 0 <= row < codes.shape[0] and 0 <= col < codes.shape[1]:
+        return int(codes[row, col])
+    return None
+
+
+def _tone_band_pen_ids(pv: PortraitVector, palette) -> dict[int, str]:
+    """
+    Map tone-code bands (1..4, lightest to darkest shade) onto distinct
+    ink pens ordered lightest-to-darkest — the multi-pen tonal shading
+    "Color Shade Portrait" is named for. Without this, its ingest-first
+    hatch path picked from the single ingest-assigned pen role just like
+    "Hatch Portrait", making the two styles byte-identical output despite
+    advertising different names.
+
+    Respects the monochrome pen policy (see pens.py): on a low-chroma
+    source, bands stay within the palette's own low-saturation pens.
+    """
+    candidates = ink_pens(palette) or list(palette.pens)
+    if (pv.meta or {}).get("monochrome_source"):
+        low_chroma = [p for p in candidates if _saturation_hex(p.color_hex) < 0.25]
+        if low_chroma:
+            candidates = low_chroma
+
+    def _lum(p) -> float:
+        h = p.color_hex.lstrip("#")
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+        return 0.299 * r + 0.587 * g + 0.114 * b
+
+    ordered = sorted(candidates, key=_lum, reverse=True)  # lightest first
+    if not ordered:
+        return {}
+    return {
+        code: ordered[min(len(ordered) - 1, round((code - 1) / 3 * (len(ordered) - 1)))].id
+        for code in range(1, 5)
+    }
+
+
+def restyle_hatch(
+    pv: PortraitVector,
+    palette,
+    params: StyleParams,
+    *,
+    line_spacing_mm: float | None = None,
+    multi_pen_bands: bool = False,
+) -> LayeredSVG:
+    """Prefer tone-grid / ingest hatch; fall back to midtone-masked adaptive grid.
+
+    multi_pen_bands=True is "Color Shade Portrait": re-tags ingest hatch
+    strokes by their tone-code band onto distinct pens (lightest code to
+    lightest pen) instead of the single ingest-assigned hatch pen every
+    other hatch-based style uses.
+    """
     limit = _budget(params)
     edge_limit = max(40, limit // 8)
     edges = _edge_polys(pv, palette, limit=edge_limit)
@@ -346,13 +407,25 @@ def restyle_hatch(pv: PortraitVector, palette, params: StyleParams, *, line_spac
     fallback_limit = max(fill_limit, max(0, limit - len(edges)))
     ingest, src = _ingest_first_hatch_polys(pv, palette, limit=fallback_limit, style="hatch", seed=1)
     if ingest:
+        style_id = "portrait_hatch"
+        if multi_pen_bands and pv.tone_codes is not None:
+            band_pens = _tone_band_pen_ids(pv, palette)
+            if len(set(band_pens.values())) > 1:
+                retagged = []
+                for poly in ingest:
+                    mx, my = poly.points[len(poly.points) // 2]
+                    code = _tone_code_at(pv, mx, my)
+                    pen_id = band_pens.get(code) if code else None
+                    retagged.append(poly.model_copy(update={"pen_id": pen_id or poly.pen_id}))
+                ingest = retagged
+                style_id = "portrait_color_shade"
         buckets = _bucketize(edges + ingest)
         return LayeredSVG(
             width_mm=pv.page_w_mm,
             height_mm=pv.page_h_mm,
             passes=_passes_from_buckets("hatch", "Hatch", buckets),
             seed=params.seed,
-            meta={"style": "portrait_hatch", "quality": params.quality.value, "vector_source": src},
+            meta={"style": style_id, "quality": params.quality.value, "vector_source": src},
         )
 
     # Classic adaptive fallback — only when hatch and tone_codes are both absent
@@ -707,7 +780,9 @@ def restyle_scribble_tone(pv: PortraitVector, palette, params: StyleParams, *, l
 RESTYLERS = {
     "portrait_linework": restyle_linework,
     "portrait_hatch": restyle_hatch,
-    "portrait_color_shade": restyle_hatch,
+    "portrait_color_shade": lambda pv, palette, params, **kw: restyle_hatch(
+        pv, palette, params, multi_pen_bands=True, **kw
+    ),
     "portrait_squiggle": restyle_squiggle,
     "portrait_pointillism": restyle_stipple,
     "portrait_dots": lambda pv, palette, params, **kw: restyle_stipple(pv, palette, params, density_mul=0.55, **kw),

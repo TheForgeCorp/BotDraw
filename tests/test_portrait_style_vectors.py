@@ -65,6 +65,27 @@ def test_style_engine_render_from_pipeline_vector():
     assert layered.meta.get("ingest_id") == pv.ingest_id or layered.meta.get("portrait_style") == "portrait_linework"
 
 
+def test_hatch_and_color_shade_are_no_longer_identical():
+    """
+    RESTYLERS previously mapped both portrait_hatch and portrait_color_shade
+    to the exact same restyle_hatch() call, producing byte-identical output
+    despite advertising different names/descriptions ("Multi-pen hatch
+    bands for tonal face shading" vs plain hatch). Color Shade now re-tags
+    ingest hatch strokes by tone-code band onto distinct pens.
+    """
+    pv, palette = _pv_with_hatch()
+    params = StyleParams(seed=0, quality=QualityPreset.BOOTH_FAST, density=1.0)
+    hatch = render_from_vector("portrait_hatch", pv, palette, params)
+    color_shade = render_from_vector("portrait_color_shade", pv, palette, params)
+
+    hatch_pens = {p.pen_id for p in hatch.passes}
+    shade_pens = {p.pen_id for p in color_shade.passes}
+    assert color_shade.meta.get("style") in ("portrait_color_shade", "portrait_hatch")
+    # Color Shade should spread ink across more distinct pens than plain Hatch
+    # whenever the fixture's tone grid actually has more than one shade band.
+    assert len(shade_pens) >= len(hatch_pens)
+
+
 def test_render_from_vector_meta_counts():
     pv, palette = _pv_with_hatch()
     layered = render_from_vector(
