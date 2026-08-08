@@ -359,7 +359,23 @@ def decorate_layered(layered: LayeredSVG, params: StrokeOrnamentParams | dict | 
                     break
                 new_polys.append(d)
                 total += 1
-        new_passes.append(pas.model_copy(update={"polylines": new_polys or pas.polylines}))
+        # Never fall back to the undecorated pass: new_polys already IS the
+        # budget-capped result (possibly empty, when an earlier pass already
+        # exhausted max_paths). Falling back to pas.polylines here used to
+        # silently restore the full, un-budgeted pass whenever a pass hit
+        # the cap on its very first polyline — the ~20% path-budget
+        # overshoot measured with non-solid line types (ladder/dotted).
+        new_passes.append(pas.model_copy(update={"polylines": new_polys}))
 
-    meta = {**(layered.meta or {}), "ornament": params.model_dump()}
+    # optimize_layered() reads the flat meta["linetype"] key to decide
+    # whether vpype's merge() is safe to run (it glues dash/dot gaps back
+    # together, since it only sees geometry, not intent). Previously this
+    # was only ever written nested at meta["ornament"]["line_type"], which
+    # optimize_layered never reads — so non-solid line types silently went
+    # through vpype merge and could have their gaps re-glued.
+    meta = {
+        **(layered.meta or {}),
+        "ornament": params.model_dump(),
+        "linetype": params.line_type or "solid",
+    }
     return layered.model_copy(update={"passes": new_passes, "meta": meta})
