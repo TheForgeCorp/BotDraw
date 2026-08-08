@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from botdraw.core.models import QualityPreset
 from botdraw.portrait.ingest import ingest_portrait
+from botdraw.portrait.neural import neural_available
 from botdraw.portrait.portrait_mesh import (
+    apply_face_label_bias,
     build_portrait_mesh,
     default_mesh_cell_px,
     prune_edges_with_mesh,
@@ -144,3 +147,61 @@ def test_ingest_uses_mesh_walks_and_finer_default():
     assert pv.tone_codes is not None
     assert pv.mesh_edge is not None
     assert len(pv.hatch_polylines_mm) >= 1
+
+
+def test_apply_face_label_bias_boosts_hair_and_protects_features():
+    """
+    BiSeNet face-parsing labels (neural.py HAIR_CLASSES / FEATURE_CLASSES)
+    were computed and then discarded after picking a crop box — this is
+    the first consumer. Hair should shade deeper; fine features
+    (eyes/brows/glasses/nose/mouth) should shade lighter, so hatch texture
+    doesn't obscure exactly the detail a portrait needs to read.
+    """
+    codes = np.full((10, 10), 2, dtype=np.uint8)
+    labels = np.zeros((10, 10), dtype=np.uint8)
+    labels[0:3, :] = 17  # hair
+    labels[6:9, 6:9] = 4  # eye (FEATURE_CLASSES)
+
+    out = apply_face_label_bias(
+        codes, labels, hair_classes=frozenset({17, 18}), feature_classes=frozenset({4}), max_code=4
+    )
+    assert int(out[0, 0]) == 3  # hair: +1
+    assert int(out[7, 7]) == 1  # feature: -1
+    assert int(out[5, 0]) == 2  # untouched cell stays put
+
+
+def test_apply_face_label_bias_never_shades_a_blank_cell():
+    """A cell with no shade to begin with must not gain hair-boosted shade
+    just because it happens to sit under a hair label — bias only nudges
+    existing shade, it doesn't invent new ink."""
+    codes = np.zeros((4, 4), dtype=np.uint8)
+    labels = np.full((4, 4), 17, dtype=np.uint8)
+    out = apply_face_label_bias(
+        codes, labels, hair_classes=frozenset({17}), feature_classes=frozenset(), max_code=4
+    )
+    assert (out == 0).all()
+
+
+def test_apply_face_label_bias_shape_mismatch_is_a_noop():
+    codes = np.full((5, 5), 2, dtype=np.uint8)
+    labels = np.zeros((3, 3), dtype=np.uint8)
+    out = apply_face_label_bias(
+        codes, labels, hair_classes=frozenset({17}), feature_classes=frozenset({4})
+    )
+    assert np.array_equal(out, codes)
+
+
+@pytest.mark.skipif(not neural_available(), reason="neural weights not fetched (botdraw models fetch)")
+def test_neural_ingest_records_face_label_bias_meta():
+    """End-to-end: with neural + face parsing available, ingest resamples
+    labels to the mesh grid and records that it applied the bias."""
+    pv = ingest_portrait(
+        image_array=_dark_bg_bright_face(200),
+        mode="photo",
+        quality=QualityPreset.STUDIO_HQ,
+        paper="A5",
+        auto_frame=False,
+        line_source="neural",
+    )
+    assert pv.meta.get("line_source") == "neural"
+    assert "face_label_bias" in pv.meta

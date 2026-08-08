@@ -873,6 +873,24 @@ def ingest_portrait(
             subject_mask=subject_mask,
             ink_is_authoritative=neural_ink is not None,
         )
+        if neural_pack is not None and neural_pack.get("labels") is not None:
+            from botdraw.portrait.neural import FEATURE_CLASSES, HAIR_CLASSES
+            from botdraw.portrait.portrait_mesh import apply_face_label_bias
+
+            grid_h, grid_w = tone_pack["tone_codes"].shape
+            labels_grid = np.asarray(
+                Image.fromarray(neural_pack["labels"]).resize(
+                    (grid_w, grid_h), Image.Resampling.NEAREST
+                ),
+                dtype=np.uint8,
+            )
+            tone_pack["tone_codes"] = apply_face_label_bias(
+                tone_pack["tone_codes"],
+                labels_grid,
+                hair_classes=HAIR_CLASSES,
+                feature_classes=FEATURE_CLASSES,
+                max_code=max_tone_code,
+            )
         if neural_pack is not None:
             # The line model + person matte already did semantic pruning
             edges_px_pruned = edges_px_pending
@@ -1042,5 +1060,6 @@ def ingest_portrait(
                 if tone_pack.get("link_h") is not None
                 else 0,
             },
+            "face_label_bias": bool(neural_pack is not None and neural_pack.get("labels") is not None),
         },
     )

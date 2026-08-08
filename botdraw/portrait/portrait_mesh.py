@@ -23,6 +23,37 @@ from botdraw.portrait.linedraw_edges import (
 )
 
 
+def apply_face_label_bias(
+    tone_codes: np.ndarray,
+    labels: np.ndarray,
+    *,
+    hair_classes: frozenset[int],
+    feature_classes: frozenset[int],
+    max_code: int = 4,
+) -> np.ndarray:
+    """
+    Nudge mesh tone codes using BiSeNet face-parsing labels: denser shade in
+    hair, lighter/protected shade over fine features (eyes/brows/glasses/
+    nose/mouth) — hatch texture otherwise obscures exactly the detail a
+    portrait most needs to read clearly.
+
+    These per-pixel labels come from the same neural pass that already
+    computes them for face_crop_box in neural.py; before this, they were
+    discarded immediately after picking a crop rectangle. ``labels`` must
+    already be resampled (nearest-neighbor, since it's categorical) to
+    ``tone_codes``'s grid shape.
+    """
+    if labels.shape != tone_codes.shape:
+        return tone_codes
+    out = tone_codes.astype(np.int16).copy()
+    hair = np.isin(labels, list(hair_classes))
+    feature = np.isin(labels, list(feature_classes))
+    shaded = out > 0
+    out[hair & shaded] = np.minimum(max_code, out[hair & shaded] + 1)
+    out[feature & shaded] = np.maximum(1, out[feature & shaded] - 1)
+    return np.clip(out, 0, max_code).astype(np.uint8)
+
+
 def default_mesh_cell_px(quality: str) -> int:
     q = (quality or "").lower()
     if q == "booth-fast":
