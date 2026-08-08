@@ -134,6 +134,9 @@ def test_contours_from_edge_mask_returns_paths():
 
 
 def test_booth_fast_ingest_ignores_ensemble_flag():
+    # Ensemble is a classic-path-only feature (the neural path always
+    # disables it), so pin line_source explicitly rather than relying on
+    # neural weights being absent — this test targets the classic gate.
     pv = ingest_portrait(
         image_array=_face_with_gap_feature(120),
         mode="photo",
@@ -142,6 +145,7 @@ def test_booth_fast_ingest_ignores_ensemble_flag():
         auto_frame=False,
         ensemble=True,
         hatch_size=0,
+        line_source="classic",
     )
     assert (pv.meta or {}).get("ensemble", {}).get("enabled") is False
     assert (pv.meta or {}).get("edge_extractor") == "linedraw"
@@ -156,6 +160,7 @@ def test_studio_ensemble_enabled_and_within_budget():
         auto_frame=False,
         ensemble=True,
         hatch_size=16,
+        line_source="classic",
     )
     ens = (pv.meta or {}).get("ensemble") or {}
     assert ens.get("enabled") is True
@@ -189,6 +194,7 @@ def test_ensemble_covers_at_least_as_much_as_single_pass():
         auto_frame=False,
         ensemble=False,
         hatch_size=0,
+        line_source="classic",
     )
     ens = ingest_portrait(
         image_array=rgb,
@@ -198,6 +204,7 @@ def test_ensemble_covers_at_least_as_much_as_single_pass():
         auto_frame=False,
         ensemble=True,
         hatch_size=0,
+        line_source="classic",
     )
     assert (ens.meta or {}).get("ensemble", {}).get("enabled") is True
 
