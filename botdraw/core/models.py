@@ -109,6 +109,17 @@ class PassLayer(BaseModel):
     polylines: list[Polyline] = Field(default_factory=list)
     opacity_override: float | None = None
     kind: str = "ink"  # ink | highlight | ornament | fill
+    # Stable semantic category (e.g. "structure", "midtone", "bands",
+    # "facet-outline", "facet-fill") independent of which pen ends up
+    # assigned. `id` is often pen-derived (hatch-{pen_id}, bands-{pen_id},
+    # mosaic-{pen_id}) and changes whenever auto pen assignment does, which
+    # makes it useless as a stable key for saved per-pass customization
+    # (pen/linetype/visibility overrides). Falls back to `id` when unset,
+    # for passes created before this field existed.
+    role: str | None = None
+
+    def stable_role(self) -> str:
+        return self.role or self.id
 
 
 class LayeredSVG(BaseModel):

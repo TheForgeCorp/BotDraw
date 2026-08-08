@@ -127,6 +127,7 @@ def make_pass(
     *,
     kind: str = "ink",
     opacity_override: float | None = None,
+    role: str | None = None,
 ) -> PassLayer:
     return PassLayer(
         id=pass_id,
@@ -135,4 +136,5 @@ def make_pass(
         polylines=polylines,
         kind=kind,
         opacity_override=opacity_override,
+        role=role,
     )
