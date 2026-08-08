@@ -208,7 +208,14 @@ def _ingest_hatch_polys(pv: PortraitVector, palette, *, limit: int) -> list[Poly
 
 
 def _passes_from_buckets(prefix: str, label: str, buckets: dict[str, list[Polyline]]) -> list:
-    return [make_pass(f"{prefix}-{pid}", f"{label} {pid}", pid, polys) for pid, polys in buckets.items() if polys]
+    # role=prefix is the stable key: id is pen-derived (f"{prefix}-{pid}")
+    # and shifts whenever auto pen assignment does, but the semantic
+    # category (hatch / bands / mosaic / midtone) does not.
+    return [
+        make_pass(f"{prefix}-{pid}", f"{label} {pid}", pid, polys, role=prefix)
+        for pid, polys in buckets.items()
+        if polys
+    ]
 
 
 def _bucketize(polys: list[Polyline]) -> dict[str, list[Polyline]]:
@@ -289,10 +296,14 @@ def restyle_linework(
             passes.append(make_pass("midtone", "2 Midtone hatch", hatch_pen.id, hatch, kind="ink"))
         else:
             for pid, polys in buckets.items():
-                passes.append(make_pass(f"midtone-{pid}", f"2 Midtone hatch ({pid})", pid, polys, kind="ink"))
+                passes.append(
+                    make_pass(f"midtone-{pid}", f"2 Midtone hatch ({pid})", pid, polys, kind="ink", role="midtone")
+                )
     if regions:
         for pid, polys in _bucketize(regions).items():
-            passes.append(make_pass(f"bands-{pid}", f"3 Color bands ({pid})", pid, polys, kind="ink"))
+            passes.append(
+                make_pass(f"bands-{pid}", f"3 Color bands ({pid})", pid, polys, kind="ink", role="bands")
+            )
     return LayeredSVG(
         width_mm=pv.page_w_mm,
         height_mm=pv.page_h_mm,
@@ -498,7 +509,11 @@ def restyle_regions_mosaic(pv: PortraitVector, palette, params: StyleParams) -> 
     # Prefer ingest edges as additional outline structure
     outline.extend(_edge_polys(pv, palette, limit=80))
     passes = [make_pass("mosaic-outline", "Facet outline", border.id, outline)]
-    passes += [make_pass(f"mosaic-{pid}", f"Facet {pid}", pid, polys) for pid, polys in fills.items() if polys]
+    passes += [
+        make_pass(f"mosaic-{pid}", f"Facet {pid}", pid, polys, role="mosaic-fill")
+        for pid, polys in fills.items()
+        if polys
+    ]
     return LayeredSVG(
         width_mm=pv.page_w_mm,
         height_mm=pv.page_h_mm,

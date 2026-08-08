@@ -38,6 +38,7 @@ def layers_summary(layered: LayeredSVG, palette: PaletteSet) -> dict:
         passes.append(
             {
                 "id": p.id,
+                "role": p.stable_role(),
                 "name": p.name,
                 "kind": p.kind,
                 "pen_id": p.pen_id,
@@ -655,6 +656,11 @@ def render_job(
             orientation=orientation_enum,
             image_path=image_path,
         )
+
+        if extra.get("pass_overrides"):
+            from botdraw.portrait.customization import apply_pass_overrides
+
+            layered = apply_pass_overrides(layered, palette, extra.get("pass_overrides"))
 
         # Studio turn 3: confirm critique on restyle preview (no re-ingest)
         if (
