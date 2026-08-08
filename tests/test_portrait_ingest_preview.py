@@ -89,6 +89,9 @@ def test_vertical_bar_yields_non_horizontal_edge():
 
 
 def test_api_ingest_upload(tmp_path):
+    # The synthetic procedural fixture doesn't resemble a real photo well
+    # enough for the neural nets to detect a subject, so pin classic —
+    # this test targets the upload/preview plumbing, not detector quality.
     p = tmp_path / "face.png"
     Image.fromarray(synthetic_portrait(96).astype(np.uint8)).save(p)
     with p.open("rb") as fh:
@@ -102,6 +105,7 @@ def test_api_ingest_upload(tmp_path):
                 "force_reingest": "true",
                 "posterize_levels": "4",
                 "filter_speckle": "10",
+                "line_source": "classic",
             },
             files={"file": ("face.png", fh, "image/png")},
         )
