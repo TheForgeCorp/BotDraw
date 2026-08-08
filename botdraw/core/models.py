@@ -17,6 +17,32 @@ class NibType(str, Enum):
     HIGHLIGHTER = "highlighter"
 
 
+class TipShape(str, Enum):
+    """Physical tip geometry for Pen Library / future AI pen selection."""
+
+    ROUND = "round"
+    CHISEL = "chisel"
+    BULLET = "bullet"
+    BRUSH = "brush"
+    CALLIGRAPHY = "calligraphy"
+    UNKNOWN = "unknown"
+
+
+class ArtisticUse(str, Enum):
+    """
+    Intended artistic role for a pen (outline vs shade, etc.).
+
+    Reserved for a future Pen Library AI selector that emits ``pen_map`` /
+    ``pass_overrides`` — not consumed by assign_pens today.
+    """
+
+    OUTLINE = "outline"
+    SHADE = "shade"
+    FILL = "fill"
+    ACCENT = "accent"
+    ANY = "any"
+
+
 class QualityPreset(str, Enum):
     BOOTH_FAST = "booth-fast"
     BOOTH_BALANCED = "booth-balanced"
@@ -63,6 +89,9 @@ class LineProfile(BaseModel):
     calligraphy_angle_deg: float | None = None
     opacity: float = Field(default=1.0, ge=0.0, le=1.0)
     bleed_hint: float = 0.0
+    # Physical tip diameter when known (Pen Library); optional / forward-compatible.
+    diameter_mm: float | None = None
+    tip_shape: TipShape = TipShape.UNKNOWN
 
 
 class Pen(BaseModel):
@@ -73,6 +102,8 @@ class Pen(BaseModel):
     board_id: str | None = None
     lab: tuple[float, float, float] | None = None
     profile: LineProfile = Field(default_factory=LineProfile)
+    # Future Pen Library AI: which artistic roles this pen is suited for.
+    preferred_uses: list[ArtisticUse] = Field(default_factory=lambda: [ArtisticUse.ANY])
 
     def resolved_board_id(self) -> str:
         return self.board_id or f"BD-{self.id.upper()}"

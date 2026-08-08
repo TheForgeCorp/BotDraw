@@ -46,7 +46,8 @@ def _budget(params: StyleParams) -> int:
 
 
 def _is_neural(pv: PortraitVector) -> bool:
-    return (pv.meta or {}).get("line_source") == "neural"
+    """True when ingest ink is authoritative (neural U2-Net or generative)."""
+    return (pv.meta or {}).get("line_source") in ("neural", "generative")
 
 
 def _fill_budget(pv: PortraitVector, params: StyleParams, *, edges_used: int = 0) -> int:

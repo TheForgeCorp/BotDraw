@@ -570,6 +570,9 @@ def api_portrait_ingest_json(body: PortraitIngestRequest):
         "protect_subjects",
         "orientation_deg",
         "ai_scene",
+        "generative_provider",
+        "generative_ink_path",
+        "generative_seed",
     }
     resolve_kw = {k: knobs[k] for k in resolve_keys if k in knobs}
     crop = knobs.get("crop", body.crop)
@@ -698,6 +701,9 @@ async def api_portrait_ingest_upload(
             "protect_subjects",
             "orientation_deg",
             "ai_scene",
+            "generative_provider",
+            "generative_ink_path",
+            "generative_seed",
         )
         if k in knobs and knobs[k] is not None
     }

@@ -566,6 +566,9 @@ def ingest_portrait(
     protect_subjects: list[str] | None = None,
     orientation_deg: int | None = None,
     ai_scene: dict | None = None,
+    generative_provider: str | None = None,
+    generative_ink_path: str | Path | None = None,
+    generative_seed: int = 0,
 ) -> PortraitVector:
     """Load/crop/preprocess image and build PortraitVector (tone + edges + regions)."""
     from botdraw.portrait.linedraw_edges import (
@@ -652,15 +655,63 @@ def ingest_portrait(
 
     rgb_cropped = np.asarray(img, dtype=np.float32)
 
-    # Neural detection pass (artist-line raster + person matte + parse labels)
+    # Line source resolution:
+    # - auto/neural → neural pack when available, else classic
+    # - generative → generative ink (studio); on failure fall back neural → classic
+    # Neural pack may still run for matte/BiSeNet when generative ink wins.
     neural_pack = None
+    generative_pack: dict[str, Any] | None = None
+    generative_warning: str | None = None
+    line_source_warning: str | None = None
     ls = (line_source or "auto").lower()
-    if ls in ("auto", "neural"):
+
+    if ls in ("auto", "neural", "generative"):
         from botdraw.portrait.neural import neural_portrait_pack
 
+        # Matte/labels always useful; generative uses them for mask only.
         neural_pack = neural_portrait_pack(rgb_cropped)
-    line_source_resolved = "neural" if neural_pack is not None else "classic"
-    if neural_pack is not None:
+
+    if ls == "generative":
+        from botdraw.portrait.generative import (
+            generate_portrait_ink,
+            generative_unavailable_reason,
+        )
+
+        # Photo ink target in the cropped frame (pre-posterize) for fidelity gate.
+        photo_lum = luminance(rgb_cropped)
+        photo_ink = np.clip(1.0 - photo_lum / 255.0, 0.0, 1.0).astype(np.float32)
+        generative_pack = generate_portrait_ink(
+            rgb_cropped,
+            provider=generative_provider,
+            seed=int(generative_seed),
+            ink_path=generative_ink_path,
+            photo_ink_target=photo_ink,
+            allow_retry=True,
+        )
+        if generative_pack is None:
+            generative_warning = generative_unavailable_reason(generative_provider)
+            line_source_warning = generative_warning
+            if neural_pack is None:
+                line_source_resolved = "classic"
+            else:
+                line_source_resolved = "neural"
+                line_source_warning = (
+                    f"{generative_warning} Falling back to neural."
+                    if generative_warning
+                    else "generative unavailable; falling back to neural."
+                )
+        else:
+            line_source_resolved = "generative"
+    elif ls in ("auto", "neural"):
+        line_source_resolved = "neural" if neural_pack is not None else "classic"
+    else:
+        # classic (or unknown → classic)
+        neural_pack = None if ls == "classic" else neural_pack
+        if ls == "classic":
+            neural_pack = None
+        line_source_resolved = "classic"
+
+    if line_source_resolved in ("neural", "generative"):
         use_ensemble = False
 
     ensemble_meta: dict[str, Any] = {"enabled": False}
@@ -690,38 +741,50 @@ def ingest_portrait(
         max_paths,
         800 if quality_enum == QualityPreset.BOOTH_FAST else (2000 if quality_enum == QualityPreset.BOOTH_BALANCED else 3500),
     )
-    if neural_pack is not None:
-        # Neural drawings shade dense masses (hair, dark clothing); a starved
-        # budget leaves blank holes, which reads far worse than a longer plot.
+    if line_source_resolved in ("neural", "generative"):
+        # Authoritative ink drawings shade dense masses; a starved budget
+        # leaves blank holes, which reads far worse than a longer plot.
         hatch_budget = int(hatch_budget * 1.8)
 
-    neural_ink = None
-    if neural_pack is not None:
+    def _ink_to_edges(ink_n: np.ndarray, *, mask: np.ndarray | None, struct_jitter: float) -> tuple[list, np.ndarray]:
         from scipy import ndimage as _ndi
 
-        ink_n = neural_pack["ink"]
-        neural_ink = ink_n
-        # Solid dark masses (hair, dark clothing) are the tone channel's job;
-        # keep their boundaries as edges and hand interiors to the mesh.
         solid = _ndi.binary_opening(ink_n > 0.62, structure=np.ones((9, 9), dtype=bool))
         boundary = solid & ~_ndi.binary_erosion(solid, np.ones((3, 3), dtype=bool))
         thin_lines = (ink_n > 0.45) & ~_ndi.binary_erosion(solid, np.ones((5, 5), dtype=bool))
         edge_mask = thin_lines | boundary
-        # Cuts made by the person matte or the frame are not drawing lines
-        mask_in = _ndi.binary_erosion(
-            neural_pack["mask"] > 0.5, np.ones((7, 7), dtype=bool)
-        )
-        edge_mask &= mask_in
+        if mask is not None:
+            mask_in = _ndi.binary_erosion(mask > 0.5, np.ones((7, 7), dtype=bool))
+            edge_mask &= mask_in
         edge_mask[:3, :] = edge_mask[-3:, :] = False
         edge_mask[:, :3] = edge_mask[:, -3:] = False
-        edges_px_pending = contours_from_edge_mask(
+        edges_px = contours_from_edge_mask(
             edge_mask,
             simplify=csimp,
-            jitter=jitter,
+            jitter=struct_jitter,
             seed=0,
             max_paths=min(edge_budget * 2, edge_budget + 200),
         )
-        edges = edge_mask.astype(np.float32) * 255.0
+        return edges_px, edge_mask.astype(np.float32) * 255.0
+
+    neural_ink = None
+    authoritative_ink = None
+    if line_source_resolved == "generative" and generative_pack is not None:
+        authoritative_ink = np.asarray(generative_pack["ink"], dtype=np.float32)
+        neural_ink = authoritative_ink  # mesh treats this as ink-authoritative
+        mask = neural_pack["mask"] if neural_pack is not None else None
+        edges_px_pending, edges = _ink_to_edges(
+            authoritative_ink, mask=mask, struct_jitter=0.0
+        )
+        hatch_polys = []
+        ensemble_meta = {"enabled": False, "line_source": "generative"}
+    elif neural_pack is not None and line_source_resolved == "neural":
+        ink_n = neural_pack["ink"]
+        neural_ink = ink_n
+        authoritative_ink = ink_n
+        edges_px_pending, edges = _ink_to_edges(
+            ink_n, mask=neural_pack["mask"], struct_jitter=jitter
+        )
         hatch_polys = []
         ensemble_meta = {"enabled": False, "line_source": "neural"}
     elif use_ensemble:
@@ -842,8 +905,8 @@ def ingest_portrait(
             subject_mask=subject_mask,
             ink_is_authoritative=neural_ink is not None,
         )
-        if neural_pack is not None:
-            # The line model + person matte already did semantic pruning
+        if line_source_resolved in ("neural", "generative"):
+            # Authoritative ink already encodes structure; skip mesh prune.
             edges_px_pruned = edges_px_pending
         else:
             edges_px_pruned = prune_edges_with_mesh(edges_px_pending, tone_pack)
@@ -872,7 +935,7 @@ def ingest_portrait(
             max_paths=hatch_budget,
             # Neural drawings carry large solid masses; a wider deep pitch
             # keeps them from starving the stroke budget.
-            pitch_mm={4: 0.72} if neural_pack is not None else None,
+            pitch_mm={4: 0.72} if line_source_resolved in ("neural", "generative") else None,
         )
         if not hatch_polys:
             lum_fallback = autocontrast_lum(lum.astype(np.float32), cutoff=10.0).astype(np.float32)
@@ -972,11 +1035,39 @@ def ingest_portrait(
             "hatch_size": hsize,
             "linedraw_jitter": jitter,
             "edge_extractor": (
-                "neural_lines"
-                if line_source_resolved == "neural"
-                else ("linedraw_ensemble" if use_ensemble else "linedraw")
+                "generative_ink"
+                if line_source_resolved == "generative"
+                else (
+                    "neural_lines"
+                    if line_source_resolved == "neural"
+                    else ("linedraw_ensemble" if use_ensemble else "linedraw")
+                )
             ),
             "line_source": line_source_resolved,
+            "line_source_warning": line_source_warning,
+            "generative": (
+                {
+                    k: v
+                    for k, v in (generative_pack.get("meta") or {}).items()
+                    if k != "ink_png_b64"
+                }
+                if generative_pack is not None
+                else (
+                    {"warning": generative_warning}
+                    if generative_warning
+                    else None
+                )
+            ),
+            "generative_fidelity": (
+                ((generative_pack.get("meta") or {}).get("fidelity"))
+                if generative_pack is not None
+                else None
+            ),
+            "generative_ink_png_b64": (
+                ((generative_pack.get("meta") or {}).get("ink_png_b64"))
+                if generative_pack is not None
+                else None
+            ),
             "ensemble": ensemble_meta,
             "scan_mode": scan,
             "suppress_background": bool(suppress_background) if suppress_background is not None else None,

@@ -169,7 +169,7 @@ class CropHint(BaseModel):
 
 
 class IngestHints(BaseModel):
-    line_source: Literal["neural", "classic", "auto"] = "neural"
+    line_source: Literal["neural", "classic", "auto", "generative"] = "neural"
     suppress_background: bool = True
     protect_subjects: list[str] = Field(default_factory=lambda: ["person"])
     max_tone_code: int = Field(default=4, ge=3, le=4)
@@ -194,7 +194,7 @@ class CritiqueIssue(BaseModel):
 
 class CritiqueActions(BaseModel):
     force_reingest: bool = False
-    line_source: Literal["neural", "classic", "auto"] | None = None
+    line_source: Literal["neural", "classic", "auto", "generative"] | None = None
     hatch_budget_mul: float | None = Field(default=None, ge=0.5, le=3.0)
     style_id: str | None = None
     max_tone_code: int | None = Field(default=None, ge=3, le=4)
@@ -1104,8 +1104,8 @@ def maybe_review_and_merge_knobs(
         "ai_vision_turn": max(1, int(knobs.get("ai_vision_turn") or 0)),
         "ai_vision_history": history,
     }
-    # Explicit user line_source / crop wins over scene if already set to neural/classic
-    if knobs.get("line_source") in ("neural", "classic"):
+    # Explicit user line_source / crop wins over scene if already set
+    if knobs.get("line_source") in ("neural", "classic", "generative"):
         merged["line_source"] = knobs["line_source"]
     if knobs.get("crop") is not None and knobs.get("crop_locked"):
         merged["crop"] = knobs["crop"]
