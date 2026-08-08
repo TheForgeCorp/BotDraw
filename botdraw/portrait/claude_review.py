@@ -39,6 +39,21 @@ import numpy as np
 from PIL import Image
 from pydantic import BaseModel, Field, ValidationError
 
+# Defaults for BOTDRAW_CLAUDE_MODEL / BOTDRAW_OPENAI_MODEL / BOTDRAW_GEMINI_MODEL
+# when unset. These drift out of date — the previous defaults
+# (claude-sonnet-4-20250514, gpt-4.1, gemini-2.0-flash) were a full major
+# version behind current production models, and gemini-2.0-flash had been
+# shut down entirely (see https://ai.google.dev/gemini-api/docs/deprecations),
+# meaning the "default" Gemini path silently could not work at all. Prefer
+# aliases that track the current flagship where the vendor documents one
+# (OpenAI's "gpt-5.6", Google's "gemini-flash-latest"), so this default
+# doesn't quietly go stale again the same way. Anthropic has no such
+# "-latest" alias for dateless major-version IDs, so pin the current one
+# explicitly and expect to revisit when Claude 6 ships.
+DEFAULT_CLAUDE_MODEL = "claude-sonnet-5"
+DEFAULT_OPENAI_MODEL = "gpt-5.6"
+DEFAULT_GEMINI_MODEL = "gemini-flash-latest"
+
 ProviderName = Literal["anthropic", "openai", "gemini", "manual"]
 PROVIDERS: tuple[ProviderName, ...] = ("anthropic", "openai", "gemini", "manual")
 
@@ -155,6 +170,20 @@ Return ONLY valid JSON matching this schema (no markdown):
 }
 Only use the listed fix/action keys. Prefer the smallest change that helps likeness."""
 
+SELECT_SYSTEM = """You compare several pen-plotter portrait render variants of the same
+source photo (different random seeds, same style) and pick the one that most resembles
+the source. Return ONLY valid JSON matching this schema (no markdown):
+{
+  "best_index": 0..N-1,
+  "ranked_indices": [0..N-1, ...],
+  "reasoning": "one short sentence",
+  "confidence": 0..1
+}
+best_index must equal the first entry of ranked_indices. Judge likeness to the source
+photo first, legibility as a plotted line drawing second. Do not judge artistic style
+preference or which is "prettier" in isolation — only which variant most looks like the
+person (or subject) in the source photo."""
+
 
 class SubjectInfo(BaseModel):
     kind: Literal["person", "pet", "other"] = "person"
@@ -211,6 +240,19 @@ class PortraitCritique(BaseModel):
     summary: str = ""
 
 
+class VariantSelection(BaseModel):
+    """Best-of-N result: which of several seeded renders most resembles
+    the source photo. Deliberately has no knob-adjustment vocabulary —
+    selection among finished renders is the one thing today's closed
+    CritiqueActions dictionary cannot express (it can nudge density or
+    swap style_id, not choose "this specific seed's composition")."""
+
+    best_index: int = Field(ge=0)
+    ranked_indices: list[int] = Field(default_factory=list)
+    reasoning: str = ""
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+
+
 def default_provider() -> ProviderName:
     raw = (os.environ.get("BOTDRAW_VISION_PROVIDER") or "anthropic").strip().lower()
     if raw in PROVIDERS:
@@ -264,7 +306,7 @@ def provider_status() -> dict[str, dict[str, Any]]:
         "key": bool(os.environ.get("ANTHROPIC_API_KEY")),
         "package": anth_pkg,
         "ready": bool(os.environ.get("ANTHROPIC_API_KEY")) and anth_pkg,
-        "model": os.environ.get("BOTDRAW_CLAUDE_MODEL", "claude-sonnet-4-20250514"),
+        "model": os.environ.get("BOTDRAW_CLAUDE_MODEL", DEFAULT_CLAUDE_MODEL),
     }
     # openai
     try:
@@ -277,7 +319,7 @@ def provider_status() -> dict[str, dict[str, Any]]:
         "key": bool(os.environ.get("OPENAI_API_KEY")),
         "package": oai_pkg,
         "ready": bool(os.environ.get("OPENAI_API_KEY")) and oai_pkg,
-        "model": os.environ.get("BOTDRAW_OPENAI_MODEL", "gpt-4.1"),
+        "model": os.environ.get("BOTDRAW_OPENAI_MODEL", DEFAULT_OPENAI_MODEL),
     }
     # gemini
     try:
@@ -296,7 +338,7 @@ def provider_status() -> dict[str, dict[str, Any]]:
         "key": gem_key,
         "package": gem_pkg,
         "ready": gem_key and gem_pkg,
-        "model": os.environ.get("BOTDRAW_GEMINI_MODEL", "gemini-2.0-flash"),
+        "model": os.environ.get("BOTDRAW_GEMINI_MODEL", DEFAULT_GEMINI_MODEL),
     }
     # manual / subscription JSON (multi-turn dir or single files)
     scene_path = os.environ.get("BOTDRAW_VISION_SCENE_JSON") or ""
@@ -396,7 +438,7 @@ def _call_anthropic_vision(
         )
     content.append({"type": "text", "text": prompt})
     msg = client.messages.create(
-        model=model or os.environ.get("BOTDRAW_CLAUDE_MODEL", "claude-sonnet-4-20250514"),
+        model=model or os.environ.get("BOTDRAW_CLAUDE_MODEL", DEFAULT_CLAUDE_MODEL),
         max_tokens=1024,
         system=system,
         messages=[{"role": "user", "content": content}],
@@ -429,7 +471,7 @@ def _call_openai_vision(
             }
         )
     resp = client.chat.completions.create(
-        model=model or os.environ.get("BOTDRAW_OPENAI_MODEL", "gpt-4.1"),
+        model=model or os.environ.get("BOTDRAW_OPENAI_MODEL", DEFAULT_OPENAI_MODEL),
         max_tokens=1024,
         messages=[
             {"role": "system", "content": system},
@@ -451,7 +493,7 @@ def _call_gemini_vision(
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY / GOOGLE_API_KEY missing")
-    model_name = model or os.environ.get("BOTDRAW_GEMINI_MODEL", "gemini-2.0-flash")
+    model_name = model or os.environ.get("BOTDRAW_GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
     # Prefer new google-genai SDK; fall back to google-generativeai
     try:
         from google import genai
@@ -760,6 +802,80 @@ def critique_structure(
         turn=turn,
         structure=True,
     )
+
+
+def select_best_variant(
+    source_rgb: np.ndarray,
+    variant_pngs: list[bytes],
+    *,
+    client_call=_call_vision,
+    provider: ProviderName | None = None,
+) -> VariantSelection | None:
+    """
+    Best-of-N selection: given several seeded renders of the same style,
+    ask vision which one most resembles the source photo.
+
+    This is vision's genuinely strong role with today's architecture:
+    ranking finished output, rather than twiddling CritiqueActions' closed
+    knob vocabulary, which cannot express "pick this specific seed" (or,
+    more importantly down the line, structural choices like facet layout
+    that a knob dictionary was never designed to carry).
+
+    Fails closed exactly like review_photo/critique_render: no provider
+    ready, manual mode with no reply file, or a validation error on the
+    response all return None. Callers should default to variant 0 (or
+    let a human pick from the selection sheet) rather than block on this —
+    see botdraw/portrait/variant_selection.py's write_selection_sheet for
+    the human-reviewable fallback that works with zero vision calls.
+    """
+    if not variant_pngs:
+        return None
+    p = provider or default_provider()
+    if p == "manual" and client_call is _call_vision:
+        path_str = os.environ.get("BOTDRAW_VISION_SELECTION_JSON") or ""
+        path = Path(path_str) if path_str and Path(path_str).exists() else None
+        if path is None:
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            selection = VariantSelection.model_validate(data)
+        except (ValidationError, json.JSONDecodeError, Exception):
+            return None
+        return selection if 0 <= selection.best_index < len(variant_pngs) else None
+    if client_call is _call_vision and not vision_available(p):
+        return None
+    try:
+        src_b64 = _rgb_to_jpeg_b64(source_rgb)
+        variant_b64s = [base64.standard_b64encode(png).decode("ascii") for png in variant_pngs]
+        n = len(variant_b64s)
+        prompt = (
+            f"Image 1 = source photo. Images 2..{n + 1} = render variants, "
+            f"indices 0..{n - 1} in the same order. Pick the closest to the source. JSON only."
+        )
+        if client_call is not _call_vision:
+            # Tests inject a single-image stub matching review_photo/critique_render's convention.
+            raw = client_call(
+                system=SELECT_SYSTEM,
+                prompt=f"{n} render variants to compare against a source portrait. JSON only.",
+                image_b64=variant_b64s[0],
+                media_type="image/png",
+            )
+        else:
+            raw = client_call(
+                system=SELECT_SYSTEM,
+                prompt=prompt,
+                image_b64=src_b64,
+                media_type="image/jpeg",
+                provider=p,
+                images=[(src_b64, "image/jpeg")] + [(b64, "image/png") for b64 in variant_b64s],
+            )
+        data = _extract_json(raw)
+        selection = VariantSelection.model_validate(data)
+        if not (0 <= selection.best_index < len(variant_pngs)):
+            return None
+        return selection
+    except (ValidationError, json.JSONDecodeError, Exception):
+        return None
 
 
 def apply_structure_critique_to_knobs(
