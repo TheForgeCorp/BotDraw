@@ -404,6 +404,18 @@ def _edge_polylines(
     return out[:max_paths]
 
 
+def _mean_scalar_in_bbox(arr: np.ndarray, pts_px: list[tuple[float, float]]) -> float:
+    """Cheap bbox-mean sample, same approximation _mean_rgb_in_poly uses."""
+    h, w = arr.shape[:2]
+    xs = [p[0] for p in pts_px]
+    ys = [p[1] for p in pts_px]
+    x0, x1 = max(0, int(min(xs))), min(w, int(max(xs)) + 1)
+    y0, y1 = max(0, int(min(ys))), min(h, int(max(ys)) + 1)
+    if x1 <= x0 or y1 <= y0:
+        return 0.0
+    return float(arr[y0:y1, x0:x1].mean())
+
+
 def _vtracer_regions(
     rgb: np.ndarray,
     *,
@@ -415,6 +427,8 @@ def _vtracer_regions(
     filter_speckle: int | None = None,
     min_path_points: int = 6,
     min_area_px: float = 64.0,
+    subject_mask: np.ndarray | None = None,
+    subject_min_mean: float = 0.35,
 ) -> list[RegionPoly]:
     h, w = rgb.shape[:2]
     img = Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8), mode="RGB")
@@ -472,6 +486,11 @@ def _vtracer_regions(
             continue
         if area >= 0.82 * img_area:
             continue
+        if subject_mask is not None:
+            # Drop background-only regions so facet/outline passes stop
+            # painting background contours over the face (Pen Sketch).
+            if _mean_scalar_in_bbox(subject_mask, pts_clean) < subject_min_mean:
+                continue
         mean = _parse_hex_rgb(fill) or _mean_rgb_in_poly(rgb, pts_clean)
         scored.append((area, pts_clean, mean))
 
@@ -908,6 +927,7 @@ def ingest_portrait(
         filter_speckle=speckle,
         min_path_points=min_pts,
         min_area_px=80.0 if quality_enum == QualityPreset.BOOTH_FAST else 48.0,
+        subject_mask=neural_pack["mask"] if neural_pack is not None else None,
     )
     t_trace = time.perf_counter()
 
